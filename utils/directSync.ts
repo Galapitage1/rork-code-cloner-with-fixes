@@ -150,17 +150,13 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
   options: SyncOptions
 ): Promise<T[]> {
   if (!shouldAttemptSync()) {
-    console.log(`[DirectSync] Sync paused, skipping save for ${options.dataType}`);
     return data;
   }
 
   const isHealthy = await checkBackendHealth();
   if (!isHealthy) {
-    console.log(`[DirectSync] Backend unavailable, skipping save for ${options.dataType}`);
     return data;
   }
-  
-  console.log(`[DirectSync] Saving ${data.length} ${options.dataType} items to server...`);
   
   try {
     const baseUrl = getBaseUrl();
@@ -184,7 +180,6 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
       throw new Error('Invalid response format');
     }
     
-    console.log(`[DirectSync] Successfully saved ${result.length} ${options.dataType} items`);
     recordSuccess();
     return result as T[];
   } catch (error: any) {
@@ -199,17 +194,13 @@ export async function getFromServer<T>(
   options: SyncOptions
 ): Promise<T[]> {
   if (!shouldAttemptSync()) {
-    console.log(`[DirectSync] Sync paused, skipping fetch for ${options.dataType}`);
     return [];
   }
 
   const isHealthy = await checkBackendHealth();
   if (!isHealthy) {
-    console.log(`[DirectSync] Backend unavailable, skipping fetch for ${options.dataType}`);
     return [];
   }
-  
-  console.log(`[DirectSync] Fetching ${options.dataType} from server...`);
   
   try {
     const baseUrl = getBaseUrl();
@@ -232,7 +223,6 @@ export async function getFromServer<T>(
       throw new Error('Invalid response format');
     }
     
-    console.log(`[DirectSync] Retrieved ${result.length} ${options.dataType} items`);
     recordSuccess();
     return result as T[];
   } catch (error: any) {
@@ -246,15 +236,25 @@ export async function getFromServer<T>(
 export function mergeData<T extends { id: string; updatedAt?: number }>(local: T[], remote: T[]): T[] {
   const merged = new Map<string, T>();
   
-  local.forEach(item => merged.set(item.id, item));
+  local.forEach(item => {
+    const localTime = item.updatedAt || 0;
+    merged.set(item.id, { ...item, _localTime: localTime } as any);
+  });
   
   remote.forEach(item => {
-    const existing = merged.get(item.id);
-    if (!existing || (item.updatedAt || 0) > (existing.updatedAt || 0)) {
+    const existing = merged.get(item.id) as any;
+    const remoteTime = item.updatedAt || 0;
+    const localTime = existing?._localTime || 0;
+    
+    if (!existing || remoteTime > localTime) {
       merged.set(item.id, item);
     }
   });
   
-  const result = Array.from(merged.values());
+  const result = Array.from(merged.values()).map((item: any) => {
+    const { _localTime, ...rest } = item;
+    return rest as T;
+  });
+  
   return result.filter((item: any) => !item.deleted);
 }

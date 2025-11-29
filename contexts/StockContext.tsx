@@ -3097,7 +3097,6 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     
     if (currentUser && !isSyncPaused) {
       console.log('StockContext: Setting up smart sync system');
-      console.log('StockContext: - Polling for changes every 10 seconds');
       console.log('StockContext: - Full sync every 60 seconds');
       
       const dataTypes = [
@@ -3111,24 +3110,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         'reconcileHistory'
       ];
       
-      pollInterval = setInterval(async () => {
-        if (syncInProgressRef.current) {
-          console.log('[POLL] Skipping check - sync in progress');
-          return;
-        }
-        
-        try {
-          console.log('[POLL] Polling disabled - tRPC removed');
-        } catch (error: any) {
-          pollErrorCount++;
-          console.error(`[POLL] Error checking for changes (attempt ${pollErrorCount}):`, error?.message || error);
-          
-          if (pollErrorCount > 3) {
-            console.log('[POLL] Too many errors, will stop polling until next manual sync');
-            if (pollInterval) clearInterval(pollInterval);
-          }
-        }
-      }, 10000);
+
       
       syncInterval = setInterval(() => {
         if (!syncInProgressRef.current) {
@@ -3137,13 +3119,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }
-      }, 10000);
+      }, 60000);
     } else {
-      if (pollInterval) {
-        console.log('StockContext: Clearing poll interval', isSyncPaused ? '(paused)' : '(logged out)');
-        clearInterval(pollInterval);
-        pollInterval = undefined;
-      }
       if (syncInterval) {
         console.log('StockContext: Clearing sync interval', isSyncPaused ? '(paused)' : '(logged out)');
         clearInterval(syncInterval);
@@ -3152,10 +3129,6 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     }
     
     return () => {
-      if (pollInterval) {
-        console.log('StockContext: Cleaning up poll interval');
-        clearInterval(pollInterval);
-      }
       if (syncInterval) {
         console.log('StockContext: Cleaning up sync interval');
         clearInterval(syncInterval);

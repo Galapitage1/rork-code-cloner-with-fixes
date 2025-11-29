@@ -7,13 +7,10 @@ export async function syncData<T extends { id: string; updatedAt?: number }>(
   _options?: Record<string, unknown>
 ): Promise<T[]> {
   if (!userId) {
-    console.warn(`[syncData] No userId provided for ${dataType}, returning local data`);
     return localData;
   }
 
   try {
-    console.log(`[syncData] ${dataType}: Starting sync...`);
-    
     const remoteData = await getFromServer<T>({
       userId,
       dataType,
@@ -26,10 +23,8 @@ export async function syncData<T extends { id: string; updatedAt?: number }>(
       dataType,
     });
     
-    console.log(`[syncData] ${dataType}: Sync complete. Synced`, saved.length, 'items');
     return saved;
   } catch (error) {
-    console.error(`[syncData] ${dataType}: Sync failed:`, error);
     return localData;
   }
 }
