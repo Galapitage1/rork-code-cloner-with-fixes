@@ -608,8 +608,15 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           console.log('\n=== REPLACE ALL INVENTORY MODE (Super Admin) ===');
           console.log('This will REPLACE ALL inventory for outlet:', stockCheck.outlet);
           console.log('With current stock values from this stock check');
+          console.log('Number of products in stock check:', stockCheck.counts.length);
           
-          await handleReplaceAllInventory(stockCheck, outlet, inventoryStocks);
+          // Read fresh inventory from AsyncStorage to ensure we have the latest data
+          console.log('Reading fresh inventory data from storage before replacement...');
+          const freshInventoryData = await AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS);
+          const freshInventory = freshInventoryData ? JSON.parse(freshInventoryData) : inventoryStocks;
+          console.log('Fresh inventory stocks count:', freshInventory.length);
+          
+          await handleReplaceAllInventory(stockCheck, outlet, freshInventory);
           
           console.log('=== REPLACE ALL INVENTORY COMPLETE ===\n');
         } else if (outlet && outlet.outletType === 'production') {
