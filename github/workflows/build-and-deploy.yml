@@ -19,13 +19,15 @@ jobs:
         with:
           bun-version: latest
       
-      - name: Install dependencies
-        run: bun install
-      
       - name: Setup Rork Toolkit SDK mock
         run: |
           mkdir -p node_modules/@rork-ai/toolkit-sdk/metro
           echo "module.exports = { withRorkMetro: (config) => config };" > node_modules/@rork-ai/toolkit-sdk/metro/index.js
+          mkdir -p node_modules/@rork-ai/toolkit-sdk
+          echo '{"name":"@rork-ai/toolkit-sdk","version":"1.0.0"}' > node_modules/@rork-ai/toolkit-sdk/package.json
+      
+      - name: Install dependencies
+        run: bun install
       
       - name: Create env file
         run: |
