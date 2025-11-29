@@ -16,11 +16,40 @@ const getBaseUrl = () => {
   return 'http://localhost:8081';
 };
 
+const baseUrl = getBaseUrl();
+console.log('[tRPC] Base URL configured:', baseUrl);
+
 export const trpcClient = createTRPCClient<AppRouter>({
   links: [
     httpLink({
-      url: `${getBaseUrl()}/api/trpc`,
+      url: `${baseUrl}/api/trpc`,
       transformer: undefined,
+      headers: () => ({
+        'Content-Type': 'application/json',
+      }),
+      fetch: async (url, options) => {
+        console.log('[tRPC] Request to:', url);
+        try {
+          const response = await fetch(url, {
+            ...options,
+            headers: {
+              ...options?.headers,
+              'Accept': 'application/json',
+            },
+          });
+          
+          if (!response.ok) {
+            console.error('[tRPC] HTTP error:', response.status, response.statusText);
+            const text = await response.text();
+            console.error('[tRPC] Response body:', text.substring(0, 500));
+          }
+          
+          return response;
+        } catch (error) {
+          console.error('[tRPC] Fetch error:', error);
+          throw error;
+        }
+      },
     }),
   ],
 });

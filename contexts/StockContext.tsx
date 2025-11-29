@@ -3093,6 +3093,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
   useEffect(() => {
     let pollInterval: ReturnType<typeof setInterval> | undefined;
     let syncInterval: ReturnType<typeof setInterval> | undefined;
+    let pollErrorCount = 0;
     
     if (currentUser && !isSyncPaused) {
       console.log('StockContext: Setting up smart sync system');
@@ -3124,6 +3125,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
             dataTypes,
           });
           
+          pollErrorCount = 0;
+          
           let hasChanges = false;
           const changedTypes: string[] = [];
           
@@ -3147,8 +3150,14 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           } else {
             console.log('[POLL] No changes detected');
           }
-        } catch (error) {
-          console.error('[POLL] Error checking for changes:', error);
+        } catch (error: any) {
+          pollErrorCount++;
+          console.error(`[POLL] Error checking for changes (attempt ${pollErrorCount}):`, error?.message || error);
+          
+          if (pollErrorCount > 3) {
+            console.log('[POLL] Too many errors, will stop polling until next manual sync');
+            if (pollInterval) clearInterval(pollInterval);
+          }
         }
       }, 10000);
       
