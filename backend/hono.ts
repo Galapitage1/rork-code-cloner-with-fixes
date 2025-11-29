@@ -1,8 +1,5 @@
 import { Hono } from "hono";
-import { trpcServer } from "@hono/trpc-server";
 import { cors } from "hono/cors";
-import { appRouter } from "./trpc/app-router";
-import { createContext } from "./trpc/create-context";
 
 const app = new Hono();
 
@@ -62,23 +59,7 @@ app.get("/api/sync", async (c) => {
   }
 });
 
-app.use("/api/trpc/*", async (c, next) => {
-  console.log('[Hono] tRPC request:', c.req.method, c.req.url);
-  await next();
-  console.log('[Hono] tRPC response status:', c.res.status);
-});
 
-app.use(
-  "/api/trpc/*",
-  trpcServer({
-    endpoint: "/api/trpc",
-    router: appRouter,
-    createContext,
-    onError: ({ error, path, type }) => {
-      console.error('[tRPC Server Error]', { path, type, error: error.message });
-    },
-  })
-);
 
 app.get("/", (c) => {
   return c.json({ status: "ok", message: "API is running" });

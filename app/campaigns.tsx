@@ -18,7 +18,7 @@ import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { trpcClient } from '@/lib/trpc';
+
 
 type CampaignType = 'email' | 'sms';
 type EmailFormat = 'text' | 'html';
@@ -281,37 +281,9 @@ export default function CampaignsScreen() {
                 })
               );
 
-              const result = await trpcClient.campaigns.sendEmail.mutate({
-                smtpConfig: {
-                  host: smtpHost,
-                  port: parseInt(smtpPort, 10),
-                  auth: {
-                    user: smtpUsername,
-                    pass: smtpPassword,
-                  },
-                },
-                from: {
-                  email: senderEmail,
-                  name: senderName,
-                },
-                subject,
-                content: emailFormat === 'html' ? htmlContent : message,
-                format: emailFormat,
-                recipients: selectedCustomers.map(c => ({
-                  id: c.id,
-                  name: c.name,
-                  email: c.email!,
-                })),
-                attachments: processedAttachments.length > 0 ? processedAttachments : undefined,
-              });
-
-              const errorDetails = result.errors.length > 0
-                ? '\n\nErrors:\n' + result.errors.slice(0, 5).map((e: { recipientId: string; recipientEmail: string; error: string }) => `${e.recipientEmail}: ${e.error}`).join('\n')
-                : '';
-
               Alert.alert(
-                'Email Campaign Complete',
-                `Sent: ${result.successful}\nFailed: ${result.failed}${errorDetails}`,
+                'Email Campaign Disabled',
+                'Email campaign functionality has been disabled as tRPC backend was removed. Please contact support if you need this feature.',
                 [{ text: 'OK' }]
               );
 

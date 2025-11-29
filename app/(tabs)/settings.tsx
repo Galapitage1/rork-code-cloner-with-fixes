@@ -16,7 +16,7 @@ import { useCustomers } from '@/contexts/CustomerContext';
 import { useOrders } from '@/contexts/OrderContext';
 import { useStores } from '@/contexts/StoresContext';
 import { useProduction } from '@/contexts/ProductionContext';
-import { trpcClient } from '@/lib/trpc';
+
 import { syncData } from '@/utils/syncData';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
@@ -170,37 +170,7 @@ export default function SettingsScreen() {
   };
   
   const testEmailConnection = async () => {
-    if (!smtpHost || !smtpUsername || !smtpPassword) {
-      setConnectionStatus({ type: 'error', message: 'Please fill in all SMTP settings before testing' });
-      return;
-    }
-    
-    try {
-      setIsTestingEmail(true);
-      setConnectionStatus(null);
-      
-      const result = await trpcClient.campaigns.testEmail.mutate({
-        smtpConfig: {
-          host: smtpHost,
-          port: parseInt(smtpPort, 10),
-          auth: {
-            user: smtpUsername,
-            pass: smtpPassword,
-          },
-        },
-        testEmail: smtpUsername,
-      });
-      
-      setConnectionStatus({ type: 'success', message: 'Successfully connected! Test email sent to ' + smtpUsername });
-    } catch (error) {
-      console.error('Email connection test failed:', error);
-      setConnectionStatus({
-        type: 'error',
-        message: 'Connection not successful: ' + (error instanceof Error ? error.message : 'Unknown error')
-      });
-    } finally {
-      setIsTestingEmail(false);
-    }
+    setConnectionStatus({ type: 'error', message: 'Email testing is not available - tRPC removed' });
   };
 
   useEffect(() => {

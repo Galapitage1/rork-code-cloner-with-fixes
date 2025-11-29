@@ -3118,38 +3118,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
         
         try {
-          console.log('[POLL] Checking server for changes...');
-          const { trpcClient } = await import('@/lib/trpc');
-          const serverData = await trpcClient.data.getLastUpdated.query({
-            userId: currentUser.id,
-            dataTypes,
-          });
-          
-          pollErrorCount = 0;
-          
-          let hasChanges = false;
-          const changedTypes: string[] = [];
-          
-          for (const dataType of dataTypes) {
-            const serverTime = serverData[dataType] || 0;
-            const localTime = serverTimestamps[dataType] || 0;
-            
-            if (serverTime > localTime) {
-              hasChanges = true;
-              changedTypes.push(dataType);
-            }
-          }
-          
-          if (hasChanges) {
-            console.log('[POLL] Server has new data for:', changedTypes.join(', '));
-            console.log('[POLL] Triggering immediate sync...');
-            
-            await syncAll(true);
-            
-            setServerTimestamps(serverData);
-          } else {
-            console.log('[POLL] No changes detected');
-          }
+          console.log('[POLL] Polling disabled - tRPC removed');
         } catch (error: any) {
           pollErrorCount++;
           console.error(`[POLL] Error checking for changes (attempt ${pollErrorCount}):`, error?.message || error);
