@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Build Web App
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
@@ -33,16 +33,9 @@ jobs:
           NODE_ENV: production
           EXPO_USE_METRO_WORKSPACE_ROOT: 1
       
-      - name: Deploy to Netlify
-        uses: nwtgck/actions-netlify@v2.1
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          publish-dir: './dist'
-          production-deploy: true
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          deploy-message: "Deploy from GitHub Actions"
-          enable-pull-request-comment: false
-          enable-commit-comment: false
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        timeout-minutes: 10
+          name: web-build
+          path: dist/
+          retention-days: 30
