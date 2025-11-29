@@ -37,8 +37,8 @@ const STORAGE_KEY_MAP: Record<string, string> = {
   productionRequests: '@stock_app_production_requests',
   approvedProductions: '@stock_app_approved_productions',
   activityLogs: '@stock_app_activity_logs',
-  customers: 'customers',
-  orders: 'customer_orders',
+  customers: '@stock_app_customers',
+  orders: '@stock_app_orders',
   recipes: '@stock_app_recipes',
 };
 

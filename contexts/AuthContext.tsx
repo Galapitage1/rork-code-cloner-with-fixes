@@ -2,7 +2,7 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { User, UserRole } from '@/types';
-import { syncData } from '@/utils/syncManager';
+import { syncData } from '@/utils/syncData';
 import { performDailyCleanup } from '@/utils/storageCleanup';
 
 const STORAGE_KEYS = {

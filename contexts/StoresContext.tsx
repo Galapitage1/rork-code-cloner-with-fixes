@@ -2,7 +2,7 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { StoreProduct, Supplier, GRN } from '@/types';
-import { syncData } from '@/utils/syncManager';
+import { syncData } from '@/utils/syncData';
 
 const STORAGE_KEYS = {
   STORE_PRODUCTS: '@stock_app_store_products',

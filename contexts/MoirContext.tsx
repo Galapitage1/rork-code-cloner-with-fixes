@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback } from 'react';
 import * as Location from 'expo-location';
 
-import { syncData } from '@/utils/syncManager';
+import { syncData } from '@/utils/syncData';
 
 export interface MoirUser {
   id: string;

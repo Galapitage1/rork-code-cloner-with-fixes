@@ -17,7 +17,7 @@ import { useOrders } from '@/contexts/OrderContext';
 import { useStores } from '@/contexts/StoresContext';
 import { useProduction } from '@/contexts/ProductionContext';
 import { trpcClient } from '@/lib/trpc';
-import { syncData } from '@/utils/syncManager';
+import { syncData } from '@/utils/syncData';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
 import { Outlet, Product, ProductType, UserRole, ProductConversion } from '@/types';

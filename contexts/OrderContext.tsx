@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, ReactNode, createContext, useContext, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CustomerOrder } from '@/types';
-import { syncData } from '@/utils/syncManager';
+import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
 
-const ORDERS_KEY = 'customer_orders';
+const ORDERS_KEY = '@stock_app_orders';
 
 type OrderContextType = {
   orders: CustomerOrder[];
@@ -198,13 +198,18 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       
       const allOrders = await AsyncStorage.getItem(ORDERS_KEY);
       const ordersToSync: CustomerOrder[] = allOrders ? JSON.parse(allOrders) : [];
-      const synced = await syncData<CustomerOrder>('customer_orders', ordersToSync, currentUser.id);
+      
+      console.log('[OrderContext] Starting sync for orders...');
+      const remoteData = await getFromServer<CustomerOrder>({ userId: currentUser.id, dataType: 'orders' });
+      const merged = mergeData(ordersToSync, remoteData);
+      const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'orders' });
       
       await AsyncStorage.setItem(ORDERS_KEY, JSON.stringify(synced));
       
       const activeOrders = synced.filter(order => order.deleted !== true);
       setOrders(activeOrders);
       setLastSyncTime(Date.now());
+      console.log('[OrderContext] Sync complete. Synced', activeOrders.length, 'orders');
     } catch (error) {
       console.error('OrderContext syncOrders: Failed:', error);
       if (!silent) {

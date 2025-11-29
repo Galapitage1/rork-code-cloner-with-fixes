@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Customer } from '@/types';
-import { syncData } from '@/utils/syncManager';
+import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
 
-const CUSTOMERS_KEY = 'customers';
+const CUSTOMERS_KEY = '@stock_app_customers';
 
 type CustomerContextType = {
   customers: Customer[];
@@ -164,11 +164,17 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       }
       const allCustomers = await AsyncStorage.getItem(CUSTOMERS_KEY);
       const customersToSync: Customer[] = allCustomers ? JSON.parse(allCustomers) : customers;
-      const synced = await syncData<Customer>('customers', customersToSync, currentUser.id);
+      
+      console.log('[CustomerContext] Starting sync for customers...');
+      const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
+      const merged = mergeData(customersToSync, remoteData);
+      const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'customers' });
+      
       await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(synced));
       const activeCustomers = synced.filter(customer => customer.deleted !== true);
       setCustomers(activeCustomers);
       setLastSyncTime(Date.now());
+      console.log('[CustomerContext] Sync complete. Synced', activeCustomers.length, 'customers');
     } catch (error) {
       console.error('CustomerContext syncCustomers: Failed:', error);
       if (!silent) {

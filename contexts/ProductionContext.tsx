@@ -2,7 +2,7 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ProductionRequest, ApprovedProduction } from '@/types';
-import { syncData } from '@/utils/syncManager';
+import { syncData } from '@/utils/syncData';
 
 const STORAGE_KEYS = {
   PRODUCTION_REQUESTS: '@stock_app_production_requests',
