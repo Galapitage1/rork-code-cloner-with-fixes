@@ -234,12 +234,16 @@ export async function getFromServer<T>(
 }
 
 export function mergeData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(local: T[], remote: T[]): T[] {
+  console.log('[mergeData] ========== TIMESTAMP-BASED MERGE START ==========');
   console.log('[mergeData] Merging data - local:', local.length, 'remote:', remote.length);
   const merged = new Map<string, T>();
   
   // First, add all local items with their timestamps
   local.forEach(item => {
     merged.set(item.id, item);
+    if (item.deleted) {
+      console.log('[mergeData] Local has DELETED item:', item.id, 'timestamp:', item.updatedAt);
+    }
   });
   console.log('[mergeData] Added local items:', merged.size);
   
@@ -257,30 +261,44 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
       // Item exists on server but not locally - add it
       merged.set(item.id, item);
       remoteNew++;
+      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime);
     } else if (remoteTime > localTime) {
-      // Remote is newer - use remote version
+      // Remote is NEWER - use remote version
       merged.set(item.id, item);
       remoteNewer++;
-      if (item.deleted) {
-        console.log('[mergeData] Remote deletion is newer for item:', item.id, 'remoteTime:', remoteTime, 'localTime:', localTime);
+      console.log('[mergeData] ✓ Using REMOTE (newer):', item.id, 'remoteTime:', new Date(remoteTime).toISOString(), 'localTime:', new Date(localTime).toISOString(), 'deleted:', item.deleted);
+      if (item.deleted !== existing.deleted) {
+        console.log('[mergeData]   → Deletion status changed - remote:', item.deleted, 'local:', existing.deleted);
+      }
+    } else if (localTime > remoteTime) {
+      // Local is NEWER - keep local version
+      localNewer++;
+      console.log('[mergeData] ✓ Keeping LOCAL (newer):', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString(), 'deleted:', existing.deleted);
+      if (item.deleted !== existing.deleted) {
+        console.log('[mergeData]   → Deletion status differs - keeping local:', existing.deleted);
       }
     } else {
-      // Local is newer or equal - keep local version
+      // Timestamps are EQUAL - keep local (last write wins with client preference)
       localNewer++;
-      if (existing.deleted) {
-        console.log('[mergeData] Local deletion is newer for item:', item.id, 'localTime:', localTime, 'remoteTime:', remoteTime);
-      }
+      console.log('[mergeData] ✓ Keeping LOCAL (equal timestamp):', item.id, 'timestamp:', new Date(localTime).toISOString());
     }
   });
   
-  console.log('[mergeData] Merge stats - remoteNew:', remoteNew, 'remoteNewer:', remoteNewer, 'localNewer:', localNewer);
+  console.log('[mergeData] ========== MERGE STATISTICS ==========');
+  console.log('[mergeData]   New from server:', remoteNew);
+  console.log('[mergeData]   Remote was newer:', remoteNewer);
+  console.log('[mergeData]   Local was newer:', localNewer);
+  console.log('[mergeData]   Total merged items:', merged.size);
   
   const result = Array.from(merged.values());
-  console.log('[mergeData] Total merged items:', result.length);
+  console.log('[mergeData] Total items before filtering:', result.length);
   
   // Filter out deleted items
   const active = result.filter((item: any) => !item.deleted);
-  console.log('[mergeData] Active items after filtering deleted:', active.length);
+  const deletedCount = result.length - active.length;
+  console.log('[mergeData] Active items (not deleted):', active.length);
+  console.log('[mergeData] Deleted items (filtered out):', deletedCount);
+  console.log('[mergeData] ========== MERGE COMPLETE ==========');
   
   return active as T[];
 }
