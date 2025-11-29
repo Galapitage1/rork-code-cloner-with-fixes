@@ -2961,6 +2961,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       console.log('StockContext syncAll: SMART MERGE - Preserving all local data with newer timestamps');
       console.log('StockContext syncAll: Current inventory count:', inventoryStocks.length);
       console.log('StockContext syncAll: Current sales deductions count:', salesDeductions.length);
+      console.log('StockContext syncAll: CRITICAL - Ensuring sales deductions are preserved during sync');
+      console.log('StockContext syncAll: salesDeductions sample:', salesDeductions.slice(0, 3).map(d => ({ id: d.id, date: d.salesDate, productId: d.productId, whole: d.wholeDeducted, slices: d.slicesDeducted })));
       console.log('StockContext syncAll: Current stock checks count:', stockChecks.length);
       console.log('StockContext syncAll: Current requests count:', requests.length);
       console.log('StockContext syncAll: Current product conversions count:', productConversions.length);
@@ -3016,7 +3018,29 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       
       // ALWAYS merge with timestamp-based logic to prevent data loss
       const finalInventory = mergeByTimestamp(inventoryStocks, syncedInventory, 'inventory');
+      
+      // CRITICAL: Sales deductions must ALWAYS be preserved during sync
+      // They contain the ACTUAL sold data from reconciliation reports
+      console.log('StockContext syncAll: CRITICAL - Merging sales deductions');
+      console.log('  Local sales deductions:', salesDeductions.length);
+      console.log('  Synced sales deductions:', Array.isArray(syncedSalesDeductions) ? syncedSalesDeductions.length : 'not array');
       const finalSalesDeductions = mergeByTimestamp(salesDeductions, syncedSalesDeductions, 'salesDeductions');
+      console.log('  Final sales deductions after merge:', finalSalesDeductions.length);
+      
+      // VERIFY: Log a few sales deductions to confirm they're preserved
+      if (finalSalesDeductions.length > 0) {
+        console.log('  Sample sales deductions after merge:', (finalSalesDeductions as any[]).slice(0, 3).map(d => ({
+          id: d.id,
+          outlet: d.outletName,
+          date: d.salesDate,
+          productId: d.productId,
+          whole: d.wholeDeducted,
+          slices: d.slicesDeducted,
+          deleted: d.deleted
+        })));
+      } else {
+        console.warn('  WARNING: No sales deductions after merge! This will cause sold column to be empty!');
+      }
       const finalStockChecks = mergeByTimestamp(stockChecks, mergedStockChecks, 'stockChecks');
       const finalRequests = mergeByTimestamp(requests, syncedRequests as any[], 'requests');
       const finalConversions = mergeByTimestamp(productConversions, syncedConversions, 'productConversions');
@@ -3024,7 +3048,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       const finalProducts = mergeByTimestamp(products, syncedProducts, 'products');
       
       console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
-      console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
+      console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
+      console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, '← CRITICAL FOR LIVE INVENTORY', 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
       
       // Batch all state updates together to prevent multiple re-renders
       const activeProducts = (finalProducts as any[]).filter(p => !p?.deleted);
@@ -3043,7 +3068,12 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       console.log('  - outlets:', activeOutlets.length);
       console.log('  - productConversions:', activeConversions.length);
       console.log('  - inventory:', activeInventory.length);
-      console.log('  - salesDeductions:', activeSalesDeductions.length);
+      console.log('  - salesDeductions:', activeSalesDeductions.length, '← SOLD DATA FOR LIVE INVENTORY');
+      if (activeSalesDeductions.length === 0 && salesDeductions.length > 0) {
+        console.error('  ❌ CRITICAL ERROR: Sales deductions were LOST during sync!');
+        console.error('  Before sync:', salesDeductions.length, 'After sync:', activeSalesDeductions.length);
+        console.error('  This will cause Live Inventory sold column to be EMPTY!');
+      }
       console.log('  - reconcileHistory:', activeReconcileHistory.length);
       
       let newStockMap = new Map<string, number>();
