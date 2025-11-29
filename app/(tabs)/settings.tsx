@@ -6,7 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
-import { Upload, Trash2, Settings as SettingsIcon, FileSpreadsheet, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, Camera, ImageIcon, RefreshCw, CloudOff, Cloud, Share2, Link, Pause, Play, ChevronDown, ChevronUp, Mail, Save, Check, Download } from 'lucide-react-native';
+import { Upload, Trash2, Settings as SettingsIcon, FileSpreadsheet, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, Camera, ImageIcon, RefreshCw, CloudOff, Cloud, Share2, Link, Pause, Play, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActivityLog } from '@/contexts/ActivityLogContext';
@@ -22,6 +22,7 @@ import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
 import { Outlet, Product, ProductType, UserRole, ProductConversion } from '@/types';
 import { hasPermission } from '@/utils/permissions';
+import { useBackendStatus } from '@/utils/backendStatus';
 import { parseExcelFile, generateSampleExcelBase64 } from '@/utils/excelParser';
 import Colors from '@/constants/colors';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -105,6 +106,8 @@ export default function SettingsScreen() {
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [isTestingEmail, setIsTestingEmail] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const backendStatus = useBackendStatus();
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
@@ -373,6 +376,42 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
+
+        {/* Backend Status */}
+        <View style={[styles.statsCard, { borderColor: backendStatus.isAvailable ? '#10B981' : '#EF4444' }]}>
+          <View style={styles.statRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {backendStatus.isAvailable ? (
+                <CheckCircle size={20} color="#10B981" />
+              ) : (
+                <AlertCircle size={20} color="#EF4444" />
+              )}
+              <Text style={styles.statLabel}>Backend Server</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => backendStatus.refresh()}
+              disabled={backendStatus.checking}
+            >
+              {backendStatus.checking ? (
+                <ActivityIndicator size="small" color={Colors.light.tint} />
+              ) : (
+                <RefreshCw size={18} color={Colors.light.tint} />
+              )}
+            </TouchableOpacity>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={[styles.syncInfoText, { textAlign: 'left', color: backendStatus.isAvailable ? '#10B981' : '#EF4444' }]}>
+              {backendStatus.isAvailable ? `Connected to ${backendStatus.baseUrl}` : `Cannot reach ${backendStatus.baseUrl}`}
+            </Text>
+          </View>
+          {!backendStatus.isAvailable && (
+            <View style={[styles.syncInfoCard, { marginBottom: 0, backgroundColor: '#FEF2F2', borderColor: '#EF4444' }]}>
+              <Text style={[styles.syncInfoText, { color: '#EF4444' }]}>
+                Backend server is unavailable. Data will be stored locally and synced when the server is reachable.
+              </Text>
+            </View>
+          )}
+        </View>
       </View>
 
       {/* User Data Section */}

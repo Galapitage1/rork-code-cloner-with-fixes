@@ -7,6 +7,9 @@ let syncFailureCount = 0;
 const MAX_FAILURES_BEFORE_PAUSE = 5;
 let isPaused = false;
 let pauseUntil = 0;
+let backendAvailable: boolean | null = null;
+let lastHealthCheck = 0;
+const HEALTH_CHECK_INTERVAL = 60000;
 
 function shouldAttemptSync(): boolean {
   if (!isPaused) return true;
@@ -51,6 +54,44 @@ function getBaseUrl(): string {
   return 'http://localhost:8081';
 }
 
+async function checkBackendHealth(): Promise<boolean> {
+  const now = Date.now();
+  if (backendAvailable !== null && (now - lastHealthCheck) < HEALTH_CHECK_INTERVAL) {
+    return backendAvailable;
+  }
+
+  try {
+    const baseUrl = getBaseUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch(`${baseUrl}/api/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.ok) {
+      const data = await response.json();
+      backendAvailable = data.status === 'healthy';
+      lastHealthCheck = now;
+      console.log('[DirectSync] Backend health check:', backendAvailable ? 'healthy' : 'unhealthy');
+      return backendAvailable;
+    }
+    
+    backendAvailable = false;
+    lastHealthCheck = now;
+    console.warn('[DirectSync] Backend health check failed:', response.status);
+    return false;
+  } catch (error) {
+    backendAvailable = false;
+    lastHealthCheck = now;
+    console.warn('[DirectSync] Backend not available:', error instanceof Error ? error.message : 'Unknown error');
+    return false;
+  }
+}
+
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   let lastError: Error | null = null;
   
@@ -85,6 +126,12 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
 ): Promise<T[]> {
   if (!shouldAttemptSync()) {
     console.log(`[DirectSync] Sync paused, skipping save for ${options.dataType}`);
+    return data;
+  }
+
+  const isHealthy = await checkBackendHealth();
+  if (!isHealthy) {
+    console.log(`[DirectSync] Backend unavailable, skipping save for ${options.dataType}`);
     return data;
   }
   
@@ -132,6 +179,12 @@ export async function getFromServer<T>(
 ): Promise<T[]> {
   if (!shouldAttemptSync()) {
     console.log(`[DirectSync] Sync paused, skipping fetch for ${options.dataType}`);
+    return [];
+  }
+
+  const isHealthy = await checkBackendHealth();
+  if (!isHealthy) {
+    console.log(`[DirectSync] Backend unavailable, skipping fetch for ${options.dataType}`);
     return [];
   }
   
