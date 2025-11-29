@@ -181,12 +181,14 @@ export default function MoirScreen() {
   };
 
   const handleShowLocations = () => {
-    console.log('handleShowLocations: Opening map modal and triggering background sync...');
+    console.log('handleShowLocations: Opening map modal and triggering background sync to get latest locations...');
     setShowMapModal(true);
     
-    syncAllData(true)
+    console.log('handleShowLocations: Syncing to fetch latest location data from server...');
+    syncAllData(false)
       .then(() => {
-        console.log('handleShowLocations: Background sync complete, checking users outside radius...');
+        console.log('handleShowLocations: ✓ Background sync complete - locations updated from server');
+        console.log('handleShowLocations: Checking users outside radius...');
         checkUsersOutsideRadius();
       })
       .catch((error) => {

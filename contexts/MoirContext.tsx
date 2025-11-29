@@ -443,11 +443,26 @@ export const [MoirProvider, useMoir] = createContextHook(() => {
     }
 
     console.log('MoirContext: Location tracking enabled for user:', currentUser.name);
+    console.log('MoirContext: Setting up 60-second location update interval');
+    
+    // Update location immediately when enabled
+    updateLocation(currentUser.id, currentUser.name).catch(e => 
+      console.error('MoirContext: Initial location update failed:', e)
+    );
+    
+    // Then update every 60 seconds
+    const locationInterval = setInterval(() => {
+      console.log('MoirContext: 60-second location update for user:', currentUser.name);
+      updateLocation(currentUser.id, currentUser.name).catch(e => 
+        console.error('MoirContext: Interval location update failed:', e)
+      );
+    }, 60000); // 60 seconds
     
     return () => {
-      console.log('MoirContext: Cleanup');
+      console.log('MoirContext: Cleaning up location interval');
+      clearInterval(locationInterval);
     };
-  }, [currentUser, locationTrackingEnabled, locationPermissionGranted, loadData]);
+  }, [currentUser, locationTrackingEnabled, locationPermissionGranted, updateLocation]);
 
 
 
