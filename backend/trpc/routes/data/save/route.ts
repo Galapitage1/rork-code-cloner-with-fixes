@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import { publicProcedure } from '../../../create-context';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 const dataSchema = z.object({
   id: z.string(),
@@ -13,28 +21,24 @@ export const saveDataProcedure = publicProcedure
     dataType: z.string(),
     data: z.array(dataSchema),
   }))
-  .mutation(async ({ input, ctx }) => {
+  .mutation(async ({ input }) => {
     const { userId, dataType, data } = input;
 
     console.log(`[tRPC save] ${dataType}: Saving ${data.length} items for user ${userId}`);
 
-    const kv = (ctx.env as any).KV;
-    if (!kv) {
-      console.error('[tRPC save] KV storage not available');
-      return data;
-    }
-
-    const key = `${userId}:${dataType}`;
+    const filePath = path.join(DATA_DIR, `${userId}_${dataType}.json`);
+    const lastModifiedPath = path.join(DATA_DIR, `${userId}_${dataType}_lastModified.txt`);
     
     try {
-      const existingData = await kv.get(key);
       let existing: any[] = [];
       
-      if (existingData) {
+      if (fs.existsSync(filePath)) {
         try {
+          const existingData = fs.readFileSync(filePath, 'utf-8');
           existing = JSON.parse(existingData);
+          if (!Array.isArray(existing)) existing = [];
         } catch (e) {
-          console.error(`[tRPC save] Failed to parse existing data for ${key}:`, e);
+          console.error(`[tRPC save] Failed to parse existing data for ${userId}:${dataType}:`, e);
           existing = [];
         }
       }
@@ -52,10 +56,8 @@ export const saveDataProcedure = publicProcedure
 
       const result = Array.from(merged.values());
       
-      await kv.put(key, JSON.stringify(result));
-      
-      const lastModifiedKey = `${userId}:${dataType}:lastModified`;
-      await kv.put(lastModifiedKey, Date.now().toString());
+      fs.writeFileSync(filePath, JSON.stringify(result, null, 2));
+      fs.writeFileSync(lastModifiedPath, Date.now().toString());
       
       console.log(`[tRPC save] ${dataType}: Saved ${result.length} items to server`);
       

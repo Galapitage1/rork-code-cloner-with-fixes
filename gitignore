@@ -20,6 +20,7 @@ bun.lockb
 
 # Backend
 backend/dist/
+data/
 
 # Editor directories and files
 .vscode/*
