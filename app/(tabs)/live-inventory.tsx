@@ -373,51 +373,53 @@ function LiveInventoryScreen() {
       if (records.length > 0) {
         for (let index = 0; index < records.length; index += 1) {
           const currentRecord = records[index];
+          const nextIndex = index + 1;
 
-          // CALCULATE DISCREPANCY ONLY FROM VISIBLE VALUES IN THIS ROW
-          // Formula: Expected Current = Opening + Received - Wastage - Sold
-          // Discrepancy = Actual Current - Expected Current
-          // NOTE: We do NOT check next day's opening stock or use stock check data
-          // We ONLY use the values visible in this row of the live inventory table
+          // CALCULATE DISCREPANCY: Opening (next day) - Current (today)
+          // Formula: Discrepancy = Next Day Opening - Current
+          // This shows how much stock is missing or extra compared to what we expect to carry forward
           
-          const expectedCurrentTotalSlices = 
-            (currentRecord.openingWhole * pair.factor + currentRecord.openingSlices) +
-            (currentRecord.receivedWhole * pair.factor + currentRecord.receivedSlices) -
-            (currentRecord.wastageWhole * pair.factor + currentRecord.wastageSlices) -
-            (currentRecord.soldWhole * pair.factor + currentRecord.soldSlices);
-          
-          const actualCurrentTotalSlices = (currentRecord.currentWhole * pair.factor) + currentRecord.currentSlices;
-          
-          // Discrepancy = Actual Current - Expected Current
-          const discrepancyTotalSlices = actualCurrentTotalSlices - expectedCurrentTotalSlices;
+          if (nextIndex < records.length) {
+            const nextRecord = records[nextIndex];
+            
+            // Get next day's opening stock (in total slices)
+            const nextOpeningTotalSlices = (nextRecord.openingWhole * pair.factor) + nextRecord.openingSlices;
+            
+            // Get today's current stock (in total slices)
+            const currentTotalSlices = (currentRecord.currentWhole * pair.factor) + currentRecord.currentSlices;
+            
+            // Discrepancy = Next Day Opening - Today's Current
+            const discrepancyTotalSlices = nextOpeningTotalSlices - currentTotalSlices;
 
-          // Handle negative discrepancies correctly with unit conversion
-          if (discrepancyTotalSlices < 0) {
-            const absDiscrepancySlices = Math.abs(discrepancyTotalSlices);
-            currentRecord.discrepancyWhole = -Math.ceil(absDiscrepancySlices / pair.factor);
-            const remainder = absDiscrepancySlices % pair.factor;
-            currentRecord.discrepancySlices = remainder > 0 ? -(pair.factor - remainder) : 0;
-            if (currentRecord.discrepancySlices === -pair.factor) {
-              currentRecord.discrepancyWhole -= 1;
-              currentRecord.discrepancySlices = 0;
+            // Handle negative discrepancies correctly with unit conversion
+            if (discrepancyTotalSlices < 0) {
+              const absDiscrepancySlices = Math.abs(discrepancyTotalSlices);
+              currentRecord.discrepancyWhole = -Math.ceil(absDiscrepancySlices / pair.factor);
+              const remainder = absDiscrepancySlices % pair.factor;
+              currentRecord.discrepancySlices = remainder > 0 ? -(pair.factor - remainder) : 0;
+              if (currentRecord.discrepancySlices === -pair.factor) {
+                currentRecord.discrepancyWhole -= 1;
+                currentRecord.discrepancySlices = 0;
+              }
+            } else {
+              currentRecord.discrepancyWhole = Math.floor(discrepancyTotalSlices / pair.factor);
+              currentRecord.discrepancySlices = Math.round(discrepancyTotalSlices % pair.factor);
+              if (currentRecord.discrepancySlices >= pair.factor) {
+                currentRecord.discrepancyWhole += Math.floor(currentRecord.discrepancySlices / pair.factor);
+                currentRecord.discrepancySlices = Math.round(currentRecord.discrepancySlices % pair.factor);
+              }
             }
+
+            console.log(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}:`);
+            console.log(`  Today's Current: ${currentRecord.currentWhole}W/${currentRecord.currentSlices}S`);
+            console.log(`  Next Day Opening: ${nextRecord.openingWhole}W/${nextRecord.openingSlices}S`);
+            console.log(`  Discrepancy (Next Opening - Current): ${currentRecord.discrepancyWhole}W/${currentRecord.discrepancySlices}S`);
           } else {
-            currentRecord.discrepancyWhole = Math.floor(discrepancyTotalSlices / pair.factor);
-            currentRecord.discrepancySlices = Math.round(discrepancyTotalSlices % pair.factor);
-            if (currentRecord.discrepancySlices >= pair.factor) {
-              currentRecord.discrepancyWhole += Math.floor(currentRecord.discrepancySlices / pair.factor);
-              currentRecord.discrepancySlices = Math.round(currentRecord.discrepancySlices % pair.factor);
-            }
+            // Last day - no discrepancy
+            currentRecord.discrepancyWhole = 0;
+            currentRecord.discrepancySlices = 0;
+            console.log(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}: Last day - no discrepancy`);
           }
-
-          console.log(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date} (VISIBLE VALUES ONLY):`);
-          console.log(`  Opening: ${currentRecord.openingWhole}W/${currentRecord.openingSlices}S`);
-          console.log(`  + Received: ${currentRecord.receivedWhole}W/${currentRecord.receivedSlices}S`);
-          console.log(`  - Wastage: ${currentRecord.wastageWhole}W/${currentRecord.wastageSlices}S`);
-          console.log(`  - Sold: ${currentRecord.soldWhole}W/${currentRecord.soldSlices}S`);
-          console.log(`  = Expected Current: ${Math.floor(expectedCurrentTotalSlices / pair.factor)}W/${Math.round(expectedCurrentTotalSlices % pair.factor)}S`);
-          console.log(`  Actual Current: ${currentRecord.currentWhole}W/${currentRecord.currentSlices}S`);
-          console.log(`  Discrepancy (Actual - Expected): ${currentRecord.discrepancyWhole}W/${currentRecord.discrepancySlices}S`);
         }
 
         history.push({
@@ -581,32 +583,30 @@ function LiveInventoryScreen() {
       if (records.length > 0) {
         for (let index = 0; index < records.length; index += 1) {
           const currentRecord = records[index];
+          const nextIndex = index + 1;
 
-          // CALCULATE DISCREPANCY ONLY FROM VISIBLE VALUES IN THIS ROW
-          // Formula: Expected Current = Opening + Received - Wastage - Sold
-          // Discrepancy = Actual Current - Expected Current
-          // NOTE: We do NOT check next day's opening stock or use stock check data
-          // We ONLY use the values visible in this row of the live inventory table
+          // CALCULATE DISCREPANCY: Opening (next day) - Current (today)
+          // Formula: Discrepancy = Next Day Opening - Current
+          // This shows how much stock is missing or extra compared to what we expect to carry forward
           
-          const expectedCurrent = 
-            currentRecord.openingWhole +
-            currentRecord.receivedWhole -
-            currentRecord.wastageWhole -
-            currentRecord.soldWhole;
-          
-          // Discrepancy = Actual Current - Expected Current
-          const discrepancy = currentRecord.currentWhole - expectedCurrent;
-          currentRecord.discrepancyWhole = Math.round(discrepancy * 100) / 100;
-          currentRecord.discrepancySlices = 0;
+          if (nextIndex < records.length) {
+            const nextRecord = records[nextIndex];
+            
+            // Discrepancy = Next Day Opening - Today's Current
+            const discrepancy = nextRecord.openingWhole - currentRecord.currentWhole;
+            currentRecord.discrepancyWhole = Math.round(discrepancy * 100) / 100;
+            currentRecord.discrepancySlices = 0;
 
-          console.log(`Discrepancy for ${product.name} on ${currentRecord.date} (VISIBLE VALUES ONLY):`);
-          console.log(`  Opening: ${currentRecord.openingWhole}`);
-          console.log(`  + Received: ${currentRecord.receivedWhole}`);
-          console.log(`  - Wastage: ${currentRecord.wastageWhole}`);
-          console.log(`  - Sold: ${currentRecord.soldWhole}`);
-          console.log(`  = Expected Current: ${expectedCurrent}`);
-          console.log(`  Actual Current: ${currentRecord.currentWhole}`);
-          console.log(`  Discrepancy (Actual - Expected): ${currentRecord.discrepancyWhole}`);
+            console.log(`Discrepancy for ${product.name} on ${currentRecord.date}:`);
+            console.log(`  Today's Current: ${currentRecord.currentWhole}`);
+            console.log(`  Next Day Opening: ${nextRecord.openingWhole}`);
+            console.log(`  Discrepancy (Next Opening - Current): ${currentRecord.discrepancyWhole}`);
+          } else {
+            // Last day - no discrepancy
+            currentRecord.discrepancyWhole = 0;
+            currentRecord.discrepancySlices = 0;
+            console.log(`Discrepancy for ${product.name} on ${currentRecord.date}: Last day - no discrepancy`);
+          }
         }
 
         history.push({
