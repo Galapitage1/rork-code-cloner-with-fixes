@@ -20,7 +20,6 @@ import { trpcClient } from '@/lib/trpc';
 import { syncData } from '@/utils/syncManager';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
-import { exportBinIds, importBinIds } from '@/utils/syncManager';
 import { Outlet, Product, ProductType, UserRole, ProductConversion } from '@/types';
 import { hasPermission } from '@/utils/permissions';
 import { parseExcelFile, generateSampleExcelBase64 } from '@/utils/excelParser';

@@ -3,8 +3,12 @@ import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 
 export const createContext = async (opts: FetchCreateContextFnOptions) => {
+  const env = (opts.req as any).env || {};
+  
   return {
     req: opts.req,
+    env,
+    user: null,
   };
 };
 

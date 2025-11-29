@@ -14,7 +14,6 @@ import { ProductionProvider, useProduction } from '@/contexts/ProductionContext'
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { MoirProvider } from '@/contexts/MoirContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
-import { InitialSyncTrigger } from '@/components/InitialSyncTrigger';
 
 
 SplashScreen.preventAutoHideAsync();
@@ -94,7 +93,6 @@ export default function RootLayout() {
               <ActivityLogProvider>
                 <UserSync>
                   <AppProviders>
-                    <InitialSyncTrigger />
                     <UpdatePrompt />
                     <RootLayoutNav />
                   </AppProviders>

@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import * as Location from 'expo-location';
 
 import { syncData } from '@/utils/syncManager';
-import { moirBackgroundSyncManager } from '@/utils/moirBackgroundSync';
 
 export interface MoirUser {
   id: string;
@@ -435,35 +434,18 @@ export const [MoirProvider, useMoir] = createContextHook(() => {
 
   useEffect(() => {
     if (!currentUser) {
-      moirBackgroundSyncManager.stop();
       return;
     }
 
     if (!locationTrackingEnabled || !locationPermissionGranted) {
-      console.log('MoirContext: Location tracking disabled or no permission, prompting user...');
-      moirBackgroundSyncManager.stop();
+      console.log('MoirContext: Location tracking disabled or no permission');
       return;
     }
 
-    console.log('MoirContext: Starting background sync for user:', currentUser.name);
+    console.log('MoirContext: Location tracking enabled for user:', currentUser.name);
     
-    moirBackgroundSyncManager.initialize({
-      userId: currentUser.id,
-      userName: currentUser.name,
-      syncInterval: 60000,
-      onLocationUpdate: (location) => {
-        console.log('MoirContext: Location updated via background sync:', location);
-        loadData().catch(e => console.error('Failed to reload after location update:', e));
-      },
-      onSyncComplete: () => {
-        console.log('MoirContext: Background sync completed');
-        loadData().catch(e => console.error('Failed to reload after sync:', e));
-      },
-    });
-
     return () => {
-      console.log('MoirContext: Stopping background sync');
-      moirBackgroundSyncManager.stop();
+      console.log('MoirContext: Cleanup');
     };
   }, [currentUser, locationTrackingEnabled, locationPermissionGranted, loadData]);
 
