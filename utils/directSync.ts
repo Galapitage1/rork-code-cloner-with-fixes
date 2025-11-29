@@ -233,28 +233,54 @@ export async function getFromServer<T>(
   }
 }
 
-export function mergeData<T extends { id: string; updatedAt?: number }>(local: T[], remote: T[]): T[] {
+export function mergeData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(local: T[], remote: T[]): T[] {
+  console.log('[mergeData] Merging data - local:', local.length, 'remote:', remote.length);
   const merged = new Map<string, T>();
   
+  // First, add all local items with their timestamps
   local.forEach(item => {
-    const localTime = item.updatedAt || 0;
-    merged.set(item.id, { ...item, _localTime: localTime } as any);
+    merged.set(item.id, item);
   });
+  console.log('[mergeData] Added local items:', merged.size);
+  
+  // Then, only update with remote items if they have newer timestamps
+  let remoteNewer = 0;
+  let localNewer = 0;
+  let remoteNew = 0;
   
   remote.forEach(item => {
-    const existing = merged.get(item.id) as any;
+    const existing = merged.get(item.id);
     const remoteTime = item.updatedAt || 0;
-    const localTime = existing?._localTime || 0;
+    const localTime = existing?.updatedAt || 0;
     
-    if (!existing || remoteTime > localTime) {
+    if (!existing) {
+      // Item exists on server but not locally - add it
       merged.set(item.id, item);
+      remoteNew++;
+    } else if (remoteTime > localTime) {
+      // Remote is newer - use remote version
+      merged.set(item.id, item);
+      remoteNewer++;
+      if (item.deleted) {
+        console.log('[mergeData] Remote deletion is newer for item:', item.id, 'remoteTime:', remoteTime, 'localTime:', localTime);
+      }
+    } else {
+      // Local is newer or equal - keep local version
+      localNewer++;
+      if (existing.deleted) {
+        console.log('[mergeData] Local deletion is newer for item:', item.id, 'localTime:', localTime, 'remoteTime:', remoteTime);
+      }
     }
   });
   
-  const result = Array.from(merged.values()).map((item: any) => {
-    const { _localTime, ...rest } = item;
-    return rest as T;
-  });
+  console.log('[mergeData] Merge stats - remoteNew:', remoteNew, 'remoteNewer:', remoteNewer, 'localNewer:', localNewer);
   
-  return result.filter((item: any) => !item.deleted);
+  const result = Array.from(merged.values());
+  console.log('[mergeData] Total merged items:', result.length);
+  
+  // Filter out deleted items
+  const active = result.filter((item: any) => !item.deleted);
+  console.log('[mergeData] Active items after filtering deleted:', active.length);
+  
+  return active as T[];
 }
