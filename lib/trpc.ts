@@ -19,6 +19,8 @@ const getBaseUrl = () => {
 const baseUrl = getBaseUrl();
 console.log('[tRPC] Base URL configured:', baseUrl);
 
+const MAX_RETRIES = 3;
+
 export const trpcClient = createTRPCClient<AppRouter>({
   links: [
     httpLink({
@@ -29,26 +31,43 @@ export const trpcClient = createTRPCClient<AppRouter>({
       }),
       fetch: async (url, options) => {
         console.log('[tRPC] Request to:', url);
-        try {
-          const response = await fetch(url, {
-            ...options,
-            headers: {
-              ...options?.headers,
-              'Accept': 'application/json',
-            },
-          });
-          
-          if (!response.ok) {
-            console.error('[tRPC] HTTP error:', response.status, response.statusText);
-            const text = await response.text();
-            console.error('[tRPC] Response body:', text.substring(0, 500));
+        
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
+            const response = await fetch(url, {
+              ...options,
+              headers: {
+                ...options?.headers,
+                'Accept': 'application/json',
+              },
+              signal: controller.signal,
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+              console.error('[tRPC] HTTP error:', response.status, response.statusText);
+              const text = await response.text();
+              console.error('[tRPC] Response body:', text.substring(0, 500));
+            }
+            
+            return response;
+          } catch (error) {
+            if (attempt < MAX_RETRIES) {
+              const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+              console.warn(`[tRPC] Attempt ${attempt + 1} failed, retrying in ${delay}ms...`, error);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+              console.error('[tRPC] Fetch error after all retries:', error);
+              throw error;
+            }
           }
-          
-          return response;
-        } catch (error) {
-          console.error('[tRPC] Fetch error:', error);
-          throw error;
         }
+        
+        throw new Error('Max retries exceeded');
       },
     }),
   ],

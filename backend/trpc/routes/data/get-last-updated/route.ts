@@ -1,12 +1,10 @@
 import { z } from 'zod';
 import { publicProcedure } from '../../../create-context';
-import * as fs from 'fs';
-import * as path from 'path';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const lastModifiedStore = new Map<string, number>();
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function getStoreKey(userId: string, dataType: string): string {
+  return `${userId}:${dataType}`;
 }
 
 export const getLastUpdatedProcedure = publicProcedure
@@ -21,14 +19,8 @@ export const getLastUpdatedProcedure = publicProcedure
     
     try {
       for (const dataType of dataTypes) {
-        const lastModifiedPath = path.join(DATA_DIR, `${userId}_${dataType}_lastModified.txt`);
-        
-        if (fs.existsSync(lastModifiedPath)) {
-          const lastModified = fs.readFileSync(lastModifiedPath, 'utf-8');
-          result[dataType] = parseInt(lastModified, 10);
-        } else {
-          result[dataType] = 0;
-        }
+        const storeKey = getStoreKey(userId, dataType);
+        result[dataType] = lastModifiedStore.get(storeKey) || 0;
       }
       
       return result;
