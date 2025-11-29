@@ -27,10 +27,11 @@ jobs:
           echo "EXPO_PUBLIC_TOOLKIT_URL=${{ secrets.EXPO_PUBLIC_TOOLKIT_URL }}" > .env
       
       - name: Export web build
-        run: bunx expo export --platform web
+        run: bun install && bunx expo export --platform web
         env:
           CI: true
           NODE_ENV: production
+          EXPO_USE_METRO_WORKSPACE_ROOT: 1
       
       - name: Upload artifact
         uses: actions/upload-artifact@v3
