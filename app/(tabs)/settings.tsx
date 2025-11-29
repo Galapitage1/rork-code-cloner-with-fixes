@@ -18,6 +18,7 @@ import { useStores } from '@/contexts/StoresContext';
 import { useProduction } from '@/contexts/ProductionContext';
 
 import { syncData } from '@/utils/syncData';
+import { testServerConnection, testWriteToServer } from '@/utils/testSync';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
 import { Outlet, Product, ProductType, UserRole, ProductConversion } from '@/types';
@@ -106,6 +107,7 @@ export default function SettingsScreen() {
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [isTestingEmail, setIsTestingEmail] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
 
   const backendStatus = useBackendStatus();
 
@@ -412,6 +414,54 @@ export default function SettingsScreen() {
             </View>
           )}
         </View>
+
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton]}
+          onPress={async () => {
+            try {
+              setIsTestingConnection(true);
+              console.log('Testing server connection...');
+              
+              const readTest = await testServerConnection();
+              console.log('Read test result:', readTest);
+              
+              const writeTest = await testWriteToServer();
+              console.log('Write test result:', writeTest);
+              
+              if (readTest.success && writeTest.success) {
+                Alert.alert(
+                  'Connection Successful',
+                  `✓ Read Test: ${readTest.message}\n✓ Write Test: ${writeTest.message}`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                const errors: string[] = [];
+                if (!readTest.success) errors.push(`Read: ${readTest.message}`);
+                if (!writeTest.success) errors.push(`Write: ${writeTest.message}`);
+                
+                Alert.alert(
+                  'Connection Failed',
+                  errors.join('\n\n') + '\n\nPlease check:\n1. Server is running at https://tracker.tecclk.com\n2. /Tracker/api/ folder exists\n3. PHP files have proper permissions',
+                  [{ text: 'OK' }]
+                );
+              }
+            } catch (error: any) {
+              Alert.alert('Test Failed', error.message || 'Unknown error occurred');
+            } finally {
+              setIsTestingConnection(false);
+            }
+          }}
+          disabled={isTestingConnection}
+        >
+          {isTestingConnection ? (
+            <ActivityIndicator color={Colors.light.tint} />
+          ) : (
+            <>
+              <AlertCircle size={20} color={Colors.light.tint} />
+              <Text style={[styles.buttonText, styles.secondaryButtonText]}>Test Server Connection</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
 
       {/* User Data Section */}
