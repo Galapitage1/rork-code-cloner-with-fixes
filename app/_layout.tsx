@@ -49,10 +49,11 @@ function RecipesProviderLayer({ children }: { children: React.ReactNode }) {
 
 function UserSync({ children }: { children: React.ReactNode }) {
   const { currentUser, hasLoadedInitialData, setHasLoadedInitialData } = useAuth();
-  const { setUser: setStoresUser } = useStores();
+  const { setUser: setStoresUser, reloadFromStorage: reloadStoresFromStorage } = useStores();
   const { setUser: setProductionUser } = useProduction();
   const { setUser: setActivityLogUser } = useActivityLog();
   const [isLoadingInitialData, setIsLoadingInitialData] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState<string>('Loading...');
   
   useEffect(() => {
     if (currentUser) {
@@ -68,30 +69,45 @@ function UserSync({ children }: { children: React.ReactNode }) {
 
       try {
         setIsLoadingInitialData(true);
-        console.log('[UserSync] Loading initial data for user:', currentUser.username);
+        console.log('[UserSync] → Loading initial data for user:', currentUser.username);
         
-        await loadInitialDataIfNeeded(currentUser.id);
+        await loadInitialDataIfNeeded(currentUser.id, (status) => {
+          console.log('[UserSync] →', status);
+          setLoadingStatus(status);
+        });
         
-        console.log('[UserSync] Performing cleanup on login...');
+        console.log('[UserSync] → Reloading data from storage...');
+        setLoadingStatus('Refreshing...');
+        await reloadStoresFromStorage();
+        
+        console.log('[UserSync] → Performing cleanup...');
+        setLoadingStatus('Cleaning up...');
         await performCleanupOnLogin();
         
         setHasLoadedInitialData(true);
-        console.log('[UserSync] Initial data load complete');
+        setLoadingStatus('Complete!');
+        console.log('[UserSync] ✓ Initial data load complete');
+        
+        setTimeout(() => {
+          setIsLoadingInitialData(false);
+        }, 500);
       } catch (error) {
-        console.error('[UserSync] Failed to load initial data:', error);
-      } finally {
-        setIsLoadingInitialData(false);
+        console.error('[UserSync] ✗ Failed to load initial data:', error);
+        setLoadingStatus('Error loading data');
+        setTimeout(() => {
+          setIsLoadingInitialData(false);
+        }, 2000);
       }
     }
 
     loadData();
-  }, [currentUser, hasLoadedInitialData, setHasLoadedInitialData]);
+  }, [currentUser, hasLoadedInitialData, setHasLoadedInitialData, reloadStoresFromStorage]);
 
   if (currentUser && isLoadingInitialData) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading your data...</Text>
+        <Text style={styles.loadingText}>{loadingStatus}</Text>
       </View>
     );
   }

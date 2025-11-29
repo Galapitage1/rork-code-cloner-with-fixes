@@ -1,9 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
-const STORAGE_SIZE_LIMIT_MB = 4;
+const STORAGE_SIZE_LIMIT_MB = 6;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
-const RETENTION_DAYS = 3; // Keep only last 3 days locally, server has everything
+const RETENTION_DAYS = 7;
 
 export async function getStorageSize(): Promise<number> {
   try {
@@ -55,7 +55,6 @@ export async function cleanupOldData(): Promise<void> {
     const retentionDaysAgo = currentDate - (RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const retentionDaysAgoStr = new Date(retentionDaysAgo).toISOString().split('T')[0];
     
-    // Special handling for stock checks - clean up old ones
     const stockChecksKey = '@stock_app_stock_checks';
     if (allKeys.includes(stockChecksKey)) {
       try {
@@ -71,16 +70,15 @@ export async function cleanupOldData(): Promise<void> {
             
             if (filtered.length !== stockChecks.length) {
               await AsyncStorage.setItem(stockChecksKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] Cleaned ${stockChecks.length - filtered.length} old stock checks (older than ${RETENTION_DAYS} days)`);
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${stockChecks.length - filtered.length} old stock checks (older than ${RETENTION_DAYS} days)`);
             }
           }
         }
       } catch (error) {
-        console.error('[STORAGE CLEANUP] Error cleaning stock checks:', error);
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning stock checks:', error);
       }
     }
     
-    // Clean up other keys
     const preservedKeys = [
       LAST_CLEANUP_KEY,
       stockChecksKey,
@@ -89,7 +87,13 @@ export async function cleanupOldData(): Promise<void> {
       '@stock_app_users',
       '@stock_app_show_page_tabs',
       '@stock_app_currency',
+      '@stock_app_products',
+      '@stock_app_store_products',
+      '@stock_app_suppliers',
+      'customers',
     ];
+    
+    let totalItemsCleaned = 0;
     
     for (const key of allKeys) {
       if (preservedKeys.includes(key) ||
@@ -101,11 +105,15 @@ export async function cleanupOldData(): Promise<void> {
       
       try {
         const value = await AsyncStorage.getItem(key);
-        if (!value) continue;
+        if (!value) {
+          keysToRemove.push(key);
+          continue;
+        }
         
         const parsed = JSON.parse(value);
         
         if (Array.isArray(parsed)) {
+          const beforeCount = parsed.length;
           const filtered = parsed.filter((item: any) => {
             if (item.deleted) return false;
             if (item.updatedAt && item.updatedAt < retentionDaysAgo) {
@@ -120,11 +128,14 @@ export async function cleanupOldData(): Promise<void> {
             return true;
           });
           
-          if (filtered.length === 0 && !key.startsWith('@stock_app_')) {
+          const cleaned = beforeCount - filtered.length;
+          totalItemsCleaned += cleaned;
+          
+          if (filtered.length === 0) {
             keysToRemove.push(key);
-          } else if (filtered.length !== parsed.length) {
+          } else if (cleaned > 0) {
             await AsyncStorage.setItem(key, JSON.stringify(filtered));
-            console.log(`[STORAGE CLEANUP] Cleaned ${parsed.length - filtered.length} items from ${key}`);
+            console.log(`[STORAGE CLEANUP] ✓ Cleaned ${cleaned} old items from ${key}`);
           }
         }
       } catch (parseError) {
@@ -134,17 +145,17 @@ export async function cleanupOldData(): Promise<void> {
     
     if (keysToRemove.length > 0) {
       await AsyncStorage.multiRemove(keysToRemove);
-      console.log(`[STORAGE CLEANUP] Removed ${keysToRemove.length} empty keys`);
+      console.log(`[STORAGE CLEANUP] ✓ Removed ${keysToRemove.length} empty/invalid keys`);
     }
     
     await AsyncStorage.setItem(LAST_CLEANUP_KEY, Date.now().toString());
     
     const finalSize = await getStorageSize();
     const finalSizeMB = (finalSize / (1024 * 1024)).toFixed(2);
-    console.log(`[STORAGE CLEANUP] Complete. Current storage size: ${finalSizeMB}MB`);
+    console.log(`[STORAGE CLEANUP] ✓ Complete. Cleaned ${totalItemsCleaned} items. Storage: ${finalSizeMB}MB/${STORAGE_SIZE_LIMIT_MB}MB`);
     
   } catch (error) {
-    console.error('[STORAGE CLEANUP] Error during cleanup:', error);
+    console.error('[STORAGE CLEANUP] ✗ Error during cleanup:', error);
   }
 }
 

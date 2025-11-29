@@ -390,6 +390,16 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     return storeProducts.filter(p => p.quantity < p.minStockLevel);
   }, [storeProducts]);
 
+  const reloadFromStorage = useCallback(async () => {
+    try {
+      console.log('[StoresContext] Reloading all data from AsyncStorage...');
+      await loadFromAsyncStorage();
+      console.log('[StoresContext] ✓ Reload complete');
+    } catch (error) {
+      console.error('[StoresContext] Failed to reload from storage:', error);
+    }
+  }, [loadFromAsyncStorage]);
+
   return useMemo(() => ({
     storeProducts,
     suppliers,
@@ -411,6 +421,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     syncAll,
     setUser,
     getLowStockStoreProducts,
+    reloadFromStorage,
   }), [
     storeProducts,
     suppliers,
@@ -432,5 +443,6 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     syncAll,
     setUser,
     getLowStockStoreProducts,
+    reloadFromStorage,
   ]);
 });

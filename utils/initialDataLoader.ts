@@ -58,63 +58,72 @@ async function hasLocalData(dataType: string): Promise<boolean> {
   }
 }
 
-export async function loadInitialDataIfNeeded(userId: string): Promise<void> {
+export async function loadInitialDataIfNeeded(userId: string, onProgress?: (status: string) => void): Promise<void> {
   try {
     console.log('[InitialDataLoader] Starting initial data check...');
+    onProgress?.('Checking local data...');
 
     const hasOutlets = await hasLocalData('outlets');
     const hasProducts = await hasLocalData('products');
+    const hasUsers = await hasLocalData('users');
 
-    if (hasOutlets && hasProducts) {
+    if (hasOutlets && hasProducts && hasUsers) {
       console.log('[InitialDataLoader] Device already has core data, skipping initial load');
+      onProgress?.('Data already loaded');
       return;
     }
 
-    console.log('[InitialDataLoader] No local data found, loading from server...');
-
-    const priorityTypes = ['outlets', 'users'];
+    console.log('[InitialDataLoader] Missing local data, loading from server...');
     
-    console.log('[InitialDataLoader] Loading critical data first (outlets, users)...');
+    const priorityTypes = ['users', 'outlets'];
+    
+    console.log('[InitialDataLoader] Loading critical data first (users, outlets)...');
+    onProgress?.('Loading users and outlets...');
+    
     for (const dataType of priorityTypes) {
       try {
         console.log(`[InitialDataLoader] Loading ${dataType}...`);
         const data = await getFromServer({ userId, dataType });
         
         const storageKey = STORAGE_KEY_MAP[dataType];
-        if (storageKey && data.length > 0) {
+        if (storageKey) {
           await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-          console.log(`[InitialDataLoader] Loaded ${data.length} ${dataType} items`);
-        } else if (data.length === 0) {
-          console.log(`[InitialDataLoader] No ${dataType} data on server`);
+          console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
         }
       } catch (error) {
-        console.error(`[InitialDataLoader] Failed to load ${dataType}:`, error);
+        console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
       }
     }
 
-    console.log('[InitialDataLoader] Loading remaining data...');
+    console.log('[InitialDataLoader] Loading remaining data in background...');
     const remainingTypes = DATA_TYPES_TO_LOAD.filter(t => !priorityTypes.includes(t));
+    
+    let loaded = 0;
+    const total = remainingTypes.length;
     
     for (const dataType of remainingTypes) {
       try {
-        console.log(`[InitialDataLoader] Loading ${dataType}...`);
+        loaded++;
+        onProgress?.(`Loading data... (${loaded}/${total})`);
+        console.log(`[InitialDataLoader] Loading ${dataType}... (${loaded}/${total})`);
+        
         const data = await getFromServer({ userId, dataType });
         
         const storageKey = STORAGE_KEY_MAP[dataType];
-        if (storageKey && data.length > 0) {
+        if (storageKey) {
           await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-          console.log(`[InitialDataLoader] Loaded ${data.length} ${dataType} items`);
-        } else if (data.length === 0) {
-          console.log(`[InitialDataLoader] No ${dataType} data on server`);
+          console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
         }
       } catch (error) {
-        console.error(`[InitialDataLoader] Failed to load ${dataType}:`, error);
+        console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
       }
     }
 
-    console.log('[InitialDataLoader] Initial data load complete');
+    console.log('[InitialDataLoader] ✓ Initial data load complete');
+    onProgress?.('Complete!');
   } catch (error) {
     console.error('[InitialDataLoader] Error during initial data load:', error);
+    onProgress?.('Error loading data');
   }
 }
 
