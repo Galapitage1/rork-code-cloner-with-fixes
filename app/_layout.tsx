@@ -5,6 +5,9 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { StockProvider, useStock } from '@/contexts/StockContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { trpc } from '@/lib/trpc';
+import { httpLink } from '@trpc/client';
 
 import { CustomerProvider } from '@/contexts/CustomerContext';
 import { RecipeProvider } from '@/contexts/RecipeContext';
@@ -148,29 +151,43 @@ const styles = StyleSheet.create({
   },
 });
 
+const queryClient = new QueryClient();
+const trpcReactClient = trpc.createClient({
+  links: [
+    httpLink({
+      url: `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081'}/api/trpc`,
+      transformer: undefined,
+    }),
+  ],
+});
+
 export default function RootLayout() {
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
 
   return (
-    <AuthProvider>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <MoirProvider>
-          <StoresProvider>
-            <ProductionProvider>
-              <ActivityLogProvider>
-                <UserSync>
-                  <AppProviders>
-                    <UpdatePrompt />
-                    <RootLayoutNav />
-                  </AppProviders>
-                </UserSync>
-              </ActivityLogProvider>
-            </ProductionProvider>
-          </StoresProvider>
-        </MoirProvider>
-      </GestureHandlerRootView>
-    </AuthProvider>
+    <trpc.Provider client={trpcReactClient} queryClient={queryClient}>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <MoirProvider>
+              <StoresProvider>
+                <ProductionProvider>
+                  <ActivityLogProvider>
+                    <UserSync>
+                      <AppProviders>
+                        <UpdatePrompt />
+                        <RootLayoutNav />
+                      </AppProviders>
+                    </UserSync>
+                  </ActivityLogProvider>
+                </ProductionProvider>
+              </StoresProvider>
+            </MoirProvider>
+          </GestureHandlerRootView>
+        </AuthProvider>
+      </QueryClientProvider>
+    </trpc.Provider>
   );
 }
