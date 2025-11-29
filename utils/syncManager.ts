@@ -85,6 +85,26 @@ export function mergeData<T extends { id: string; updatedAt?: number }>(local: T
   return result.filter((item: any) => !item.deleted);
 }
 
+const BATCH_SIZE = 100;
+const MAX_PAYLOAD_SIZE = 1024 * 1024;
+
+function shouldBatchSync<T>(data: T[]): boolean {
+  try {
+    const jsonSize = JSON.stringify(data).length;
+    return data.length > BATCH_SIZE || jsonSize > MAX_PAYLOAD_SIZE;
+  } catch {
+    return data.length > BATCH_SIZE;
+  }
+}
+
+function batchArray<T>(array: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < array.length; i += size) {
+    batches.push(array.slice(i, i + size));
+  }
+  return batches;
+}
+
 export async function instantSync<T extends { id: string; updatedAt?: number }>(
   endpoint: string,
   localData: T[],
