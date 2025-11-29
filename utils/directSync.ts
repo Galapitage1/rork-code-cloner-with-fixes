@@ -98,20 +98,54 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       
-      const response = await fetch(url, {
+      const fetchOptions: RequestInit = {
         ...options,
         signal: controller.signal,
-      });
+        cache: 'no-cache',
+      };
+      
+      if (!fetchOptions.headers) {
+        fetchOptions.headers = {};
+      }
+      
+      (fetchOptions.headers as any)['Connection'] = 'keep-alive';
+      (fetchOptions.headers as any)['Accept'] = 'application/json';
+      
+      const response = await fetch(url, fetchOptions);
       
       clearTimeout(timeoutId);
-      return response;
+      
+      if (response.ok) {
+        return response;
+      }
+      
+      if (response.status === 404) {
+        throw new Error(`Endpoint not found: ${url}`);
+      }
+      
+      if (response.status >= 500) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      const errorText = await response.text().catch(() => response.statusText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+      
     } catch (error: any) {
       lastError = error;
+      
+      if (error.name === 'AbortError') {
+        console.log(`[DirectSync] Request timeout on attempt ${attempt + 1}`);
+      } else if (error.message?.includes('ERR_HTTP2')) {
+        console.log(`[DirectSync] HTTP/2 protocol error on attempt ${attempt + 1}`);
+      } else {
+        console.log(`[DirectSync] Attempt ${attempt + 1} failed:`, error.message);
+      }
+      
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
-        console.log(`[DirectSync] Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+        console.log(`[DirectSync] Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
