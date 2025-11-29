@@ -353,7 +353,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         syncUsers(undefined, true).catch(() => {});
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) clearInterval(interval);

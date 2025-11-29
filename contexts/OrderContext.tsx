@@ -225,12 +225,12 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
-      console.log('OrderContext: Setting up auto-sync interval (60 seconds)');
+      console.log('OrderContext: Setting up auto-sync interval (10 seconds)');
       interval = setInterval(() => {
         if (!syncInProgressRef.current && syncOrdersRef.current) {
           syncOrdersRef.current().catch((e) => console.log('Orders auto-sync error', e));
         }
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) {

@@ -121,7 +121,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     if (currentUser) {
       interval = setInterval(() => {
         syncRecipes(true).catch(err => console.log('Recipes auto-sync error', err));
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) {

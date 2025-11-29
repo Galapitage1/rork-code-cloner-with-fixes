@@ -176,7 +176,7 @@ export const [ActivityLogProvider, useActivityLog] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         syncLogs(true).catch((e) => console.log('[ActivityLogContext] Auto-sync error', e));
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) clearInterval(interval);

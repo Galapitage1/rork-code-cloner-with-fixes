@@ -379,7 +379,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         syncAll(true).catch((e) => console.log('[StoresContext] Auto-sync error', e));
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) clearInterval(interval);

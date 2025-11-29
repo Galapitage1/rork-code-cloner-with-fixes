@@ -187,7 +187,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     if (currentUser) {
       interval = setInterval(() => {
         syncCustomers(true).catch((e) => console.log('Customers auto-sync error', e));
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) {

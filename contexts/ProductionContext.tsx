@@ -218,7 +218,7 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         syncAll(true).catch((e) => console.log('[ProductionContext] Auto-sync error', e));
-      }, 60000);
+      }, 10000);
     }
     return () => {
       if (interval) clearInterval(interval);

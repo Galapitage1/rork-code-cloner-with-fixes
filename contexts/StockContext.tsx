@@ -3159,7 +3159,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }
-      }, 60000);
+      }, 10000);
     } else {
       if (pollInterval) {
         console.log('StockContext: Clearing poll interval', isSyncPaused ? '(paused)' : '(logged out)');
