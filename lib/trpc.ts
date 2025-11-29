@@ -30,7 +30,8 @@ export const trpcClient = createTRPCClient<AppRouter>({
         'Content-Type': 'application/json',
       }),
       fetch: async (url, options) => {
-        console.log('[tRPC] Request to:', url);
+        console.log('[tRPC] Request:', options?.method || 'GET', url);
+        console.log('[tRPC] Base URL:', baseUrl);
         
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           try {
@@ -49,9 +50,14 @@ export const trpcClient = createTRPCClient<AppRouter>({
             clearTimeout(timeoutId);
             
             if (!response.ok) {
+              const responseClone = response.clone();
               console.error('[tRPC] HTTP error:', response.status, response.statusText);
-              const text = await response.text();
-              console.error('[tRPC] Response body:', text.substring(0, 500));
+              try {
+                const text = await responseClone.text();
+                console.error('[tRPC] Response body:', text.substring(0, 500));
+              } catch (e) {
+                console.error('[tRPC] Could not read response body:', e);
+              }
             }
             
             return response;

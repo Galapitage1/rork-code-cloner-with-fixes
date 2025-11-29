@@ -1,5 +1,4 @@
 import { trpcClient } from '@/lib/trpc';
-import { checkServerHealth } from './connectionStatus';
 
 export interface SyncOptions {
   userId: string;
@@ -51,13 +50,6 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
     return data;
   }
   
-  const isHealthy = await checkServerHealth();
-  if (!isHealthy) {
-    console.log(`[DirectSync] Server unhealthy, skipping save for ${options.dataType}`);
-    recordFailure();
-    return data;
-  }
-  
   console.log(`[DirectSync] Saving ${data.length} ${options.dataType} items to server...`);
   
   try {
@@ -71,7 +63,8 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
     recordSuccess();
     return result as T[];
   } catch (error: any) {
-    console.error(`[DirectSync] Failed to save ${options.dataType}:`, error?.message || error);
+    const errorMsg = error?.message || String(error);
+    console.error(`[DirectSync] Failed to save ${options.dataType}: ${errorMsg}`);
     recordFailure();
     return data;
   }
@@ -82,13 +75,6 @@ export async function getFromServer<T>(
 ): Promise<T[]> {
   if (!shouldAttemptSync()) {
     console.log(`[DirectSync] Sync paused, skipping fetch for ${options.dataType}`);
-    return [];
-  }
-  
-  const isHealthy = await checkServerHealth();
-  if (!isHealthy) {
-    console.log(`[DirectSync] Server unhealthy, skipping fetch for ${options.dataType}`);
-    recordFailure();
     return [];
   }
   
@@ -104,7 +90,8 @@ export async function getFromServer<T>(
     recordSuccess();
     return result as T[];
   } catch (error: any) {
-    console.error(`[DirectSync] Failed to fetch ${options.dataType}:`, error?.message || error);
+    const errorMsg = error?.message || String(error);
+    console.error(`[DirectSync] Failed to fetch ${options.dataType}: ${errorMsg}`);
     recordFailure();
     return [];
   }
