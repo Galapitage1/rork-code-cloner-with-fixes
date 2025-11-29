@@ -1,0 +1,6 @@
+# API Base URL - Update this based on your environment
+# For local development with Expo:
+# EXPO_PUBLIC_RORK_API_BASE_URL=http://localhost:8081
+
+# For production:
+EXPO_PUBLIC_RORK_API_BASE_URL=https://tracker.tecclk.com
