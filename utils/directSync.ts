@@ -43,15 +43,7 @@ function recordSuccess(): void {
 }
 
 function getBaseUrl(): string {
-  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_RORK_API_BASE_URL) {
-    return process.env.EXPO_PUBLIC_RORK_API_BASE_URL;
-  }
-  
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-  
-  return 'http://localhost:8081';
+  return 'https://tracker.tecclk.com';
 }
 
 async function checkBackendHealth(): Promise<boolean> {
@@ -65,7 +57,7 @@ async function checkBackendHealth(): Promise<boolean> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     
-    const response = await fetch(`${baseUrl}/api/health`, {
+    const response = await fetch(`${baseUrl}/Tracker/api/get.php?endpoint=users`, {
       method: 'GET',
       signal: controller.signal,
     });
@@ -73,11 +65,10 @@ async function checkBackendHealth(): Promise<boolean> {
     clearTimeout(timeoutId);
     
     if (response.ok) {
-      const data = await response.json();
-      backendAvailable = data.status === 'healthy';
+      backendAvailable = true;
       lastHealthCheck = now;
-      console.log('[DirectSync] Backend health check:', backendAvailable ? 'healthy' : 'unhealthy');
-      return backendAvailable;
+      console.log('[DirectSync] Backend health check: healthy');
+      return true;
     }
     
     backendAvailable = false;
@@ -173,18 +164,14 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
   
   try {
     const baseUrl = getBaseUrl();
-    const url = `${baseUrl}/api/sync`;
+    const url = `${baseUrl}/Tracker/api/sync.php?endpoint=${encodeURIComponent(options.dataType)}`;
     
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        userId: options.userId,
-        dataType: options.dataType,
-        data,
-      }),
+      body: JSON.stringify(data),
     });
     
     if (!response.ok) {
@@ -193,13 +180,13 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
     
     const result = await response.json();
     
-    if (!result.success) {
-      throw new Error(result.error || 'Save failed');
+    if (!Array.isArray(result)) {
+      throw new Error('Invalid response format');
     }
     
-    console.log(`[DirectSync] Successfully saved ${result.data.length} ${options.dataType} items`);
+    console.log(`[DirectSync] Successfully saved ${result.length} ${options.dataType} items`);
     recordSuccess();
-    return result.data as T[];
+    return result as T[];
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     console.error(`[DirectSync] Failed to save ${options.dataType}: ${errorMsg}`);
@@ -226,7 +213,7 @@ export async function getFromServer<T>(
   
   try {
     const baseUrl = getBaseUrl();
-    const url = `${baseUrl}/api/sync?userId=${encodeURIComponent(options.userId)}&dataType=${encodeURIComponent(options.dataType)}`;
+    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}`;
     
     const response = await fetchWithRetry(url, {
       method: 'GET',
@@ -241,13 +228,13 @@ export async function getFromServer<T>(
     
     const result = await response.json();
     
-    if (!result.success) {
-      throw new Error(result.error || 'Get failed');
+    if (!Array.isArray(result)) {
+      throw new Error('Invalid response format');
     }
     
-    console.log(`[DirectSync] Retrieved ${result.data.length} ${options.dataType} items`);
+    console.log(`[DirectSync] Retrieved ${result.length} ${options.dataType} items`);
     recordSuccess();
-    return result.data as T[];
+    return result as T[];
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     console.error(`[DirectSync] Failed to fetch ${options.dataType}: ${errorMsg}`);
