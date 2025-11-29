@@ -54,6 +54,9 @@ export const saveDataProcedure = publicProcedure
       
       await kv.put(key, JSON.stringify(result));
       
+      const lastModifiedKey = `${userId}:${dataType}:lastModified`;
+      await kv.put(lastModifiedKey, Date.now().toString());
+      
       console.log(`[tRPC save] ${dataType}: Saved ${result.length} items to server`);
       
       return result;

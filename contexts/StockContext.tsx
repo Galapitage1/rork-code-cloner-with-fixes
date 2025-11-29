@@ -98,6 +98,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
   const [showProductList, setShowProductList] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<number>(0);
+  const [serverTimestamps, setServerTimestamps] = useState<Record<string, number>>({});
   const [viewMode, setViewModeState] = useState<'search' | 'button'>('search');
   const [isSyncPaused, setIsSyncPaused] = useState<boolean>(false);
 
@@ -3090,31 +3091,99 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
   }, [syncAll]);
 
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
+    let pollInterval: ReturnType<typeof setInterval> | undefined;
+    let syncInterval: ReturnType<typeof setInterval> | undefined;
+    
     if (currentUser && !isSyncPaused) {
-      console.log('StockContext: Setting up auto-sync interval (60 seconds)');
-      interval = setInterval(() => {
+      console.log('StockContext: Setting up smart sync system');
+      console.log('StockContext: - Polling for changes every 10 seconds');
+      console.log('StockContext: - Full sync every 60 seconds');
+      
+      const dataTypes = [
+        'products',
+        'stockChecks',
+        'requests',
+        'outlets',
+        'productConversions',
+        'inventoryStocks',
+        'salesDeductions',
+        'reconcileHistory'
+      ];
+      
+      pollInterval = setInterval(async () => {
+        if (syncInProgressRef.current) {
+          console.log('[POLL] Skipping check - sync in progress');
+          return;
+        }
+        
+        try {
+          console.log('[POLL] Checking server for changes...');
+          const { trpcClient } = await import('@/lib/trpc');
+          const serverData = await trpcClient.data.getLastUpdated.query({
+            userId: currentUser.id,
+            dataTypes,
+          });
+          
+          let hasChanges = false;
+          const changedTypes: string[] = [];
+          
+          for (const dataType of dataTypes) {
+            const serverTime = serverData[dataType] || 0;
+            const localTime = serverTimestamps[dataType] || 0;
+            
+            if (serverTime > localTime) {
+              hasChanges = true;
+              changedTypes.push(dataType);
+            }
+          }
+          
+          if (hasChanges) {
+            console.log('[POLL] Server has new data for:', changedTypes.join(', '));
+            console.log('[POLL] Triggering immediate sync...');
+            
+            await syncAll(true);
+            
+            setServerTimestamps(serverData);
+          } else {
+            console.log('[POLL] No changes detected');
+          }
+        } catch (error) {
+          console.error('[POLL] Error checking for changes:', error);
+        }
+      }, 10000);
+      
+      syncInterval = setInterval(() => {
         if (!syncInProgressRef.current) {
-          console.log('[AUTO-SYNC] Running 60-second sync cycle...');
+          console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
           syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }
       }, 60000);
     } else {
-      if (interval) {
-        console.log('StockContext: Clearing auto-sync interval', isSyncPaused ? '(paused)' : '(logged out)');
-        clearInterval(interval);
-        interval = undefined;
+      if (pollInterval) {
+        console.log('StockContext: Clearing poll interval', isSyncPaused ? '(paused)' : '(logged out)');
+        clearInterval(pollInterval);
+        pollInterval = undefined;
+      }
+      if (syncInterval) {
+        console.log('StockContext: Clearing sync interval', isSyncPaused ? '(paused)' : '(logged out)');
+        clearInterval(syncInterval);
+        syncInterval = undefined;
       }
     }
+    
     return () => {
-      if (interval) {
-        console.log('StockContext: Cleaning up auto-sync interval');
-        clearInterval(interval);
+      if (pollInterval) {
+        console.log('StockContext: Cleaning up poll interval');
+        clearInterval(pollInterval);
+      }
+      if (syncInterval) {
+        console.log('StockContext: Cleaning up sync interval');
+        clearInterval(syncInterval);
       }
     };
-  }, [currentUser, isSyncPaused, syncAll]);
+  }, [currentUser, isSyncPaused, syncAll, serverTimestamps]);
 
   const value = useMemo(() => ({
     products,
