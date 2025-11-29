@@ -6,6 +6,8 @@ import { createContext } from "./trpc/create-context";
 
 const app = new Hono();
 
+const dataStore = new Map<string, any[]>();
+
 app.use("*", cors({
   origin: (origin) => {
     console.log('[CORS] Request from origin:', origin);
@@ -15,6 +17,50 @@ app.use("*", cors({
   allowHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: true,
 }));
+
+app.post("/api/sync", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { userId, dataType, data } = body;
+    
+    if (!userId || !dataType) {
+      return c.json({ error: 'Missing userId or dataType' }, 400);
+    }
+    
+    const key = `${userId}:${dataType}`;
+    console.log(`[Sync] Saving ${dataType} for user ${userId}, items: ${data?.length || 0}`);
+    
+    if (data && Array.isArray(data)) {
+      dataStore.set(key, data);
+    }
+    
+    const stored = dataStore.get(key) || [];
+    return c.json({ success: true, data: stored });
+  } catch (error: any) {
+    console.error('[Sync] Error:', error);
+    return c.json({ error: error?.message || 'Sync failed' }, 500);
+  }
+});
+
+app.get("/api/sync", async (c) => {
+  try {
+    const userId = c.req.query('userId');
+    const dataType = c.req.query('dataType');
+    
+    if (!userId || !dataType) {
+      return c.json({ error: 'Missing userId or dataType' }, 400);
+    }
+    
+    const key = `${userId}:${dataType}`;
+    const data = dataStore.get(key) || [];
+    console.log(`[Sync] Getting ${dataType} for user ${userId}, items: ${data.length}`);
+    
+    return c.json({ success: true, data });
+  } catch (error: any) {
+    console.error('[Sync] Error:', error);
+    return c.json({ error: error?.message || 'Get failed' }, 500);
+  }
+});
 
 app.use("/api/trpc/*", async (c, next) => {
   console.log('[Hono] tRPC request:', c.req.method, c.req.url);

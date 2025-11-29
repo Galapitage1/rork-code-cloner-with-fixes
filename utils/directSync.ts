@@ -1,5 +1,3 @@
-import { trpcClient } from '@/lib/trpc';
-
 export interface SyncOptions {
   userId: string;
   dataType: string;
@@ -41,6 +39,46 @@ function recordSuccess(): void {
   isPaused = false;
 }
 
+function getBaseUrl(): string {
+  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_RORK_API_BASE_URL) {
+    return process.env.EXPO_PUBLIC_RORK_API_BASE_URL;
+  }
+  
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  
+  return 'http://localhost:8081';
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < maxRetries - 1) {
+        const delay = Math.pow(2, attempt) * 1000;
+        console.log(`[DirectSync] Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError || new Error('Max retries exceeded');
+}
+
 export async function saveToServer<T extends { id: string; updatedAt?: number }>(
   data: T[],
   options: SyncOptions
@@ -53,15 +91,34 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
   console.log(`[DirectSync] Saving ${data.length} ${options.dataType} items to server...`);
   
   try {
-    const result = await trpcClient.data.save.mutate({
-      userId: options.userId,
-      dataType: options.dataType,
-      data,
+    const baseUrl = getBaseUrl();
+    const url = `${baseUrl}/api/sync`;
+    
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: options.userId,
+        dataType: options.dataType,
+        data,
+      }),
     });
     
-    console.log(`[DirectSync] Successfully saved ${result.length} ${options.dataType} items`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Save failed');
+    }
+    
+    console.log(`[DirectSync] Successfully saved ${result.data.length} ${options.dataType} items`);
     recordSuccess();
-    return result as T[];
+    return result.data as T[];
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     console.error(`[DirectSync] Failed to save ${options.dataType}: ${errorMsg}`);
@@ -81,14 +138,29 @@ export async function getFromServer<T>(
   console.log(`[DirectSync] Fetching ${options.dataType} from server...`);
   
   try {
-    const result = await trpcClient.data.get.query({
-      userId: options.userId,
-      dataType: options.dataType,
+    const baseUrl = getBaseUrl();
+    const url = `${baseUrl}/api/sync?userId=${encodeURIComponent(options.userId)}&dataType=${encodeURIComponent(options.dataType)}`;
+    
+    const response = await fetchWithRetry(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
     });
     
-    console.log(`[DirectSync] Retrieved ${result.length} ${options.dataType} items`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Get failed');
+    }
+    
+    console.log(`[DirectSync] Retrieved ${result.data.length} ${options.dataType} items`);
     recordSuccess();
-    return result as T[];
+    return result.data as T[];
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     console.error(`[DirectSync] Failed to fetch ${options.dataType}: ${errorMsg}`);
