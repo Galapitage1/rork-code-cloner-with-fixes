@@ -3,7 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import Colors from '@/constants/colors';
 
-export default function NotFoundScreen() {
+export default function Index() {
   const { currentUser, isLoading } = useAuth();
 
   if (isLoading) {
@@ -24,8 +24,8 @@ export default function NotFoundScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: 'center' as const,
     justifyContent: 'center' as const,
+    alignItems: 'center' as const,
     backgroundColor: Colors.light.background,
   },
 });
