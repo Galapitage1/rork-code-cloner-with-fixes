@@ -1,0 +1,47 @@
+name: Build and Package App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Export web app
+        run: bun run export
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deployment-package
+          cp -r dist/* deployment-package/
+          cp -r public/Tracker deployment-package/Tracker
+          
+          if [ -f htaccess ]; then
+            cp htaccess deployment-package/.htaccess
+          fi
+          
+          mkdir -p deployment-package/data
+          echo '[]' > deployment-package/data/storage.json
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: deployment-package/
+          retention-days: 30
