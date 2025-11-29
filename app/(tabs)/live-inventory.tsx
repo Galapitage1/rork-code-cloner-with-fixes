@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Platform, TextInput, Alert } from 'react-native';
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { StockCount, StockCheck } from '@/types';
 import { Stack } from 'expo-router';
 import { Calendar, Download, ChevronLeft, ChevronRight, TrendingUp, AlertTriangle } from 'lucide-react-native';
@@ -40,7 +40,7 @@ type ProductInventoryHistory = {
 };
 
 function LiveInventoryScreen() {
-  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck } = useStock();
+  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll } = useStock();
   const { approvedProductions } = useProduction();
   const { recipes } = useRecipes();
   const { storeProducts } = useStores();
@@ -629,6 +629,13 @@ function LiveInventoryScreen() {
 
   console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
+
+  useEffect(() => {
+    if (selectedOutlet) {
+      console.log('[LIVE INVENTORY] Outlet selected/changed:', selectedOutlet, '- triggering silent sync to load latest sales data');
+      syncAll(true).catch(e => console.log('[LIVE INVENTORY] Silent sync error:', e));
+    }
+  }, [selectedOutlet, syncAll]);
 
   const handleExportDiscrepancies = async () => {
     try {

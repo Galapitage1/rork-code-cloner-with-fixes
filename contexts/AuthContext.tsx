@@ -354,6 +354,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
+        console.log('[AuthContext] Running silent 60-second sync...');
         syncUsers(undefined, true).catch(() => {});
       }, 60000);
     }

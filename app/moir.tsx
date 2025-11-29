@@ -1257,7 +1257,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
+    padding: 16,
   },
   emptyState: {
     alignItems: 'center' as const,
@@ -1291,14 +1291,14 @@ const styles = StyleSheet.create({
   usersGrid: {
     flexDirection: 'row' as const,
     flexWrap: 'wrap' as const,
-    gap: 12,
+    gap: 6,
     justifyContent: 'center' as const,
   },
   userButtonWrapper: {
     width: '48%',
     minWidth: 140,
     maxWidth: 180,
-    aspectRatio: 1,
+    aspectRatio: 0.85,
     position: 'relative' as const,
   },
   userButton: {
@@ -1324,28 +1324,28 @@ const styles = StyleSheet.create({
     borderColor: COLORS.red,
   },
   buttonInner: {
-    padding: 8,
+    padding: 6,
     backgroundColor: 'transparent',
     borderBottomWidth: 4,
     borderBottomColor: COLORS.darkYellow,
   },
   userName: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700' as const,
     color: COLORS.black,
     textAlign: 'center' as const,
-    marginBottom: 6,
-    minHeight: 32,
+    marginBottom: 4,
+    minHeight: 28,
   },
   lastSeenContainer: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
-    gap: 4,
+    gap: 3,
     backgroundColor: COLORS.white,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   lastSeenLabel: {
     fontSize: 10,
