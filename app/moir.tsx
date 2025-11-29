@@ -1671,8 +1671,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   settingItem: {
-    marginBottom: 24,
-    paddingBottom: 24,
+    marginBottom: 8,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.lightGray,
   },
