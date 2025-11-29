@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
 const STORAGE_SIZE_LIMIT_MB = 4;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
-const RETENTION_DAYS = 7; // Keep only last 7 days locally, server has everything
+const RETENTION_DAYS = 3; // Keep only last 3 days locally, server has everything
 
 export async function getStorageSize(): Promise<number> {
   try {
@@ -176,10 +176,23 @@ export async function performDailyCleanup(): Promise<void> {
       console.log('[DAILY CLEANUP] Performing daily cleanup...');
       await cleanupOldData();
     } else {
-      console.log('[DAILY CLEANUP] Already cleaned today');
+      console.log('[DAILY CLEANUP] Already cleaned today, checking storage limits...');
       await clearCacheIfNeeded();
     }
   } catch (error) {
     console.error('[DAILY CLEANUP] Error:', error);
+  }
+}
+
+export async function performCleanupOnLogin(): Promise<void> {
+  try {
+    console.log('[LOGIN CLEANUP] Checking storage and cleaning up...');
+    await clearCacheIfNeeded();
+    
+    const storageSize = await getStorageSize();
+    const storageSizeMB = (storageSize / (1024 * 1024)).toFixed(2);
+    console.log(`[LOGIN CLEANUP] Current storage: ${storageSizeMB}MB`);
+  } catch (error) {
+    console.error('[LOGIN CLEANUP] Error:', error);
   }
 }

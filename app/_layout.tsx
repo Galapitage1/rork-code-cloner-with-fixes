@@ -1,7 +1,8 @@
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { StockProvider, useStock } from '@/contexts/StockContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 
@@ -14,6 +15,8 @@ import { ProductionProvider, useProduction } from '@/contexts/ProductionContext'
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { MoirProvider } from '@/contexts/MoirContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
+import { loadInitialDataIfNeeded } from '@/utils/initialDataLoader';
+import { performCleanupOnLogin } from '@/utils/storageCleanup';
 
 
 SplashScreen.preventAutoHideAsync();
@@ -45,10 +48,11 @@ function RecipesProviderLayer({ children }: { children: React.ReactNode }) {
 }
 
 function UserSync({ children }: { children: React.ReactNode }) {
-  const { currentUser } = useAuth();
+  const { currentUser, hasLoadedInitialData, setHasLoadedInitialData } = useAuth();
   const { setUser: setStoresUser } = useStores();
   const { setUser: setProductionUser } = useProduction();
   const { setUser: setActivityLogUser } = useActivityLog();
+  const [isLoadingInitialData, setIsLoadingInitialData] = useState(false);
   
   useEffect(() => {
     if (currentUser) {
@@ -57,6 +61,40 @@ function UserSync({ children }: { children: React.ReactNode }) {
       setActivityLogUser(currentUser);
     }
   }, [currentUser, setStoresUser, setProductionUser, setActivityLogUser]);
+
+  useEffect(() => {
+    async function loadData() {
+      if (!currentUser || hasLoadedInitialData) return;
+
+      try {
+        setIsLoadingInitialData(true);
+        console.log('[UserSync] Loading initial data for user:', currentUser.username);
+        
+        await loadInitialDataIfNeeded(currentUser.id);
+        
+        console.log('[UserSync] Performing cleanup on login...');
+        await performCleanupOnLogin();
+        
+        setHasLoadedInitialData(true);
+        console.log('[UserSync] Initial data load complete');
+      } catch (error) {
+        console.error('[UserSync] Failed to load initial data:', error);
+      } finally {
+        setIsLoadingInitialData(false);
+      }
+    }
+
+    loadData();
+  }, [currentUser, hasLoadedInitialData, setHasLoadedInitialData]);
+
+  if (currentUser && isLoadingInitialData) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Loading your data...</Text>
+      </View>
+    );
+  }
   
   return <>{children}</>;
 }
@@ -78,6 +116,21 @@ function AppProviders({ children }: { children: React.ReactNode }) {
     </StockProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    backgroundColor: '#fff',
+    gap: 16,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 16,
+  },
+});
 
 export default function RootLayout() {
   useEffect(() => {

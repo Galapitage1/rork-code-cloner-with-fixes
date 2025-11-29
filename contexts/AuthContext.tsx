@@ -20,6 +20,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [lastSyncTime, setLastSyncTime] = useState<number>(0);
   const [initialUsersSynced, setInitialUsersSynced] = useState<boolean>(false);
   const [initialSyncComplete, setInitialSyncComplete] = useState<boolean>(false);
+  const [hasLoadedInitialData, setHasLoadedInitialData] = useState<boolean>(false);
   const [showPageTabs, setShowPageTabs] = useState<boolean>(false);
   const [currency, setCurrency] = useState<string>('SLR');
 
@@ -200,6 +201,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
         setCurrentUser(user);
         setInitialSyncComplete(false);
+        setHasLoadedInitialData(false);
         return user;
       }
       
@@ -466,6 +468,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     lastSyncTime,
     initialSyncComplete,
     setInitialSyncComplete,
+    hasLoadedInitialData,
+    setHasLoadedInitialData,
     login,
     logout,
     addUser,
@@ -487,6 +491,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     isSyncing,
     lastSyncTime,
     initialSyncComplete,
+    hasLoadedInitialData,
     login,
     logout,
     addUser,
