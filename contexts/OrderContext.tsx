@@ -77,7 +77,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     loadOrders();
   }, [loadOrders]);
 
-  const saveOrders = useCallback(async (newOrders: CustomerOrder[]) => {
+  const saveOrders = useCallback(async (newOrders: CustomerOrder[], immediate: boolean = true) => {
     try {
       const allOrders = await AsyncStorage.getItem(ORDERS_KEY);
       const existingOrders = allOrders ? JSON.parse(allOrders) : [];
@@ -87,11 +87,16 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       console.log('OrderContext saveOrders: Saving to AsyncStorage...', { activeCount: newOrders.length, deletedCount: deletedOrders.length });
       await AsyncStorage.setItem(ORDERS_KEY, JSON.stringify(ordersWithDeleted));
       setOrders(newOrders);
-      console.log('OrderContext saveOrders: Saved locally, will sync on next interval');
+      console.log('OrderContext saveOrders: Saved locally');
+      
+      if (immediate && currentUser && syncOrdersRef.current) {
+        console.log('OrderContext saveOrders: Triggering immediate sync to server...');
+        syncOrdersRef.current().catch(e => console.error('OrderContext saveOrders: Immediate sync failed:', e));
+      }
     } catch (error) {
       console.error('Error saving orders:', error);
     }
-  }, []);
+  }, [currentUser]);
 
   const addOrder = useCallback(async (orderData: Omit<CustomerOrder, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => {
     if (!currentUser) return;
@@ -135,12 +140,17 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       
       const activeOrders = updated.filter(o => o.deleted !== true);
       setOrders(activeOrders);
-      console.log('OrderContext deleteOrder: Saved locally, will sync on next interval');
+      console.log('OrderContext deleteOrder: Saved locally');
+      
+      if (currentUser && syncOrdersRef.current) {
+        console.log('OrderContext deleteOrder: Triggering immediate sync to server...');
+        syncOrdersRef.current().catch(e => console.error('OrderContext deleteOrder: Immediate sync failed:', e));
+      }
     } catch (error) {
       console.error('OrderContext deleteOrder: Failed', error);
       throw error;
     }
-  }, []);
+  }, [currentUser]);
 
   const fulfillOrder = useCallback(async (id: string, fulfilledBy: string) => {
     const updated = orders.map(order =>
@@ -217,8 +227,8 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
     if (currentUser) {
       console.log('OrderContext: Setting up auto-sync interval (60 seconds)');
       interval = setInterval(() => {
-        if (!syncInProgressRef.current) {
-          syncOrders(true).catch((e) => console.log('Orders auto-sync error', e));
+        if (!syncInProgressRef.current && syncOrdersRef.current) {
+          syncOrdersRef.current().catch((e) => console.log('Orders auto-sync error', e));
         }
       }, 60000);
     }
