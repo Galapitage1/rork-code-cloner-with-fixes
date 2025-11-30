@@ -31,6 +31,7 @@ export default function ProductionScreen() {
   const [rawMaterialsSearch, setRawMaterialsSearch] = useState<string>('');
   const [selectedRawMaterials, setSelectedRawMaterials] = useState<Map<string, string>>(new Map());
   const [isSubmittingRawRequest, setIsSubmittingRawRequest] = useState<boolean>(false);
+  const [rawRequestedBy, setRawRequestedBy] = useState<string>('');
 
   const getWholeProductForPair = useCallback((productId: string) => {
     const toConversion = productConversions.find(c => c.toProductId === productId);
@@ -115,12 +116,18 @@ export default function ProductionScreen() {
     setSelectedOutlet(salesOutlets[0]?.name || '');
     setSelectedRawMaterials(new Map());
     setRawMaterialsSearch('');
+    setRawRequestedBy('');
     setShowRawMaterialsModal(true);
   };
 
   const handleSubmitRawMaterialsRequest = async () => {
     if (!currentUser) {
       Alert.alert('Error', 'You must be logged in to submit a request');
+      return;
+    }
+
+    if (!rawRequestedBy.trim()) {
+      Alert.alert('Required', 'Please enter who is requesting this');
       return;
     }
 
@@ -175,8 +182,10 @@ export default function ProductionScreen() {
           toOutlet: selectedOutlet,
           requestDate: todayIso,
           doneDate: todayIso,
-          requestedBy: currentUser.username || 'Production',
+          requestedBy: rawRequestedBy.trim(),
         };
+        
+        console.log('Created raw material request:', JSON.stringify(request, null, 2));
         
         requestsToCreate.push(request);
       }
@@ -186,14 +195,19 @@ export default function ProductionScreen() {
         return;
       }
       
+      console.log(`Submitting ${requestsToCreate.length} raw material requests...`);
       for (const request of requestsToCreate) {
+        console.log('Adding request:', request.id, 'for product:', request.productId);
         await addRequest(request);
+        console.log('Request added successfully');
       }
+      console.log('All raw material requests submitted successfully');
       
       setShowRawMaterialsModal(false);
       setSelectedRawMaterials(new Map());
       setSelectedOutlet('');
       setRawMaterialsSearch('');
+      setRawRequestedBy('');
       
       Alert.alert('Success', `${requestsToCreate.length} raw material request(s) submitted successfully. Go to Requests tab to approve.`);
     } catch (error) {
@@ -472,6 +486,15 @@ export default function ProductionScreen() {
           </View>
 
           <View style={styles.modalContent}>
+            <Text style={styles.label}>Requested By</Text>
+            <TextInput
+              style={styles.requestedByInput}
+              placeholder="Enter your name"
+              value={rawRequestedBy}
+              onChangeText={setRawRequestedBy}
+              placeholderTextColor={Colors.light.tabIconDefault}
+            />
+
             <Text style={styles.label}>To Outlet</Text>
             <View style={styles.pickerContainer}>
               <Picker
@@ -679,6 +702,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.text,
     paddingVertical: 10,
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginBottom: 16,
   },
   tabsContainer: {
     flexGrow: 0,
