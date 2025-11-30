@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, Platform, ScrollView } from 'react-native';
 import Colors from '@/constants/colors';
 import { AlertTriangle, Check, X } from 'lucide-react-native';
 
@@ -43,7 +43,10 @@ function ConfirmDialogComponent({
             <AlertTriangle size={22} color={confirmColor} />
             <Text style={styles.title}>{title}</Text>
           </View>
-          <Text style={styles.message}>{message}</Text>
+          
+          <ScrollView style={styles.messageContainer} contentContainerStyle={styles.messageContentContainer}>
+            <Text style={styles.message}>{message}</Text>
+          </ScrollView>
 
           <View style={styles.actions}>
             <TouchableOpacity
@@ -87,6 +90,7 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 480,
+    maxHeight: '80%',
     backgroundColor: Colors.light.card,
     borderRadius: 16,
     padding: 18,
@@ -106,11 +110,17 @@ const styles = StyleSheet.create({
     fontWeight: '700' as const,
     color: Colors.light.text,
   },
+  messageContainer: {
+    maxHeight: 400,
+    marginBottom: 14,
+  },
+  messageContentContainer: {
+    flexGrow: 1,
+  },
   message: {
     fontSize: 14,
     color: Colors.light.muted,
     lineHeight: 20,
-    marginBottom: 14,
   },
   actions: {
     flexDirection: 'row' as const,
