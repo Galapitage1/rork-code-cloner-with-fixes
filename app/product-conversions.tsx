@@ -11,7 +11,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 export default function ProductConversionsScreen() {
   const router = useRouter();
   const { currentUser, isAdmin, isSuperAdmin } = useAuth();
-  const { products, productConversions, addProductConversion, updateProductConversion, deleteProductConversion } = useStock();
+  const { products, productConversions, addProductConversion, updateProductConversion, deleteProductConversion, clearAllProductConversions } = useStock();
   const [showConversionModal, setShowConversionModal] = useState<boolean>(false);
   const [editingConversion, setEditingConversion] = useState<ProductConversion | null>(null);
   const [conversionFromProductId, setConversionFromProductId] = useState<string>('');
@@ -173,6 +173,28 @@ export default function ProductConversionsScreen() {
           Alert.alert('Success', 'Product conversion deleted successfully.');
         } catch {
           Alert.alert('Error', 'Failed to delete product conversion.');
+        }
+      },
+    });
+  };
+
+  const handleDeleteAllConversions = () => {
+    if (productConversions.length === 0) {
+      Alert.alert('No Data', 'There are no product conversions to delete.');
+      return;
+    }
+
+    openConfirm({
+      title: 'Delete All Conversions',
+      message: `Are you sure you want to delete all ${productConversions.length} product conversions? This action cannot be undone.`,
+      destructive: true,
+      testID: 'confirm-delete-all-conversions',
+      onConfirm: async () => {
+        try {
+          await clearAllProductConversions();
+          Alert.alert('Success', 'All product conversions deleted successfully.');
+        } catch {
+          Alert.alert('Error', 'Failed to delete all product conversions.');
         }
       },
     });
@@ -340,6 +362,16 @@ export default function ProductConversionsScreen() {
                 <Text style={[styles.buttonText, styles.secondaryButtonText]}>Import</Text>
               </TouchableOpacity>
             </View>
+
+            {productConversions.length > 0 && (
+              <TouchableOpacity
+                style={[styles.button, styles.dangerButton]}
+                onPress={handleDeleteAllConversions}
+              >
+                <Trash2 size={18} color={Colors.light.card} />
+                <Text style={styles.buttonText}>Delete All Conversions</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {productConversions.length === 0 ? (
@@ -658,6 +690,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.card,
     borderWidth: 1,
     borderColor: Colors.light.border,
+  },
+  dangerButton: {
+    backgroundColor: Colors.light.danger || '#EF4444',
   },
   buttonText: {
     fontSize: 16,

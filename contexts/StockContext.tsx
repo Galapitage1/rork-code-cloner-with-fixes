@@ -61,6 +61,7 @@ type StockContextType = {
   deleteReconcileHistory: (historyId: string) => Promise<void>;
   clearAllReconcileHistory: () => Promise<void>;
   clearAllInventory: () => Promise<void>;
+  clearAllProductConversions: () => Promise<void>;
   getLowStockItems: () => { product: Product; currentStock: number; minStock: number; }[];
   getTodayStockCheck: () => StockCheck | undefined;
   clearAllData: () => Promise<void>;
@@ -1748,6 +1749,27 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     }
   }, [products, currentUser]);
 
+  const clearAllProductConversions = useCallback(async () => {
+    try {
+      console.log('clearAllProductConversions: Starting...');
+      const allDeletedConversions = productConversions.map(c => ({ ...c, deleted: true as const, updatedAt: Date.now() }));
+      await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(allDeletedConversions));
+      setProductConversions([]);
+
+      if (currentUser?.id) {
+        syncData('productConversions', allDeletedConversions, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }).catch(syncError => {
+          console.error('clearAllProductConversions: Sync failed', syncError);
+        });
+      }
+
+      await AsyncStorage.removeItem(STORAGE_KEYS.PRODUCT_CONVERSIONS);
+      console.log('clearAllProductConversions: Complete');
+    } catch (error) {
+      console.error('Failed to clear all product conversions:', error);
+      throw error;
+    }
+  }, [productConversions, currentUser]);
+
   const clearAllOutlets = useCallback(async () => {
     try {
       console.log('clearAllOutlets: Starting...');
@@ -3208,6 +3230,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     deleteReconcileHistory,
     clearAllReconcileHistory,
     clearAllInventory,
+    clearAllProductConversions,
     getLowStockItems,
     getTodayStockCheck,
     clearAllData,
@@ -3263,6 +3286,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     deleteReconcileHistory,
     clearAllReconcileHistory,
     clearAllInventory,
+    clearAllProductConversions,
     getLowStockItems,
     getTodayStockCheck,
     clearAllData,
