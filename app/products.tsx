@@ -2,6 +2,8 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIn
 import { useRouter, Stack } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStock } from '@/contexts/StockContext';
+import { useRecipes } from '@/contexts/RecipeContext';
+import { useOrders } from '@/contexts/OrderContext';
 import { useState, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -18,6 +20,8 @@ export default function ProductsScreen() {
   const router = useRouter();
   const { currentUser, isAdmin, isSuperAdmin, currency } = useAuth();
   const { products, addProduct, updateProduct, deleteProduct, clearAllProducts, showProductList, toggleShowProductList } = useStock();
+  const { recipes } = useRecipes();
+  const { orders } = useOrders();
   
   const [showProductModal, setShowProductModal] = useState<boolean>(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -455,6 +459,33 @@ export default function ProductsScreen() {
     });
   };
 
+  const checkProductDependencies = (productId: string): { hasRecipes: boolean; hasOrders: boolean; count: number } => {
+    let count = 0;
+    const hasRecipes = recipes.some(r => {
+      if (r.menuProductId === productId) {
+        count++;
+        return true;
+      }
+      return r.components.some(c => {
+        if (c.rawProductId === productId) {
+          count++;
+          return true;
+        }
+        return false;
+      });
+    });
+    
+    const hasOrders = orders.some(o => o.products.some(p => {
+      if (p.productId === productId) {
+        count++;
+        return true;
+      }
+      return false;
+    }));
+    
+    return { hasRecipes, hasOrders, count };
+  };
+
   const handleRemoveDuplicates = async () => {
     try {
       const duplicates = new Map<string, Product[]>();
@@ -474,11 +505,19 @@ export default function ProductsScreen() {
         return;
       }
       
-      let message = `Found ${duplicateEntries.length} duplicate product(s):\n\n`;
-      duplicateEntries.forEach(([key, items]) => {
-        message += `• ${items[0].name} (${items[0].unit}) - ${items.length} duplicates\n`;
+      const removableCount = duplicateEntries.reduce((sum, [_, items]) => sum + (items.length - 1), 0);
+      
+      let message = `Found ${duplicateEntries.length} duplicate product(s) with ${removableCount} duplicate entries to remove:\n\n`;
+      const displayLimit = 10;
+      duplicateEntries.slice(0, displayLimit).forEach(([key, items]) => {
+        message += `• ${items[0].name} (${items[0].unit}) - ${items.length} copies\n`;
       });
-      message += '\nThe oldest entries will be kept and newer duplicates will be removed.';
+      
+      if (duplicateEntries.length > displayLimit) {
+        message += `\n...and ${duplicateEntries.length - displayLimit} more duplicates\n`;
+      }
+      
+      message += '\nThe oldest entries will be kept. Duplicates connected to recipes/orders will be preserved.\n\nThis may take a moment for large datasets.';
       
       openConfirm({
         title: 'Remove Duplicates',
@@ -488,6 +527,9 @@ export default function ProductsScreen() {
         onConfirm: async () => {
           try {
             let removedCount = 0;
+            let skippedCount = 0;
+            let errorCount = 0;
+            const skippedProducts: string[] = [];
             
             for (const [key, items] of duplicateEntries) {
               const sortedByTimestamp = items.sort((a, b) => {
@@ -500,12 +542,52 @@ export default function ProductsScreen() {
               const toRemove = sortedByTimestamp.slice(1);
               
               for (const product of toRemove) {
-                await deleteProduct(product.id);
-                removedCount++;
+                const deps = checkProductDependencies(product.id);
+                
+                if (deps.hasRecipes || deps.hasOrders) {
+                  console.log(`Skipping ${product.name} (${product.unit}) - has ${deps.count} dependencies`);
+                  skippedCount++;
+                  if (skippedProducts.length < 5) {
+                    skippedProducts.push(`${product.name} (${product.unit}) - ${deps.count} dependencies`);
+                  }
+                  continue;
+                }
+                
+                try {
+                  await deleteProduct(product.id);
+                  removedCount++;
+                  
+                  if (removedCount % 5 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                  }
+                } catch (err) {
+                  console.error(`Failed to delete product ${product.id}:`, err);
+                  errorCount++;
+                }
               }
             }
             
-            Alert.alert('Success', `Removed ${removedCount} duplicate product(s).`);
+            let resultMessage = `Removed ${removedCount} duplicate product(s).`;
+            if (skippedCount > 0) {
+              resultMessage += `\n\nSkipped ${skippedCount} duplicate(s) that are connected to recipes or orders.`;
+              if (skippedProducts.length > 0) {
+                resultMessage += '\n\nSkipped products:';
+                skippedProducts.forEach(p => {
+                  resultMessage += `\n• ${p}`;
+                });
+                if (skippedCount > skippedProducts.length) {
+                  resultMessage += `\n...and ${skippedCount - skippedProducts.length} more`;
+                }
+              }
+            }
+            if (errorCount > 0) {
+              resultMessage += `\n\n${errorCount} product(s) failed to delete.`;
+            }
+            
+            Alert.alert(
+              removedCount > 0 ? 'Success' : 'No Changes', 
+              resultMessage
+            );
           } catch (error) {
             console.error('Error removing duplicates:', error);
             Alert.alert('Error', 'Failed to remove duplicate products.');
