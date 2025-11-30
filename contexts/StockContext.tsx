@@ -50,6 +50,7 @@ type StockContextType = {
   updateOutlet: (outletId: string, updates: Partial<Outlet>) => Promise<void>;
   deleteOutlet: (outletId: string) => Promise<void>;
   addProductConversion: (conversion: ProductConversion) => Promise<void>;
+  addProductConversionsBulk: (conversions: ProductConversion[]) => Promise<void>;
   updateProductConversion: (conversionId: string, updates: Partial<ProductConversion>) => Promise<void>;
   deleteProductConversion: (conversionId: string) => Promise<void>;
   getConversionFactor: (fromProductId: string, toProductId: string) => number | null;
@@ -1900,6 +1901,11 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     await saveProductConversions(updatedConversions);
   }, [productConversions, saveProductConversions]);
 
+  const addProductConversionsBulk = useCallback(async (conversions: ProductConversion[]) => {
+    const updatedConversions = [...productConversions, ...conversions];
+    await saveProductConversions(updatedConversions);
+  }, [productConversions, saveProductConversions]);
+
   const updateProductConversion = useCallback(async (conversionId: string, updates: Partial<ProductConversion>) => {
     const updatedConversions = productConversions.map(c =>
       c.id === conversionId ? { ...c, ...updates, updatedAt: Date.now() } : c
@@ -3219,6 +3225,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     updateOutlet,
     deleteOutlet,
     addProductConversion,
+    addProductConversionsBulk,
     updateProductConversion,
     deleteProductConversion,
     getConversionFactor,
@@ -3275,6 +3282,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     updateOutlet,
     deleteOutlet,
     addProductConversion,
+    addProductConversionsBulk,
     updateProductConversion,
     deleteProductConversion,
     getConversionFactor,

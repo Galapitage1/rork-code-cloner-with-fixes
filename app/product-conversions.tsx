@@ -14,7 +14,7 @@ import * as Sharing from 'expo-sharing';
 export default function ProductConversionsScreen() {
   const router = useRouter();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { products, productConversions, addProductConversion, updateProductConversion, deleteProductConversion, clearAllProductConversions } = useStock();
+  const { products, productConversions, addProductConversion, addProductConversionsBulk, updateProductConversion, deleteProductConversion, clearAllProductConversions } = useStock();
   const [showConversionModal, setShowConversionModal] = useState<boolean>(false);
   const [editingConversion, setEditingConversion] = useState<ProductConversion | null>(null);
   const [conversionFromProductId, setConversionFromProductId] = useState<string>('');
@@ -377,8 +377,8 @@ export default function ProductConversionsScreen() {
           }
         }
 
-        for (const conversion of conversionsToAdd) {
-          await addProductConversion(conversion);
+        if (conversionsToAdd.length > 0) {
+          await addProductConversionsBulk(conversionsToAdd);
         }
 
         let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
@@ -482,8 +482,8 @@ export default function ProductConversionsScreen() {
               }
             }
 
-            for (const conversion of conversionsToAdd) {
-              await addProductConversion(conversion);
+            if (conversionsToAdd.length > 0) {
+              await addProductConversionsBulk(conversionsToAdd);
             }
 
             let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
