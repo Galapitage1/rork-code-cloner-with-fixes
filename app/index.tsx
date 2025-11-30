@@ -1,10 +1,23 @@
 import { Redirect } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, View, StyleSheet, Platform } from 'react-native';
 import Colors from '@/constants/colors';
+import { useEffect, useState } from 'react';
 
 export default function Index() {
   const { currentUser, isLoading } = useAuth();
+  const [redirectPath, setRedirectPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const savedPath = localStorage.getItem('app-reload-path');
+      if (savedPath && savedPath !== '/' && currentUser) {
+        console.log('[Index] Restoring saved path:', savedPath);
+        setRedirectPath(savedPath);
+        localStorage.removeItem('app-reload-path');
+      }
+    }
+  }, [currentUser]);
 
   if (isLoading) {
     return (
@@ -15,7 +28,14 @@ export default function Index() {
   }
 
   if (!currentUser) {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      localStorage.removeItem('app-reload-path');
+    }
     return <Redirect href="/login" />;
+  }
+
+  if (redirectPath) {
+    return <Redirect href={redirectPath as any} />;
   }
 
   return <Redirect href="/home" />;

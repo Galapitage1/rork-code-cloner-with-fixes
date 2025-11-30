@@ -1,8 +1,8 @@
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { StockProvider, useStock } from '@/contexts/StockContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -24,6 +24,15 @@ import { performCleanupOnLogin } from '@/utils/storageCleanup';
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
+  const pathname = usePathname();
+  const { currentUser } = useAuth();
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && currentUser && pathname && pathname !== '/') {
+      localStorage.setItem('app-reload-path', pathname);
+    }
+  }, [pathname, currentUser]);
+
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
       <Stack.Screen name="login" options={{ headerShown: false }} />

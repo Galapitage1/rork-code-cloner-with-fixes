@@ -78,6 +78,8 @@ export function useAppUpdate() {
       setUpdateAvailable(false);
       
       try {
+        localStorage.setItem('app-reload-path', window.location.pathname);
+        
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
@@ -104,7 +106,7 @@ export function useAppUpdate() {
           );
         });
         
-        window.location.href = window.location.origin + '/index.html';
+        window.location.reload();
       } catch (error) {
         console.error('Error updating app:', error);
         window.location.reload();
