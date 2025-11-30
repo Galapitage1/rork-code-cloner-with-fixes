@@ -171,39 +171,14 @@ export const [StoresProvider, useStores] = createContextHook(() => {
       await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(updatedProducts));
       console.log('[StoresContext] ✓ Saved to AsyncStorage');
       
-      // CRITICAL STEP 4: Sync OUT to server immediately BEFORE updating UI
-      // This ensures the server has the deletion timestamp before any other operations
-      if (currentUser?.id) {
-        console.log('[StoresContext] STEP 4: Syncing deletion OUT to server (CRITICAL)...');
-        console.log('[StoresContext] This sync will mark the product as deleted on the server');
-        console.log('[StoresContext] Server will then propagate deletion to all other devices');
-        try {
-          const synced = await syncData('storeProducts', updatedProducts, currentUser.id, { 
-            isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
-          });
-          console.log('[StoresContext] ✓ Server responded with', (synced as any[]).length, 'products');
-          console.log('[StoresContext] ✓ Deletion synced successfully');
-          
-          // Save synced data back to AsyncStorage
-          await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(synced));
-          console.log('[StoresContext] ✓ Synced data saved back to AsyncStorage');
-          
-          // Filter out deleted products for UI
-          const activeProducts = (synced as any[]).filter(p => !p?.deleted);
-          setStoreProducts(activeProducts);
-          console.log('[StoresContext] ✓ UI updated with', activeProducts.length, 'active products');
-        } catch (syncError) {
-          console.error('[StoresContext] ❌ Sync to server failed:', syncError);
-          console.error('[StoresContext] Continuing with local deletion only');
-          // Still update local state even if sync fails
-          setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
-        }
-      } else {
-        console.log('[StoresContext] No user logged in, skipping server sync');
-        setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
-      }
+      // CRITICAL STEP 4: Update local state immediately
+      // Filter out deleted products for UI
+      const activeProducts = updatedProducts.filter((p: StoreProduct) => !p.deleted);
+      setStoreProducts(activeProducts);
+      console.log('[StoresContext] ✓ UI updated with', activeProducts.length, 'active products');
       
       console.log('[StoresContext] ✓✓✓ Deletion complete for:', productToDelete.name);
+      console.log('[StoresContext] Note: Sync will happen automatically on next sync cycle');
       console.log('[StoresContext] ========================================');
     } catch (error) {
       console.error('[StoresContext] ========================================');
@@ -410,10 +385,24 @@ export const [StoresProvider, useStores] = createContextHook(() => {
         setIsSyncing(true);
       }
       
+      // CRITICAL: Read FRESH data from AsyncStorage before syncing
+      // This ensures we sync the latest data including any deletions
+      console.log('[StoresContext] syncAll: Reading fresh data from AsyncStorage...');
+      const [storeProductsData, suppliersData, grnsData] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.STORE_PRODUCTS),
+        AsyncStorage.getItem(STORAGE_KEYS.SUPPLIERS),
+        AsyncStorage.getItem(STORAGE_KEYS.GRNS),
+      ]);
+      
+      const freshStoreProducts = storeProductsData ? JSON.parse(storeProductsData) : storeProducts;
+      const freshSuppliers = suppliersData ? JSON.parse(suppliersData) : suppliers;
+      const freshGRNs = grnsData ? JSON.parse(grnsData) : grns;
+      
+      console.log('[StoresContext] syncAll: Syncing fresh data to server...');
       const [syncedStoreProducts, syncedSuppliers, syncedGRNs] = await Promise.all([
-        syncData('storeProducts', storeProducts, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
-        syncData('suppliers', suppliers, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
-        syncData('grns', grns, currentUser.id),
+        syncData('storeProducts', freshStoreProducts, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
+        syncData('suppliers', freshSuppliers, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
+        syncData('grns', freshGRNs, currentUser.id),
       ]);
 
       await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(syncedStoreProducts));
@@ -427,6 +416,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
       setGRNs((syncedGRNs as any[]).filter(g => !g?.deleted));
       
       setLastSyncTime(Date.now());
+      console.log('[StoresContext] syncAll: Complete - synced', filteredProducts.length, 'active store products');
     } catch (error) {
       console.error('[StoresContext] syncAll: Failed:', error);
       if (!silent) {
