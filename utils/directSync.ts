@@ -272,6 +272,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   let remoteNew = 0;
   let deletionWins = 0;
   let staleDataBlocked = 0;
+  let deletionResurrectionBlocked = 0;
   
   remote.forEach(item => {
     // Prevent duplicate IDs in remote data
@@ -294,23 +295,53 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     const remoteTime = normalizeTimestamp(item.updatedAt);
     const localTime = normalizeTimestamp(existing?.updatedAt);
     
-    // CRITICAL FIX 1: Deletion always wins, regardless of timestamp
-    // This prevents deleted items from coming back during sync
+    // CRITICAL FIX 1: Deletion ALWAYS wins when either local OR remote is deleted
+    // AND the deletion timestamp is newer than the creation/update timestamp
     if (existing && existing.deleted) {
-      // Local has deleted this item - NEVER resurrect it, even if remote is newer
-      console.log('[mergeData] ✓ DELETION PROTECTION - Preserving LOCAL DELETION:', item.id, 'localTime:', localTime, 'remoteTime:', remoteTime);
-      console.log('[mergeData]   → Blocking stale device from re-syncing this deleted item');
-      deletionWins++;
-      // Keep existing (which is deleted)
-      return;
+      // Local has deleted this item
+      if (item.deleted) {
+        // Both deleted - keep the one with newer timestamp
+        if (remoteTime > localTime) {
+          console.log('[mergeData] ✓ Both deleted - using REMOTE deletion (newer):', item.id);
+          const normalized = { ...item, updatedAt: remoteTime };
+          merged.set(item.id, normalized as T);
+        } else {
+          console.log('[mergeData] ✓ Both deleted - keeping LOCAL deletion (newer/same):', item.id);
+        }
+        deletionWins++;
+        return;
+      } else {
+        // Local is deleted, remote is NOT deleted
+        // This means a stale device is trying to resurrect a deleted item
+        // Only allow resurrection if remote timestamp is SIGNIFICANTLY newer (more than 5 minutes)
+        const RESURRECTION_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+        if (remoteTime > localTime + RESURRECTION_THRESHOLD) {
+          console.log('[mergeData] ⚠️ RESURRECTION - Remote is MUCH newer than local deletion, allowing:', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
+          const normalized = { ...item, updatedAt: remoteTime };
+          merged.set(item.id, normalized as T);
+          remoteNewer++;
+        } else {
+          console.log('[mergeData] ✓ DELETION PROTECTION - Preserving LOCAL DELETION:', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
+          console.log('[mergeData]   → Blocking stale device from re-syncing this deleted item');
+          deletionResurrectionBlocked++;
+        }
+        return;
+      }
     }
     
     if (item.deleted) {
-      // Remote has deleted this item - apply the deletion
-      console.log('[mergeData] ✓ Applying REMOTE DELETION:', item.id, 'marking local as deleted');
-      const normalized = { ...item, updatedAt: normalizeTimestamp(item.updatedAt) };
-      merged.set(item.id, normalized as T);
-      deletionWins++;
+      // Remote has deleted this item, local does NOT have it deleted
+      if (remoteTime >= localTime) {
+        // Remote deletion is newer or same age - apply it
+        console.log('[mergeData] ✓ Applying REMOTE DELETION:', item.id, 'localTime:', localTime === 0 ? 'N/A' : new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
+        const normalized = { ...item, updatedAt: remoteTime };
+        merged.set(item.id, normalized as T);
+        deletionWins++;
+      } else {
+        // Local update is newer than remote deletion - keep local (someone edited it after deletion on another device)
+        console.log('[mergeData] ⚠️ Local update is NEWER than remote deletion, keeping LOCAL:', item.id);
+        localNewer++;
+      }
       return;
     }
     
@@ -351,18 +382,22 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData]   Remote was newer:', remoteNewer);
   console.log('[mergeData]   Local was newer:', localNewer);
   console.log('[mergeData]   Deletion wins:', deletionWins);
-  console.log('[mergeData]   Stale data blocked:', staleDataBlocked, '← prevented resurrections');
+  console.log('[mergeData]   Stale data blocked:', staleDataBlocked, '← prevented stale data');
+  console.log('[mergeData]   Deletion resurrection blocked:', deletionResurrectionBlocked, '← prevented deleted items from coming back');
   console.log('[mergeData]   Total merged items:', merged.size);
   
   const result = Array.from(merged.values());
   console.log('[mergeData] Total items before filtering:', result.length);
   
-  // Filter out deleted items
-  const active = result.filter((item: any) => !item.deleted);
-  const deletedCount = result.length - active.length;
-  console.log('[mergeData] Active items (not deleted):', active.length);
-  console.log('[mergeData] Deleted items (filtered out):', deletedCount);
+  // CRITICAL: Keep deleted items in the result so they can be synced to the server
+  // The server needs to know about deletions to prevent other devices from resurrecting them
+  // Filtering will happen in the context layer when setting state
+  const deletedCount = result.filter((item: any) => item.deleted).length;
+  const activeCount = result.length - deletedCount;
+  console.log('[mergeData] Active items (not deleted):', activeCount);
+  console.log('[mergeData] Deleted items (kept for server sync):', deletedCount);
+  console.log('[mergeData] ⚠️ IMPORTANT: Deleted items are kept in result for server sync to prevent resurrection');
   console.log('[mergeData] ========== MERGE COMPLETE ==========');
   
-  return active as T[];
+  return result as T[];
 }

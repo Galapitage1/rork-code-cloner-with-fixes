@@ -38,16 +38,22 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
     // This ensures newer timestamps always win (whether local or remote)
     console.log(`[syncData] ${dataType}: STEP 3 - Merging with timestamp-based conflict resolution...`);
     const merged = mergeData(savedToServer, remoteData);
-    console.log(`[syncData] ${dataType}: ✓ Merge complete:`, merged.length, 'active items (deleted items filtered out)');
+    const deletedInMerge = merged.filter(item => item.deleted).length;
+    const activeInMerge = merged.length - deletedInMerge;
+    console.log(`[syncData] ${dataType}: ✓ Merge complete:`, merged.length, 'total items (active:', activeInMerge, ', deleted:', deletedInMerge, ')');
+    console.log(`[syncData] ${dataType}: ⚠️ IMPORTANT: Deleted items are included to prevent resurrection by other devices`);
     
-    // STEP 4: Save final merged result back to server
-    // This ensures all devices converge to the same state
-    console.log(`[syncData] ${dataType}: STEP 4 - Saving merged result back to server...`);
+    // STEP 4: Save final merged result back to server (INCLUDING DELETED ITEMS)
+    // This ensures all devices converge to the same state and deletions are propagated
+    console.log(`[syncData] ${dataType}: STEP 4 - Saving merged result back to server (with deletions)...`);
     const finalSaved = await saveToServer(merged, {
       userId,
       dataType,
     });
-    console.log(`[syncData] ${dataType}: ✓ Sync complete -`, finalSaved.length, 'items');
+    const deletedInFinal = finalSaved.filter(item => item.deleted).length;
+    const activeInFinal = finalSaved.length - deletedInFinal;
+    console.log(`[syncData] ${dataType}: ✓ Sync complete -`, finalSaved.length, 'total items (active:', activeInFinal, ', deleted:', deletedInFinal, ')');
+    console.log(`[syncData] ${dataType}: ⚠️ NOTE: Caller should filter out deleted items when setting state`);
     
     return finalSaved;
   } catch (error) {
