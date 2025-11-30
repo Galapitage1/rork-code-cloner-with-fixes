@@ -528,19 +528,30 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     return null;
   }, [productConversions]);
 
-  const saveInventoryStocks = useCallback(async (stocks: InventoryStock[]) => {
+  const saveInventoryStocks = useCallback(async (stocks: InventoryStock[], immediateSync = false) => {
     try {
       const stocksWithTimestamp = stocks.map(s => ({ ...s, updatedAt: s.updatedAt || Date.now() }));
       console.log('saveInventoryStocks: Saving', stocksWithTimestamp.length, 'stocks to AsyncStorage');
       await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(stocksWithTimestamp));
       console.log('saveInventoryStocks: Setting state with', stocksWithTimestamp.filter(s => !s.deleted).length, 'active stocks');
       setInventoryStocks(stocksWithTimestamp.filter(s => !s.deleted));
-      console.log('saveInventoryStocks: Saved locally, will sync on next interval');
+      
+      if (immediateSync && currentUser?.id) {
+        console.log('saveInventoryStocks: Immediate sync requested - syncing OUT to server NOW...');
+        try {
+          await syncData('inventoryStocks', stocksWithTimestamp, currentUser.id);
+          console.log('saveInventoryStocks: ✓ Immediately synced to server to prevent sync resurrection');
+        } catch (syncError) {
+          console.error('saveInventoryStocks: Immediate sync failed:', syncError);
+        }
+      } else {
+        console.log('saveInventoryStocks: Saved locally, will sync on next interval');
+      }
     } catch (error) {
       console.error('Failed to save inventory stocks:', error);
       throw error;
     }
-  }, []);
+  }, [currentUser]);
 
   const addInventoryStock = useCallback(async (stock: InventoryStock) => {
     const updated = [...inventoryStocks, stock];
@@ -1437,8 +1448,10 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     }
     
     console.log('handleReplaceAllInventory: Saving updated inventory stocks...');
-    await saveInventoryStocks(updatedInventoryStocks);
+    console.log('handleReplaceAllInventory: CRITICAL - Using immediate sync to prevent resurrection by 60-second sync');
+    await saveInventoryStocks(updatedInventoryStocks, true);
     console.log('handleReplaceAllInventory: Successfully replaced all inventory for', outlet.name);
+    console.log('handleReplaceAllInventory: ✓ Inventory synced to server - safe from sync resurrection');
   }, [products, outlets, getProductPairForInventory, getConversionFactor, saveInventoryStocks, productConversions]);
 
   const addRequest = useCallback(async (request: ProductRequest) => {
