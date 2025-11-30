@@ -900,6 +900,9 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     
     let updatedInventoryStocks = [...currentInventoryStocks];
     
+    // CRITICAL: Get all sales outlets for initialization
+    const salesOutlets = outlets.filter(o => o.outletType === 'sales');
+    
     // Create a map of all current stock values from the stock check
     const stockCheckQuantities = new Map<string, number>();
     stockCheck.counts.forEach(count => {
@@ -1003,27 +1006,28 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       });
       
       // Create inventory entries for products WITHOUT conversions that don't exist yet
+      // IMPORTANT: For production outlets, add with 0 for production, then set value
+      // This ensures proper initialization for products that never existed in inventory
       stockCheck.counts.forEach(count => {
         if (!productsWithConversions.has(count.productId)) {
           const product = products.find(p => p.id === count.productId);
           const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
           
           if (invIndex === -1) {
-            // Product doesn't exist in inventory - CREATE IT
-            const qty = count.quantity || 0;
-            console.log('handleReplaceAllInventory: Creating NEW inventory entry for', product?.name, '(no conversion, not in inventory) with qty:', qty);
+            // Product doesn't exist in inventory - CREATE IT with 0 first
+            console.log('handleReplaceAllInventory: Creating NEW inventory entry for', product?.name, '(no conversion, not in inventory)');
+            console.log('handleReplaceAllInventory: Initializing with 0 for production outlet, then will set actual value');
             
-            const salesOutlets = outlets.filter(o => o.outletType === 'sales');
             const newInv: InventoryStock = {
               id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               productId: count.productId,
-              productionWhole: qty,
+              productionWhole: 0, // Initialize with 0
               productionSlices: 0,
               outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
               updatedAt: Date.now(),
             };
             updatedInventoryStocks.push(newInv);
-            console.log('handleReplaceAllInventory: ✓ Created inventory entry for', product?.name);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry for', product?.name, 'with 0 values');
           }
         }
       });
@@ -1215,7 +1219,32 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       console.log('handleReplaceAllInventory: Stock check counts:', stockCheck.counts.length);
       console.log('handleReplaceAllInventory: Current inventory stocks:', updatedInventoryStocks.length);
       
-      // Get all products from stock check that don't have conversions
+      // CRITICAL: First, create inventory entries for products WITHOUT conversions that don't exist yet
+      // This is needed for sales outlets to add products with 0 for production first
+      stockCheck.counts.forEach(count => {
+        const hasConversion = productsWithConversions.has(count.productId);
+        if (!hasConversion) {
+          const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
+          if (invIndex === -1) {
+            const product = products.find(p => p.id === count.productId);
+            console.log('handleReplaceAllInventory: Creating NEW inventory entry for sales outlet -', product?.name, '(no conversion, not in inventory)');
+            console.log('handleReplaceAllInventory: Initializing with 0 for production outlet first');
+            
+            const newInv: InventoryStock = {
+              id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              productId: count.productId,
+              productionWhole: 0, // Initialize with 0 for production
+              productionSlices: 0,
+              outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+              updatedAt: Date.now(),
+            };
+            updatedInventoryStocks.push(newInv);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry with 0 for production outlet for', product?.name);
+          }
+        }
+      });
+      
+      // Now process all products from stock check that don't have conversions
       stockCheck.counts.forEach(count => {
         const hasConversion = productsWithConversions.has(count.productId);
         const product = products.find(p => p.id === count.productId);
@@ -1226,7 +1255,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           
           console.log('Replace All: Product WITHOUT conversion for sales outlet:', product?.name, 'qty:', qty);
           
-          // Find or create inventory stock for this product
+          // Find inventory stock for this product (should exist now after creation step above)
           let invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
           console.log('Replace All: Looking for inventory with productId:', count.productId, 'found at index:', invIndex);
           
