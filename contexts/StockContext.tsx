@@ -1014,7 +1014,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       });
       
       // CRITICAL: Set to 0 for ALL products NOT in the stock check
-      // This includes products with conversions (set their production stock to 0)
+      // This includes both products with conversions AND products without conversions
+      console.log('handleReplaceAllInventory: Setting products NOT in stock check to 0...');
       updatedInventoryStocks.forEach((invStock, index) => {
         // For products WITH conversions
         if (productsWithConversions.has(invStock.productId)) {
@@ -1041,7 +1042,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
             }
           }
         } else {
-          // For products WITHOUT conversions
+          // For products WITHOUT conversions (Production Stock Other Units)
           if (!stockCheckQuantities.has(invStock.productId)) {
             // Not in stock check, set to 0
             const product = products.find(p => p.id === invStock.productId);
@@ -1056,6 +1057,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           }
         }
       });
+      console.log('handleReplaceAllInventory: Finished setting missing products to 0');
     } else if (outlet.outletType === 'sales') {
       console.log('handleReplaceAllInventory: Replacing SALES outlet inventory for:', outlet.name);
       
@@ -1216,11 +1218,11 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       console.log('handleReplaceAllInventory: Finished processing stock check counts');
       console.log('handleReplaceAllInventory: Now setting products NOT in stock check to 0...');
       
-      // Also set to 0 for products WITHOUT conversions NOT in the stock check but exist in inventory for this sales outlet
+      // CRITICAL: Set to 0 for ALL products WITHOUT conversions NOT in the stock check
       for (let index = 0; index < updatedInventoryStocks.length; index++) {
         const invStock = updatedInventoryStocks[index];
         if (!productsWithConversions.has(invStock.productId)) {
-          // This is a product without conversions
+          // This is a product without conversions (Production Stock Other Units)
           if (!stockCheckQuantities.has(invStock.productId)) {
             // Not in stock check, set outlet stock to 0
             const product = products.find(p => p.id === invStock.productId);
@@ -1242,7 +1244,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
                 updatedAt: Date.now(),
               };
             } else {
-              // Create outlet stock entry if it doesn't exist
+              // Create outlet stock entry if it doesn't exist and set to 0
               console.log('Replace All: Creating outlet stock entry (set to 0) for', product?.name, 'at', outlet.name);
               updatedOutletStocks.push({
                 outletName: outlet.name,
@@ -1260,7 +1262,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      console.log('handleReplaceAllInventory: Finished processing products without conversions for sales outlet');
+      console.log('handleReplaceAllInventory: Finished setting products without conversions to 0');
       console.log('handleReplaceAllInventory: Updated inventory stocks count:', updatedInventoryStocks.length);
       
       // CRITICAL: Set to 0 for ALL products NOT in the stock check for sales outlets
