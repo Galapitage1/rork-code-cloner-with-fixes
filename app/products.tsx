@@ -515,8 +515,29 @@ export default function ProductsScreen() {
       
       const storeDuplicateEntries = Array.from(storeDuplicates.entries()).filter(([_, items]) => items.length > 1);
       
-      if (duplicateEntries.length === 0 && storeDuplicateEntries.length === 0) {
-        Alert.alert('No Duplicates', 'No duplicate products found.');
+      const productsToKeepKeys = new Set<string>();
+      duplicateEntries.forEach(([key, items]) => {
+        const sorted = items.sort((a, b) => {
+          const timeA = a.updatedAt || 0;
+          const timeB = b.updatedAt || 0;
+          return timeA - timeB;
+        });
+        productsToKeepKeys.add(`${sorted[0].name.toLowerCase().trim()}_${sorted[0].unit.toLowerCase().trim()}`);
+      });
+      
+      const orphanedStoreProducts: typeof storeProducts = [];
+      storeProducts.forEach(storeProduct => {
+        const key = `${storeProduct.name.toLowerCase().trim()}_${storeProduct.unit.toLowerCase().trim()}`;
+        const hasMatchingProduct = products.some(p => 
+          `${p.name.toLowerCase().trim()}_${p.unit.toLowerCase().trim()}` === key
+        );
+        if (!hasMatchingProduct) {
+          orphanedStoreProducts.push(storeProduct);
+        }
+      });
+      
+      if (duplicateEntries.length === 0 && storeDuplicateEntries.length === 0 && orphanedStoreProducts.length === 0) {
+        Alert.alert('No Duplicates', 'No duplicate products or orphaned store products found.');
         return;
       }
       
@@ -547,6 +568,19 @@ export default function ProductsScreen() {
         
         if (storeDuplicateEntries.length > displayLimit) {
           message += `...and ${storeDuplicateEntries.length - displayLimit} more\n`;
+        }
+      }
+      
+      if (orphanedStoreProducts.length > 0) {
+        if (message) message += '\n';
+        message += `Found ${orphanedStoreProducts.length} orphaned store product(s) (products in Stores that don\'t match any Product).\n\n`;
+        const displayLimit = 5;
+        orphanedStoreProducts.slice(0, displayLimit).forEach(item => {
+          message += `• ${item.name} (${item.unit})\n`;
+        });
+        
+        if (orphanedStoreProducts.length > displayLimit) {
+          message += `...and ${orphanedStoreProducts.length - displayLimit} more\n`;
         }
       }
       
@@ -633,6 +667,14 @@ export default function ProductsScreen() {
                 await deleteStoreProduct(id);
               }
               removedCount += storeIdsToDelete.length;
+            }
+            
+            if (orphanedStoreProducts.length > 0) {
+              console.log(`[RemoveDuplicates] Removing ${orphanedStoreProducts.length} orphaned store products...`);
+              for (const storeProduct of orphanedStoreProducts) {
+                await deleteStoreProduct(storeProduct.id);
+              }
+              removedCount += orphanedStoreProducts.length;
             }
             
             console.log('[RemoveDuplicates] Waiting for sync...');
