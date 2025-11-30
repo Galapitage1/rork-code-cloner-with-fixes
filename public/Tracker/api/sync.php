@@ -37,14 +37,52 @@ if (file_exists($filePath)) {
 }
 
 $byId = [];
+$byNameUnit = []; // For products: track name+unit to prevent duplicates
 foreach ($existing as $item) {
-  if (is_array($item) && isset($item['id'])) { $byId[$item['id']] = $item; }
+  if (is_array($item) && isset($item['id'])) { 
+    $byId[$item['id']] = $item; 
+    // For products endpoint, track name+unit combinations
+    if ($endpoint === 'products' && isset($item['name']) && isset($item['unit']) && !isset($item['deleted'])) {
+      $key = strtolower(trim($item['name'])) . '_' . strtolower(trim($item['unit']));
+      if (!isset($byNameUnit[$key])) {
+        $byNameUnit[$key] = $item['id'];
+      }
+    }
+  }
 }
 
 foreach ($payload as $item) {
   if (!is_array($item) || !isset($item['id'])) { continue; }
   $id = $item['id'];
   $incomingUpdatedAt = isset($item['updatedAt']) && is_numeric($item['updatedAt']) ? intval($item['updatedAt']) : 0;
+  
+  // For products: Check for duplicates by name+unit and automatically mark as deleted
+  if ($endpoint === 'products' && isset($item['name']) && isset($item['unit'])) {
+    $key = strtolower(trim($item['name'])) . '_' . strtolower(trim($item['unit']));
+    $existingId = isset($byNameUnit[$key]) ? $byNameUnit[$key] : null;
+    
+    // If this is a duplicate (different ID, same name+unit) and not already deleted
+    if ($existingId && $existingId !== $id && !isset($item['deleted'])) {
+      $existingItem = $byId[$existingId];
+      $existingUpdatedAt = isset($existingItem['updatedAt']) && is_numeric($existingItem['updatedAt']) ? intval($existingItem['updatedAt']) : 0;
+      
+      // Keep the older item (by timestamp), mark newer duplicate as deleted
+      if ($incomingUpdatedAt > $existingUpdatedAt) {
+        // Current item is newer - mark it as deleted, keep existing
+        $item['deleted'] = true;
+        $item['updatedAt'] = intval(microtime(true) * 1000);
+      } else {
+        // Existing item is newer - mark existing as deleted, use current
+        $byId[$existingId]['deleted'] = true;
+        $byId[$existingId]['updatedAt'] = intval(microtime(true) * 1000);
+        $byNameUnit[$key] = $id; // Update tracker to new item
+      }
+    } elseif (!isset($item['deleted']) || !$item['deleted']) {
+      // Not a duplicate or not deleted - track it
+      $byNameUnit[$key] = $id;
+    }
+  }
+  
   if (!isset($byId[$id])) {
     $byId[$id] = $item;
   } else {
@@ -57,8 +95,8 @@ foreach ($payload as $item) {
 
 $merged = array_values($byId);
 
-// Remove deleted items older than 7 days to prevent accumulation
-$cutoffTime = time() * 1000 - (7 * 24 * 60 * 60 * 1000); // 7 days in milliseconds
+// Remove deleted items older than 30 days to prevent accumulation (increased from 7 to 30 days)
+$cutoffTime = time() * 1000 - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
 $merged = array_filter($merged, function($item) use ($cutoffTime) {
   $isDeleted = isset($item['deleted']) && $item['deleted'] === true;
   if (!$isDeleted) return true;
