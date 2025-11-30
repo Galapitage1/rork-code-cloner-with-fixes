@@ -2844,41 +2844,65 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       const reconcileHistoryToSync = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
       
       // CLEANUP: Remove stock checks older than 7 days during sync (server keeps everything)
+      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
       if (stockChecksToSync.length > 0 && silent) {
         const RETENTION_DAYS = 7;
+        const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
         const retentionDaysAgo = new Date();
         retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
         const retentionDaysAgoStr = retentionDaysAgo.toISOString().split('T')[0];
         
+        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        
         const originalCount = stockChecksToSync.length;
         stockChecksToSync = stockChecksToSync.filter((check: any) => {
-          if (check.deleted) return false;
+          // Keep deleted items for 30 days to prevent old devices from resurrecting them
+          if (check.deleted) {
+            const deletedAt = check.updatedAt || 0;
+            if (deletedAt > deletedRetentionTime) {
+              console.log('StockContext syncAll: Keeping deleted stock check', check.id, 'for sync (prevents resurrection)');
+              return true;
+            }
+            return false;
+          }
           if (!check.date) return true;
           return check.date >= retentionDaysAgoStr;
         });
         
         if (originalCount > stockChecksToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than', RETENTION_DAYS, 'days) from local storage');
+          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than', RETENTION_DAYS, 'days active OR', DELETED_RETENTION_DAYS, 'days deleted) from local storage');
           console.log('StockContext syncAll: Server still has all historical data');
         }
       }
       
       // CLEANUP: Remove old requests during sync
+      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
       if (requestsToSync.length > 0 && silent) {
         const RETENTION_DAYS = 7;
+        const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
         const retentionDaysAgo = new Date();
         retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
         const retentionDaysAgoTime = retentionDaysAgo.getTime();
         
+        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        
         const originalCount = requestsToSync.length;
         requestsToSync = requestsToSync.filter((request: any) => {
-          if (request.deleted) return false;
+          // Keep deleted items for 30 days to prevent old devices from resurrecting them
+          if (request.deleted) {
+            const deletedAt = request.updatedAt || 0;
+            if (deletedAt > deletedRetentionTime) {
+              console.log('StockContext syncAll: Keeping deleted request', request.id, 'for sync (prevents resurrection)');
+              return true;
+            }
+            return false;
+          }
           if (!request.requestedAt) return true;
           return request.requestedAt >= retentionDaysAgoTime;
         });
         
         if (originalCount > requestsToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - requestsToSync.length, 'old requests (older than', RETENTION_DAYS, 'days) from local storage');
+          console.log('StockContext syncAll: Cleaned up', originalCount - requestsToSync.length, 'old requests (older than', RETENTION_DAYS, 'days active OR', DELETED_RETENTION_DAYS, 'days deleted) from local storage');
           console.log('StockContext syncAll: Server still has all historical data');
         }
       }
@@ -2903,14 +2927,22 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       let syncedRequests = syncResults[2].status === 'fulfilled' ? syncResults[2].value : requestsToSync;
       
       // CLEANUP: After sync, keep only recent data locally (7 days)
+      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
       if (silent) {
         const RETENTION_DAYS = 7;
+        const DELETED_RETENTION_DAYS = 30;
         const retentionDaysAgo = new Date();
         retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
         const retentionDaysAgoTime = retentionDaysAgo.getTime();
         
+        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        
         syncedRequests = (syncedRequests as any[]).filter((request: any) => {
-          if (request.deleted) return false;
+          // Keep deleted items for 30 days
+          if (request.deleted) {
+            const deletedAt = request.updatedAt || 0;
+            return deletedAt > deletedRetentionTime;
+          }
           if (!request.requestedAt) return true;
           return request.requestedAt >= retentionDaysAgoTime;
         });
