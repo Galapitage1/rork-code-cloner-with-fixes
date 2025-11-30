@@ -69,6 +69,12 @@ function LiveInventoryScreen() {
 
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
     console.log('[LIVE INVENTORY] Recalculating inventory history at', new Date().toISOString());
+    console.log('[LIVE INVENTORY] reconcileHistory count:', reconcileHistory.length);
+    if (reconcileHistory.length > 0) {
+      console.log('[LIVE INVENTORY] First reconcile entry:', JSON.stringify(reconcileHistory[0], null, 2));
+      console.log('[LIVE INVENTORY] All reconcile outlets:', reconcileHistory.map(r => r.outlet).join(', '));
+      console.log('[LIVE INVENTORY] All reconcile dates:', reconcileHistory.map(r => r.date).join(', '));
+    }
     if (!selectedOutlet) return [];
 
     const dates = getDateRange(selectedDate, dateRange);
@@ -253,15 +259,30 @@ function LiveInventoryScreen() {
           
           if (isRawMaterial) {
             // Check reconciliation history for raw consumption data for THIS product and date
+            console.log(`[RAW MATERIAL CHECK] Product: ${wholeProduct.name}, Outlet: ${selectedOutlet}, Date: ${date}`);
+            console.log(`[RAW MATERIAL CHECK] Total reconcileHistory entries: ${reconcileHistory.length}`);
+            
             const reconcileForDate = reconcileHistory.find(
               r => r.outlet === selectedOutlet && r.date === date && !r.deleted
             );
+            
+            console.log(`[RAW MATERIAL CHECK] Found reconciliation for date?`, !!reconcileForDate);
+            if (reconcileForDate) {
+              console.log(`[RAW MATERIAL CHECK] Reconciliation has rawConsumption?`, !!reconcileForDate.rawConsumption);
+              console.log(`[RAW MATERIAL CHECK] rawConsumption entries:`, reconcileForDate.rawConsumption?.length || 0);
+              if (reconcileForDate.rawConsumption && reconcileForDate.rawConsumption.length > 0) {
+                console.log(`[RAW MATERIAL CHECK] Raw consumption data:`, JSON.stringify(reconcileForDate.rawConsumption, null, 2));
+              }
+            }
             
             if (reconcileForDate && reconcileForDate.rawConsumption) {
               console.log(`Product ${wholeProduct.name} is a RAW material - checking raw consumption from reconciliation`);
               const rawConsumption = reconcileForDate.rawConsumption.find(
                 rc => rc.rawProductId === pair.wholeId
               );
+              
+              console.log(`[RAW MATERIAL CHECK] Looking for rawProductId: ${pair.wholeId}`);
+              console.log(`[RAW MATERIAL CHECK] Found matching raw consumption?`, !!rawConsumption);
               
               if (rawConsumption) {
                 // Convert consumed quantity to whole + slices format
@@ -274,9 +295,11 @@ function LiveInventoryScreen() {
                 console.log(`  Raw consumption from reconciliation: ${consumedQty} = ${soldWhole}W + ${soldSlices}S`);
               } else {
                 console.log(`  No raw consumption data found in reconciliation for ${wholeProduct.name}`);
+                console.log(`  Available raw product IDs in reconciliation:`, reconcileForDate.rawConsumption.map(rc => rc.rawProductId).join(', '));
               }
             } else {
               console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
+              console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
             }
           } else {
             // For menu/kitchen products (not raw materials), use salesDeductions as before
@@ -536,9 +559,17 @@ function LiveInventoryScreen() {
           
           if (isRawMaterial) {
             // Check reconciliation history for raw consumption data for THIS product and date
+            console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Product: ${product.name}, Outlet: ${selectedOutlet}, Date: ${date}`);
+            
             const reconcileForDate = reconcileHistory.find(
               r => r.outlet === selectedOutlet && r.date === date && !r.deleted
             );
+            
+            console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Found reconciliation?`, !!reconcileForDate);
+            if (reconcileForDate) {
+              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Has rawConsumption?`, !!reconcileForDate.rawConsumption);
+              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] rawConsumption entries:`, reconcileForDate.rawConsumption?.length || 0);
+            }
             
             if (reconcileForDate && reconcileForDate.rawConsumption) {
               console.log(`Product ${product.name} is a RAW material - checking raw consumption from reconciliation`);
@@ -546,11 +577,17 @@ function LiveInventoryScreen() {
                 rc => rc.rawProductId === product.id
               );
               
+              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Looking for rawProductId: ${product.id}`);
+              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Found matching?`, !!rawConsumption);
+              
               if (rawConsumption) {
                 sold = rawConsumption.consumed;
                 console.log(`  Raw consumption from reconciliation: ${sold}`);
               } else {
                 console.log(`  No raw consumption data found in reconciliation for ${product.name}`);
+                if (reconcileForDate.rawConsumption.length > 0) {
+                  console.log(`  Available raw product IDs:`, reconcileForDate.rawConsumption.map(rc => rc.rawProductId).join(', '));
+                }
               }
             } else {
               console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
