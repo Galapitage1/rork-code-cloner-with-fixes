@@ -258,42 +258,38 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     const remoteTime = item.updatedAt || 0;
     const localTime = existing?.updatedAt || 0;
     
+    // CRITICAL FIX: Deletion always wins, regardless of timestamp
+    // This prevents deleted items from coming back during sync
+    if (existing && existing.deleted) {
+      // Local has deleted this item - keep it deleted regardless of remote timestamp
+      console.log('[mergeData] ✓ Preserving LOCAL DELETION:', item.id, 'ignoring remote (deletion always wins)');
+      deletionWins++;
+      // Keep existing (which is deleted)
+      return;
+    }
+    
+    if (item.deleted) {
+      // Remote has deleted this item - use the deletion
+      console.log('[mergeData] ✓ Applying REMOTE DELETION:', item.id, 'marking local as deleted');
+      merged.set(item.id, item);
+      deletionWins++;
+      return;
+    }
+    
     if (!existing) {
-      // Item exists on server but not locally - add it
+      // Item exists on server but not locally - add it (only if not deleted)
       merged.set(item.id, item);
       remoteNew++;
-      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime, 'deleted:', item.deleted);
+      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime);
     } else if (remoteTime > localTime) {
       // Remote is NEWER - use remote version
       merged.set(item.id, item);
       remoteNewer++;
-      console.log('[mergeData] ✓ Using REMOTE (newer):', item.id, 'remoteTime:', new Date(remoteTime).toISOString(), 'localTime:', new Date(localTime).toISOString(), 'deleted:', item.deleted);
-      if (item.deleted !== existing.deleted) {
-        console.log('[mergeData]   → Deletion status changed - remote:', item.deleted, 'local:', existing.deleted);
-      }
-    } else if (localTime > remoteTime) {
-      // Local is NEWER - keep local version
-      localNewer++;
-      console.log('[mergeData] ✓ Keeping LOCAL (newer):', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString(), 'deleted:', existing.deleted);
-      if (item.deleted !== existing.deleted) {
-        console.log('[mergeData]   → Deletion status differs - keeping local:', existing.deleted);
-      }
+      console.log('[mergeData] ✓ Using REMOTE (newer):', item.id, 'remoteTime:', new Date(remoteTime).toISOString(), 'localTime:', new Date(localTime).toISOString());
     } else {
-      // CRITICAL FIX: When timestamps are equal, deletion always wins
-      // This prevents duplicates from coming back after being deleted
-      if (existing.deleted && !item.deleted) {
-        console.log('[mergeData] ✓ Keeping LOCAL DELETION (equal timestamp, deletion wins):', item.id);
-        deletionWins++;
-        // Keep existing (which is deleted)
-      } else if (!existing.deleted && item.deleted) {
-        console.log('[mergeData] ✓ Using REMOTE DELETION (equal timestamp, deletion wins):', item.id);
-        merged.set(item.id, item);
-        deletionWins++;
-      } else {
-        // Both have same deleted status, keep local
-        localNewer++;
-        console.log('[mergeData] ✓ Keeping LOCAL (equal timestamp):', item.id, 'timestamp:', new Date(localTime).toISOString());
-      }
+      // Local is NEWER or EQUAL - keep local version
+      localNewer++;
+      console.log('[mergeData] ✓ Keeping LOCAL (newer or equal):', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
     }
   });
   
