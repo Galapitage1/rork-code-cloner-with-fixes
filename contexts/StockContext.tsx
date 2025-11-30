@@ -1042,9 +1042,13 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       stockCheck.counts.forEach(count => {
         if (!productsWithConversions.has(count.productId)) {
           const product = products.find(p => p.id === count.productId);
-          const qty = count.quantity || 0;
+          // CRITICAL: Use current stock (opening + received - wastage) instead of just quantity
+          const opening = count.openingStock || 0;
+          const received = count.receivedStock || 0;
+          const wastage = count.wastage || 0;
+          const currentStock = opening + received - wastage;
           
-          console.log('Replace All: Product without conversion:', product?.name, 'qty:', qty);
+          console.log('Replace All: Product without conversion:', product?.name, 'opening:', opening, 'received:', received, 'wastage:', wastage, 'currentStock:', currentStock);
           
           // Find or create inventory stock for this product
           const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
@@ -1052,23 +1056,23 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           if (invIndex >= 0) {
             // Update existing
             const existingInv = updatedInventoryStocks[invIndex];
-            console.log('Replace All: REPLACING production stock for', product?.name, '- new qty:', qty, '(was:', existingInv.productionWhole, ')');
+            console.log('Replace All: REPLACING production stock for', product?.name, '- new qty:', currentStock, '(was:', existingInv.productionWhole, ')');
             
             updatedInventoryStocks[invIndex] = {
               ...existingInv,
-              productionWhole: qty,
+              productionWhole: currentStock,
               productionSlices: 0,
               updatedAt: Date.now(),
             };
           } else {
             // Create new inventory entry
-            console.log('Replace All: Creating new inventory for', product?.name, '- qty:', qty);
+            console.log('Replace All: Creating new inventory for', product?.name, '- qty:', currentStock);
             
             const salesOutlets = outlets.filter(o => o.outletType === 'sales');
             const newInv: InventoryStock = {
               id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               productId: count.productId,
-              productionWhole: qty,
+              productionWhole: currentStock,
               productionSlices: 0,
               outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
               updatedAt: Date.now(),
