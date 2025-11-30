@@ -506,27 +506,51 @@ export default function ProductConversionsScreen() {
   };
 
   const handleExportConversions = () => {
-    Alert.alert(
-      'Export Format',
-      'Choose export format:',
-      [
-        { text: 'JSON', onPress: handleExportConversionsJSON },
-        { text: 'Excel', onPress: handleExportConversionsExcel },
-        { text: 'Cancel', style: 'cancel' as const }
-      ]
-    );
+    if (Platform.OS === 'web') {
+      const choice = window.confirm('Export as Excel? (Cancel for JSON)');
+      if (choice) {
+        handleExportConversionsExcel();
+      } else {
+        const continueExport = window.confirm('Export as JSON?');
+        if (continueExport) {
+          handleExportConversionsJSON();
+        }
+      }
+    } else {
+      Alert.alert(
+        'Export Format',
+        'Choose export format:',
+        [
+          { text: 'JSON', onPress: handleExportConversionsJSON },
+          { text: 'Excel', onPress: handleExportConversionsExcel },
+          { text: 'Cancel', style: 'cancel' as const }
+        ]
+      );
+    }
   };
 
   const handleImportConversions = () => {
-    Alert.alert(
-      'Import Format',
-      'Choose import format:',
-      [
-        { text: 'JSON', onPress: handleImportConversionsJSON },
-        { text: 'Excel', onPress: handleImportConversionsExcel },
-        { text: 'Cancel', style: 'cancel' as const }
-      ]
-    );
+    if (Platform.OS === 'web') {
+      const choice = window.confirm('Import from Excel? (Cancel for JSON)');
+      if (choice) {
+        handleImportConversionsExcel();
+      } else {
+        const continueImport = window.confirm('Import from JSON?');
+        if (continueImport) {
+          handleImportConversionsJSON();
+        }
+      }
+    } else {
+      Alert.alert(
+        'Import Format',
+        'Choose import format:',
+        [
+          { text: 'JSON', onPress: handleImportConversionsJSON },
+          { text: 'Excel', onPress: handleImportConversionsExcel },
+          { text: 'Cancel', style: 'cancel' as const }
+        ]
+      );
+    }
   };
 
   return (
@@ -982,6 +1006,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center' as const,
     alignItems: 'center' as const,
     padding: 20,
+    zIndex: 9999,
   },
   modalContent: {
     backgroundColor: Colors.light.card,
@@ -989,6 +1014,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 500,
     maxHeight: '90%',
+    zIndex: 10000,
   },
   modalHeader: {
     flexDirection: 'row' as const,
