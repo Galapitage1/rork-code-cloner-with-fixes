@@ -606,6 +606,16 @@ export default function SalesUploadScreen() {
       setResult(reconciled);
       await saveReconciliationToHistory(reconciled);
       
+      let raw: RawConsumptionResult | null = null;
+      try {
+        raw = computeRawConsumptionFromSales(base64, stockChecks, products, recipes);
+        setRawResult(raw);
+        console.log('SalesUpload: Raw consumption computed:', raw.rows.length, 'raw materials');
+      } catch (e) {
+        console.log('SalesUpload: raw compute failed', e);
+        setRawResult(null);
+      }
+      
       const outlet = reconciled.matchedOutletName || reconciled.outletFromSheet;
       const date = reconciled.sheetDate;
       if (outlet && date && reconciled.dateMatched) {
@@ -628,9 +638,13 @@ export default function SalesUploadScreen() {
               wastage: r.wastage ?? 0,
               closingStock: r.closing ?? 0,
             })),
+            rawConsumption: raw?.rows.map(r => ({
+              rawProductId: r.rawProductId,
+              consumed: r.consumed,
+            })) || [],
             timestamp: Date.now(),
           });
-          console.log('Saved reconciliation to StockContext for', outlet, date);
+          console.log('Saved reconciliation to StockContext for', outlet, date, 'with', raw?.rows.length || 0, 'raw consumption entries');
           
           // Trigger immediate sync so other devices are notified
           console.log('Triggering immediate sync to share reconciliation with other devices...');
@@ -639,13 +653,6 @@ export default function SalesUploadScreen() {
         } catch (error) {
           console.error('Failed to save reconciliation to StockContext:', error);
         }
-      }
-      try {
-        const raw = computeRawConsumptionFromSales(base64, stockChecks, products, recipes);
-        setRawResult(raw);
-      } catch (e) {
-        console.log('SalesUpload: raw compute failed', e);
-        setRawResult(null);
       }
       
       updateStep(5, 'complete');

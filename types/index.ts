@@ -194,6 +194,10 @@ export interface SalesReconciliationHistory {
     wastage: number;
     closingStock: number;
   }[];
+  rawConsumption?: {
+    rawProductId: string;
+    consumed: number;
+  }[];
   timestamp: number;
   updatedAt?: number;
   deviceId?: string;

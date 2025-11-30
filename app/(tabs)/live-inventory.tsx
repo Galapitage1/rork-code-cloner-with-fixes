@@ -40,7 +40,7 @@ type ProductInventoryHistory = {
 };
 
 function LiveInventoryScreen() {
-  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll } = useStock();
+  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll, reconcileHistory } = useStock();
   const { approvedProductions } = useProduction();
   const { recipes } = useRecipes();
   const { storeProducts } = useStores();
@@ -246,28 +246,62 @@ function LiveInventoryScreen() {
             }
           });
         } else {
-          // Sales: Get from salesDeductions (reconciliation)
-          // ALWAYS USE salesDeductions data when available - this is the ACTUAL sold data from reconciliation
-          console.log(`Product ${wholeProduct.name} on ${date} - checking salesDeductions for outlet:`, selectedOutlet);
-          console.log('  Total salesDeductions in context:', salesDeductions.length);
+          // Sales: First check if this is a raw material with consumption data from reconciliation
+          // For raw materials, use "Raw consumption" data from reconciliation history
+          const productInfo = products.find(p => p.id === pair.wholeId);
+          const isRawMaterial = productInfo && productInfo.type === 'raw';
           
-          const salesForDate = salesDeductions.filter(
-            s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
-                 s.salesDate === date && 
-                 s.productId === pair.wholeId && 
-                 !s.deleted
-          );
-          
-          console.log('  Sales deductions found for this date:', salesForDate.length);
-          
-          salesForDate.forEach(s => {
-            soldWhole += s.wholeDeducted || 0;
-            soldSlices += s.slicesDeducted || 0;
-            console.log(`  Sold: ${s.wholeDeducted}W + ${s.slicesDeducted}S from sales reconciliation`);
-          });
-          
-          if (salesForDate.length === 0) {
-            console.log('  WARNING: No sales deductions found - sold will be 0');
+          if (isRawMaterial) {
+            // Check reconciliation history for raw consumption data for THIS product and date
+            const reconcileForDate = reconcileHistory.find(
+              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+            );
+            
+            if (reconcileForDate && reconcileForDate.rawConsumption) {
+              console.log(`Product ${wholeProduct.name} is a RAW material - checking raw consumption from reconciliation`);
+              const rawConsumption = reconcileForDate.rawConsumption.find(
+                rc => rc.rawProductId === pair.wholeId
+              );
+              
+              if (rawConsumption) {
+                // Convert consumed quantity to whole + slices format
+                const consumedQty = rawConsumption.consumed;
+                const conversionFactor = pair.factor;
+                
+                soldWhole = Math.floor(consumedQty);
+                soldSlices = Math.round((consumedQty % 1) * conversionFactor);
+                
+                console.log(`  Raw consumption from reconciliation: ${consumedQty} = ${soldWhole}W + ${soldSlices}S`);
+              } else {
+                console.log(`  No raw consumption data found in reconciliation for ${wholeProduct.name}`);
+              }
+            } else {
+              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
+            }
+          } else {
+            // For menu/kitchen products (not raw materials), use salesDeductions as before
+            // ALWAYS USE salesDeductions data when available - this is the ACTUAL sold data from reconciliation
+            console.log(`Product ${wholeProduct.name} on ${date} - checking salesDeductions for outlet:`, selectedOutlet);
+            console.log('  Total salesDeductions in context:', salesDeductions.length);
+            
+            const salesForDate = salesDeductions.filter(
+              s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
+                   s.salesDate === date && 
+                   s.productId === pair.wholeId && 
+                   !s.deleted
+            );
+            
+            console.log('  Sales deductions found for this date:', salesForDate.length);
+            
+            salesForDate.forEach(s => {
+              soldWhole += s.wholeDeducted || 0;
+              soldSlices += s.slicesDeducted || 0;
+              console.log(`  Sold: ${s.wholeDeducted}W + ${s.slicesDeducted}S from sales reconciliation`);
+            });
+            
+            if (salesForDate.length === 0) {
+              console.log('  WARNING: No sales deductions found - sold will be 0');
+            }
           }
         }
 
@@ -496,18 +530,45 @@ function LiveInventoryScreen() {
           );
           outRequests.forEach(req => { sold += req.quantity; });
         } else {
-          // Sales: Get from salesDeductions (reconciliation)
-          // ALWAYS USE salesDeductions data when available
-          const salesForDate = salesDeductions.filter(
-            s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
-                 s.salesDate === date && 
-                 s.productId === product.id && 
-                 !s.deleted
-          );
+          // Sales: First check if this is a raw material with consumption data from reconciliation
+          // For raw materials, use "Raw consumption" data from reconciliation history
+          const isRawMaterial = product.type === 'raw';
           
-          salesForDate.forEach(s => { 
-            sold += s.wholeDeducted || 0;
-          });
+          if (isRawMaterial) {
+            // Check reconciliation history for raw consumption data for THIS product and date
+            const reconcileForDate = reconcileHistory.find(
+              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+            );
+            
+            if (reconcileForDate && reconcileForDate.rawConsumption) {
+              console.log(`Product ${product.name} is a RAW material - checking raw consumption from reconciliation`);
+              const rawConsumption = reconcileForDate.rawConsumption.find(
+                rc => rc.rawProductId === product.id
+              );
+              
+              if (rawConsumption) {
+                sold = rawConsumption.consumed;
+                console.log(`  Raw consumption from reconciliation: ${sold}`);
+              } else {
+                console.log(`  No raw consumption data found in reconciliation for ${product.name}`);
+              }
+            } else {
+              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
+            }
+          } else {
+            // For menu/kitchen products (not raw materials), use salesDeductions as before
+            // ALWAYS USE salesDeductions data when available
+            const salesForDate = salesDeductions.filter(
+              s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
+                   s.salesDate === date && 
+                   s.productId === product.id && 
+                   !s.deleted
+            );
+            
+            salesForDate.forEach(s => { 
+              sold += s.wholeDeducted || 0;
+            });
+          }
         }
 
         // STEP 5: Calculate Current Stock
@@ -630,7 +691,7 @@ function LiveInventoryScreen() {
     console.log('========================================\n');
 
     return history.sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, approvedProductions]);
+  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, approvedProductions, reconcileHistory]);
 
   console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
