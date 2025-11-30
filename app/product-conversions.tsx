@@ -231,10 +231,13 @@ export default function ProductConversionsScreen() {
     const link = document.createElement('a');
     link.href = url;
     link.download = `product-conversions-${new Date().toISOString().split('T')[0]}.json`;
+    link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 100);
 
     Alert.alert('Success', `Exported ${productConversions.length} product conversions to JSON.`);
   };
@@ -316,9 +319,15 @@ export default function ProductConversionsScreen() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    
     input.onchange = async (e: any) => {
       const file = e.target.files?.[0];
-      if (!file) return;
+      if (!file) {
+        document.body.removeChild(input);
+        return;
+      }
 
       try {
         const text = await file.text();
@@ -326,9 +335,11 @@ export default function ProductConversionsScreen() {
 
         if (!data.conversions || !Array.isArray(data.conversions)) {
           Alert.alert('Error', 'Invalid file format. Please select a valid product conversions export file.');
+          document.body.removeChild(input);
           return;
         }
 
+        console.log(`Starting bulk import of ${data.conversions.length} conversions...`);
         let imported = 0;
         let skipped = 0;
         let errors = 0;
@@ -358,11 +369,12 @@ export default function ProductConversionsScreen() {
 
             if (existingConversion) {
               skipped++;
+              console.log('Skipped conversion - already exists:', fromProduct.name, toProduct.name);
               continue;
             }
 
             const newConversion: ProductConversion = {
-              id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+              id: `${Date.now()}-${conversionsToAdd.length}-${Math.random().toString(36).substr(2, 9)}`,
               fromProductId: fromProduct.id,
               toProductId: toProduct.id,
               conversionFactor: conversionData.conversionFactor,
@@ -377,8 +389,12 @@ export default function ProductConversionsScreen() {
           }
         }
 
+        console.log(`Prepared ${conversionsToAdd.length} conversions for bulk import`);
+        
         if (conversionsToAdd.length > 0) {
+          console.log('Calling addProductConversionsBulk with', conversionsToAdd.length, 'conversions');
           await addProductConversionsBulk(conversionsToAdd);
+          console.log('Bulk import completed successfully');
         }
 
         let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
@@ -389,8 +405,11 @@ export default function ProductConversionsScreen() {
       } catch (error) {
         console.error('Error importing conversions:', error);
         Alert.alert('Error', 'Failed to import product conversions. Please check the file format.');
+      } finally {
+        document.body.removeChild(input);
       }
     };
+    
     input.click();
   };
 
@@ -398,9 +417,15 @@ export default function ProductConversionsScreen() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.xlsx,.xls';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    
     input.onchange = async (e: any) => {
       const file = e.target.files?.[0];
-      if (!file) return;
+      if (!file) {
+        document.body.removeChild(input);
+        return;
+      }
 
       try {
         const reader = new FileReader();
@@ -409,6 +434,7 @@ export default function ProductConversionsScreen() {
             const data = event.target?.result;
             if (!data) {
               Alert.alert('Error', 'Failed to read file.');
+              document.body.removeChild(input);
               return;
             }
 
@@ -419,9 +445,11 @@ export default function ProductConversionsScreen() {
 
             if (jsonData.length === 0) {
               Alert.alert('Error', 'No data found in the Excel file.');
+              document.body.removeChild(input);
               return;
             }
 
+            console.log(`Starting bulk import from Excel with ${jsonData.length} rows...`);
             let imported = 0;
             let skipped = 0;
             let errors = 0;
@@ -463,11 +491,12 @@ export default function ProductConversionsScreen() {
 
                 if (existingConversion) {
                   skipped++;
+                  console.log('Skipped conversion - already exists:', fromProduct.name, toProduct.name);
                   continue;
                 }
 
                 const newConversion: ProductConversion = {
-                  id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                  id: `${Date.now()}-${conversionsToAdd.length}-${Math.random().toString(36).substr(2, 9)}`,
                   fromProductId: fromProduct.id,
                   toProductId: toProduct.id,
                   conversionFactor: parseFloat(conversionFactor),
@@ -482,8 +511,12 @@ export default function ProductConversionsScreen() {
               }
             }
 
+            console.log(`Prepared ${conversionsToAdd.length} conversions for bulk import`);
+            
             if (conversionsToAdd.length > 0) {
+              console.log('Calling addProductConversionsBulk with', conversionsToAdd.length, 'conversions');
               await addProductConversionsBulk(conversionsToAdd);
+              console.log('Bulk import from Excel completed successfully');
             }
 
             let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
@@ -494,6 +527,8 @@ export default function ProductConversionsScreen() {
           } catch (error) {
             console.error('Error parsing Excel:', error);
             Alert.alert('Error', 'Failed to parse Excel file. Please check the file format.');
+          } finally {
+            document.body.removeChild(input);
           }
         };
         reader.readAsBinaryString(file);
@@ -502,6 +537,7 @@ export default function ProductConversionsScreen() {
         Alert.alert('Error', 'Failed to import product conversions. Please try again.');
       }
     };
+    
     input.click();
   };
 
@@ -1001,12 +1037,16 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   modalOverlay: {
-    flex: 1,
+    position: 'absolute' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center' as const,
     alignItems: 'center' as const,
     padding: 20,
-    zIndex: 9999,
+    zIndex: 999999,
   },
   modalContent: {
     backgroundColor: Colors.light.card,
@@ -1014,7 +1054,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 500,
     maxHeight: '90%',
-    zIndex: 10000,
+    zIndex: 1000000,
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row' as const,
