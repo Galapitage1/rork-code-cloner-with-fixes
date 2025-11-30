@@ -19,7 +19,7 @@ import * as XLSX from 'xlsx';
 export default function ProductsScreen() {
   const router = useRouter();
   const { currentUser, isAdmin, isSuperAdmin, currency } = useAuth();
-  const { products, addProduct, updateProduct, deleteProduct, clearAllProducts, showProductList, toggleShowProductList } = useStock();
+  const { products, addProduct, updateProduct, deleteProduct, clearAllProducts, showProductList, toggleShowProductList, syncAll } = useStock();
   const { recipes } = useRecipes();
   const { orders } = useOrders();
   
@@ -526,6 +526,7 @@ export default function ProductsScreen() {
         testID: 'confirm-remove-duplicates',
         onConfirm: async () => {
           try {
+            console.log('[RemoveDuplicates] Starting duplicate removal process...');
             let removedCount = 0;
             let skippedCount = 0;
             let errorCount = 0;
@@ -541,11 +542,13 @@ export default function ProductsScreen() {
               const toKeep = sortedByTimestamp[0];
               const toRemove = sortedByTimestamp.slice(1);
               
+              console.log(`[RemoveDuplicates] Processing "${items[0].name}" - keeping oldest (${toKeep.id}), removing ${toRemove.length} duplicates`);
+              
               for (const product of toRemove) {
                 const deps = checkProductDependencies(product.id);
                 
                 if (deps.hasRecipes || deps.hasOrders) {
-                  console.log(`Skipping ${product.name} (${product.unit}) - has ${deps.count} dependencies`);
+                  console.log(`[RemoveDuplicates] Skipping ${product.name} (${product.unit}) - has ${deps.count} dependencies`);
                   skippedCount++;
                   if (skippedProducts.length < 5) {
                     skippedProducts.push(`${product.name} (${product.unit}) - ${deps.count} dependencies`);
@@ -554,6 +557,7 @@ export default function ProductsScreen() {
                 }
                 
                 try {
+                  console.log(`[RemoveDuplicates] Deleting product ${product.id} (${product.name})`);
                   await deleteProduct(product.id);
                   removedCount++;
                   
@@ -561,10 +565,21 @@ export default function ProductsScreen() {
                     await new Promise(resolve => setTimeout(resolve, 100));
                   }
                 } catch (err) {
-                  console.error(`Failed to delete product ${product.id}:`, err);
+                  console.error(`[RemoveDuplicates] Failed to delete product ${product.id}:`, err);
                   errorCount++;
                 }
               }
+            }
+            
+            console.log(`[RemoveDuplicates] Completed - removed: ${removedCount}, skipped: ${skippedCount}, errors: ${errorCount}`);
+            console.log('[RemoveDuplicates] Triggering immediate sync to propagate deletions...');
+            
+            try {
+              await syncAll(false);
+              console.log('[RemoveDuplicates] Sync completed successfully - deletions propagated to server');
+            } catch (syncError) {
+              console.error('[RemoveDuplicates] Sync failed:', syncError);
+              console.warn('[RemoveDuplicates] Deletions saved locally but may reappear until next successful sync');
             }
             
             let resultMessage = `Removed ${removedCount} duplicate product(s).`;
@@ -589,7 +604,7 @@ export default function ProductsScreen() {
               resultMessage
             );
           } catch (error) {
-            console.error('Error removing duplicates:', error);
+            console.error('[RemoveDuplicates] Error removing duplicates:', error);
             Alert.alert('Error', 'Failed to remove duplicate products.');
           }
         },
