@@ -13,6 +13,7 @@ import {
 
 
 import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings } from 'lucide-react-native';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
@@ -52,6 +53,12 @@ export default function CampaignsScreen() {
   
   const [isSending, setIsSending] = useState(false);
   const [testingSMS, setTestingSMS] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
   const [showEmailSettings, setShowEmailSettings] = useState(false);
   
   const [smtpHost, setSmtpHost] = useState<string>('');
@@ -272,111 +279,111 @@ export default function CampaignsScreen() {
       return;
     }
 
-    Alert.alert(
-      'Send Email Campaign',
-      `Send ${selectedCustomers.length} email(s) via SMTP?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send',
-          onPress: async () => {
-            try {
-              setIsSending(true);
+    console.log('[EMAIL CAMPAIGN] Opening confirm dialog...');
+    setConfirmState({
+      title: 'Send Email Campaign',
+      message: `Send ${selectedCustomers.length} email(s) via SMTP?`,
+      onConfirm: async () => {
+        console.log('[EMAIL CAMPAIGN] User confirmed, starting send...');
+        try {
+          setIsSending(true);
 
-              const processedAttachments = await Promise.all(
-                attachments.map(async (att) => {
-                  let base64Content = '';
+          const processedAttachments = await Promise.all(
+            attachments.map(async (att) => {
+              let base64Content = '';
 
-                  if (Platform.OS !== 'web') {
-                    base64Content = await FileSystem.readAsStringAsync(att.uri, {
-                      encoding: 'base64',
-                    });
-                  } else {
-                    const response = await fetch(att.uri);
-                    const blob = await response.blob();
-                    const reader = new FileReader();
-                    base64Content = await new Promise((resolve) => {
-                      reader.onloadend = () => {
-                        const base64 = reader.result as string;
-                        resolve(base64.split(',')[1]);
-                      };
-                      reader.readAsDataURL(blob);
-                    });
-                  }
-
-                  return {
-                    filename: att.name,
-                    content: base64Content,
-                    encoding: 'base64' as const,
-                    contentType: att.mimeType,
+              if (Platform.OS !== 'web') {
+                base64Content = await FileSystem.readAsStringAsync(att.uri, {
+                  encoding: 'base64',
+                });
+              } else {
+                const response = await fetch(att.uri);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                base64Content = await new Promise((resolve) => {
+                  reader.onloadend = () => {
+                    const base64 = reader.result as string;
+                    resolve(base64.split(',')[1]);
                   };
-                })
-              );
-
-              const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
-              const response = await fetch(`${apiUrl}/api/send-email`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  smtpConfig: {
-                    host: smtpHost,
-                    port: smtpPort,
-                    username: smtpUsername,
-                    password: smtpPassword,
-                  },
-                  emailData: {
-                    senderName,
-                    senderEmail,
-                    subject,
-                    message,
-                    htmlContent,
-                    format: emailFormat,
-                    attachments: processedAttachments,
-                  },
-                  recipients: selectedCustomers.map(c => ({
-                    name: c.name,
-                    email: c.email,
-                  })),
-                }),
-              });
-
-              const result = await response.json();
-
-              if (!response.ok || !result.success) {
-                throw new Error(result.error || 'Failed to send emails');
+                  reader.readAsDataURL(blob);
+                });
               }
 
-              const { results } = result;
-              const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
-                results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
-              }`;
+              return {
+                filename: att.name,
+                content: base64Content,
+                encoding: 'base64' as const,
+                contentType: att.mimeType,
+              };
+            })
+          );
 
-              Alert.alert(
-                'Email Campaign Complete',
-                resultMessage,
-                [{ text: 'OK' }]
-              );
+          console.log('[EMAIL CAMPAIGN] Sending to backend...');
+          const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+          const response = await fetch(`${apiUrl}/api/send-email`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              smtpConfig: {
+                host: smtpHost,
+                port: smtpPort,
+                username: smtpUsername,
+                password: smtpPassword,
+              },
+              emailData: {
+                senderName,
+                senderEmail,
+                subject,
+                message,
+                htmlContent,
+                format: emailFormat,
+                attachments: processedAttachments,
+              },
+              recipients: selectedCustomers.map(c => ({
+                name: c.name,
+                email: c.email,
+              })),
+            }),
+          });
 
-              if (results.success > 0) {
-                setSubject('');
-                setMessage('');
-                setHtmlContent('');
-                setAttachments([]);
-                setSelectedCustomerIds(new Set());
-              }
+          const result = await response.json();
+          console.log('[EMAIL CAMPAIGN] Backend response:', result);
 
-            } catch (error) {
-              console.error('Email campaign error:', error);
-              Alert.alert('Error', 'Failed to send email campaign: ' + (error as Error).message);
-            } finally {
-              setIsSending(false);
-            }
-          },
-        },
-      ]
-    );
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Failed to send emails');
+          }
+
+          const { results } = result;
+          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
+            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+          }`;
+
+          Alert.alert(
+            'Email Campaign Complete',
+            resultMessage,
+            [{ text: 'OK' }]
+          );
+
+          if (results.success > 0) {
+            setSubject('');
+            setMessage('');
+            setHtmlContent('');
+            setAttachments([]);
+            setSelectedCustomerIds(new Set());
+          }
+
+        } catch (error) {
+          console.error('[EMAIL CAMPAIGN] Error:', error);
+          Alert.alert('Error', 'Failed to send email campaign: ' + (error as Error).message);
+        } finally {
+          setIsSending(false);
+        }
+      },
+    });
+    setConfirmVisible(true);
+    console.log('[EMAIL CAMPAIGN] Confirm dialog should be visible');
   };
 
   const sendSMSCampaign = async () => {
@@ -386,85 +393,83 @@ export default function CampaignsScreen() {
       return;
     }
 
-    Alert.alert(
-      'Send SMS Campaign',
-      `Send SMS to ${selectedCustomers.length} customer(s)?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send',
-          onPress: async () => {
+    console.log('[SMS CAMPAIGN] Opening confirm dialog...');
+    setConfirmState({
+      title: 'Send SMS Campaign',
+      message: `Send SMS to ${selectedCustomers.length} customer(s)?`,
+      onConfirm: async () => {
+        console.log('[SMS CAMPAIGN] User confirmed, starting send...');
+        try {
+          setIsSending(true);
+          let successCount = 0;
+          let failCount = 0;
+          const errors: string[] = [];
+
+          for (const customer of selectedCustomers) {
+            if (!customer.phone) continue;
+
             try {
-              setIsSending(true);
-              let successCount = 0;
-              let failCount = 0;
-              const errors: string[] = [];
-
-              for (const customer of selectedCustomers) {
-                if (!customer.phone) continue;
-
-                try {
-                  let phone = customer.phone.trim();
-                  if (phone.startsWith('0')) {
-                    phone = '94' + phone.substring(1);
-                  } else if (!phone.startsWith('94')) {
-                    phone = '94' + phone;
-                  }
-
-                  const response = await fetch(smsApiUrl, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${smsApiKey}`,
-                    },
-                    body: JSON.stringify({
-                      user_id: '11217',
-                      api_key: smsApiKey,
-                      sender_id: 'NotifyDEMO',
-                      to: phone,
-                      message: message,
-                    }),
-                  });
-
-                  const data = await response.json();
-                  console.log(`SMS to ${customer.name} (${phone}):`, data);
-
-                  if (response.ok) {
-                    successCount++;
-                  } else {
-                    failCount++;
-                    errors.push(`${customer.name}: ${data.message || 'Failed'}`);
-                  }
-
-                  await new Promise(resolve => setTimeout(resolve, 500));
-
-                } catch (error) {
-                  failCount++;
-                  errors.push(`${customer.name}: ${(error as Error).message}`);
-                  console.error(`Failed to send SMS to ${customer.name}:`, error);
-                }
+              let phone = customer.phone.trim();
+              if (phone.startsWith('0')) {
+                phone = '94' + phone.substring(1);
+              } else if (!phone.startsWith('94')) {
+                phone = '94' + phone;
               }
 
-              const resultMessage = `Sent: ${successCount}\nFailed: ${failCount}${
-                errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
-              }`;
+              const response = await fetch(smsApiUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${smsApiKey}`,
+                },
+                body: JSON.stringify({
+                  user_id: '11217',
+                  api_key: smsApiKey,
+                  sender_id: 'NotifyDEMO',
+                  to: phone,
+                  message: message,
+                }),
+              });
 
-              Alert.alert(
-                'SMS Campaign Complete',
-                resultMessage,
-                [{ text: 'OK' }]
-              );
+              const data = await response.json();
+              console.log(`SMS to ${customer.name} (${phone}):`, data);
+
+              if (response.ok) {
+                successCount++;
+              } else {
+                failCount++;
+                errors.push(`${customer.name}: ${data.message || 'Failed'}`);
+              }
+
+              await new Promise(resolve => setTimeout(resolve, 500));
 
             } catch (error) {
-              console.error('SMS campaign error:', error);
-              Alert.alert('Error', 'Failed to send SMS campaign: ' + (error as Error).message);
-            } finally {
-              setIsSending(false);
+              failCount++;
+              errors.push(`${customer.name}: ${(error as Error).message}`);
+              console.error(`Failed to send SMS to ${customer.name}:`, error);
             }
-          },
-        },
-      ]
-    );
+          }
+
+          const resultMessage = `Sent: ${successCount}\nFailed: ${failCount}${
+            errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
+          }`;
+
+          Alert.alert(
+            'SMS Campaign Complete',
+            resultMessage,
+            [{ text: 'OK' }]
+          );
+
+        } catch (error) {
+          console.error('[SMS CAMPAIGN] Error:', error);
+          Alert.alert('Error', 'Failed to send SMS campaign: ' + (error as Error).message);
+        } finally {
+          setIsSending(false);
+        }
+      },
+    });
+    setConfirmVisible(true);
+    console.log('[SMS CAMPAIGN] Confirm dialog should be visible');
   };
 
   const handleSendCampaign = () => {
@@ -890,6 +895,25 @@ export default function CampaignsScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <ConfirmDialog
+        visible={confirmVisible}
+        title={confirmState?.title ?? ''}
+        message={confirmState?.message ?? ''}
+        onCancel={() => {
+          console.log('[CAMPAIGN] User cancelled');
+          setConfirmVisible(false);
+        }}
+        onConfirm={async () => {
+          console.log('[CAMPAIGN] Confirm button pressed');
+          try {
+            await confirmState?.onConfirm?.();
+          } finally {
+            setConfirmVisible(false);
+          }
+        }}
+        testID="campaign-confirm-dialog"
+      />
     </View>
   );
 }
