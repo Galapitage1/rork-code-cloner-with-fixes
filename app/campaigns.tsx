@@ -95,7 +95,9 @@ export default function CampaignsScreen() {
 
   const saveCampaignSettings = async () => {
     try {
+      console.log('[CAMPAIGNS] Saving campaign settings...');
       const settings = {
+        id: 'campaign_settings',
         smtpHost,
         smtpPort,
         smtpUsername,
@@ -106,11 +108,22 @@ export default function CampaignsScreen() {
         imapPassword,
         smsApiUrl,
         smsApiKey,
+        updatedAt: Date.now(),
       };
+      
+      console.log('[CAMPAIGNS] Settings to save:', { 
+        hasSmtp: !!smtpHost, 
+        hasImap: !!imapHost,
+        smtpPort,
+        imapPort 
+      });
+      
       await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
+      console.log('[CAMPAIGNS] Settings saved to AsyncStorage');
+      
       Alert.alert('Success', 'Email settings saved successfully');
     } catch (error) {
-      console.error('Failed to save campaign settings:', error);
+      console.error('[CAMPAIGNS] Failed to save campaign settings:', error);
       Alert.alert('Error', 'Failed to save settings');
     }
   };
@@ -280,6 +293,9 @@ export default function CampaignsScreen() {
     }
 
     console.log('[EMAIL CAMPAIGN] Opening confirm dialog...');
+    console.log('[EMAIL CAMPAIGN] confirmVisible before:', confirmVisible);
+    console.log('[EMAIL CAMPAIGN] Setting confirmState and visible...');
+    
     setConfirmState({
       title: 'Send Email Campaign',
       message: `Send ${selectedCustomers.length} email(s) via SMTP?`,
@@ -382,8 +398,12 @@ export default function CampaignsScreen() {
         }
       },
     });
-    setConfirmVisible(true);
-    console.log('[EMAIL CAMPAIGN] Confirm dialog should be visible');
+    
+    setTimeout(() => {
+      console.log('[EMAIL CAMPAIGN] Setting confirmVisible to true...');
+      setConfirmVisible(true);
+      console.log('[EMAIL CAMPAIGN] confirmVisible set to:', true);
+    }, 100);
   };
 
   const sendSMSCampaign = async () => {
@@ -489,8 +509,10 @@ export default function CampaignsScreen() {
     );
   }
 
-  console.log('Campaigns render - isPageLoading:', isPageLoading, 'customers:', customers.length);
-  console.log('Campaign colors:', Colors.light.background, Colors.light.text, Colors.light.tint);
+  console.log('[CAMPAIGNS] Render - isPageLoading:', isPageLoading, 'customers:', customers.length);
+  console.log('[CAMPAIGNS] confirmVisible:', confirmVisible, 'confirmState:', !!confirmState);
+  console.log('[CAMPAIGNS] SMTP configured:', { host: !!smtpHost, user: !!smtpUsername, pass: !!smtpPassword });
+  console.log('[CAMPAIGNS] IMAP configured:', { host: !!imapHost, user: !!imapUsername, pass: !!imapPassword });
   
   return (
     <View style={styles.container}>
