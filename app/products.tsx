@@ -526,7 +526,19 @@ export default function ProductsScreen() {
         testID: 'confirm-remove-duplicates',
         onConfirm: async () => {
           try {
-            console.log('[RemoveDuplicates] Starting duplicate removal process...');
+            console.log('[RemoveDuplicates] ========== STEP 1: SYNC TO SERVER FIRST ==========');
+            console.log('[RemoveDuplicates] Syncing existing data to server before making changes...');
+            
+            try {
+              await syncAll(false);
+              console.log('[RemoveDuplicates] ✓ Initial sync completed - server has current state');
+            } catch (syncError) {
+              console.error('[RemoveDuplicates] Initial sync failed:', syncError);
+              Alert.alert('Sync Error', 'Failed to sync with server before removing duplicates. Please check your connection and try again.');
+              return;
+            }
+            
+            console.log('[RemoveDuplicates] ========== STEP 2: IDENTIFY AND DELETE DUPLICATES ==========');
             let removedCount = 0;
             let skippedCount = 0;
             let errorCount = 0;
@@ -557,7 +569,7 @@ export default function ProductsScreen() {
                 }
                 
                 try {
-                  console.log(`[RemoveDuplicates] Deleting product ${product.id} (${product.name})`);
+                  console.log(`[RemoveDuplicates] Marking product ${product.id} (${product.name}) as deleted`);
                   await deleteProduct(product.id);
                   removedCount++;
                   
@@ -571,18 +583,24 @@ export default function ProductsScreen() {
               }
             }
             
-            console.log(`[RemoveDuplicates] Completed - removed: ${removedCount}, skipped: ${skippedCount}, errors: ${errorCount}`);
-            console.log('[RemoveDuplicates] Triggering immediate sync to propagate deletions...');
+            console.log(`[RemoveDuplicates] ========== STEP 3: SYNC DELETIONS TO SERVER ==========`);
+            console.log(`[RemoveDuplicates] Local changes - removed: ${removedCount}, skipped: ${skippedCount}, errors: ${errorCount}`);
+            console.log('[RemoveDuplicates] Syncing deletions to server (this ensures they are marked as deleted on server)...');
             
             try {
               await syncAll(false);
-              console.log('[RemoveDuplicates] Sync completed successfully - deletions propagated to server');
+              console.log('[RemoveDuplicates] ✓ Deletions synced to server successfully');
+              console.log('[RemoveDuplicates] ========== DUPLICATE REMOVAL COMPLETE ==========');
             } catch (syncError) {
-              console.error('[RemoveDuplicates] Sync failed:', syncError);
-              console.warn('[RemoveDuplicates] Deletions saved locally but may reappear until next successful sync');
+              console.error('[RemoveDuplicates] Failed to sync deletions to server:', syncError);
+              Alert.alert(
+                'Partial Success',
+                `Deleted ${removedCount} duplicate(s) locally, but failed to sync to server. They may reappear on next sync. Please check your connection and run the duplicate removal again.`
+              );
+              return;
             }
             
-            let resultMessage = `Removed ${removedCount} duplicate product(s).`;
+            let resultMessage = `Removed ${removedCount} duplicate product(s) from both local storage and server.`;
             if (skippedCount > 0) {
               resultMessage += `\n\nSkipped ${skippedCount} duplicate(s) that are connected to recipes or orders.`;
               if (skippedProducts.length > 0) {
