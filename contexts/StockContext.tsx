@@ -894,7 +894,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     console.log('handleReplaceAllInventory: Processing replace all inventory');
     console.log('handleReplaceAllInventory: Outlet:', outlet.name, 'Type:', outlet.outletType);
     console.log('handleReplaceAllInventory: Stock check counts:', stockCheck.counts.length);
-    console.log('handleReplaceAllInventory: This will REPLACE ALL inventory for this outlet and date in live inventory');
+    console.log('handleReplaceAllInventory: This will REPLACE ALL inventory for this outlet');
     console.log('handleReplaceAllInventory: Including setting products to 0 if not in stock check');
     console.log('handleReplaceAllInventory: Will also CREATE inventory entries for products that don\'t exist yet');
     
@@ -903,12 +903,18 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     // CRITICAL: Get all sales outlets for initialization
     const salesOutlets = outlets.filter(o => o.outletType === 'sales');
     
-    // Create a map of all current stock values from the stock check
+    // Create a map of all current stock values from the stock check (use Current Stock Auto-calculated)
     const stockCheckQuantities = new Map<string, number>();
     stockCheck.counts.forEach(count => {
-      stockCheckQuantities.set(count.productId, count.quantity || 0);
+      // CRITICAL: Use Current Stock (Auto-calculated) = Opening + Received - Wastage
+      const opening = count.openingStock || 0;
+      const received = count.receivedStock || 0;
+      const wastage = count.wastage || 0;
+      const currentStock = opening + received - wastage;
+      
+      stockCheckQuantities.set(count.productId, currentStock);
       const product = products.find(p => p.id === count.productId);
-      console.log('Stock check entry:', product?.name, '=', count.quantity);
+      console.log('Stock check entry:', product?.name, 'opening:', opening, 'received:', received, 'wastage:', wastage, 'Current Stock:', currentStock);
     });
     
     if (outlet.outletType === 'production') {
