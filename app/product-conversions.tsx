@@ -7,10 +7,13 @@ import { Plus, Edit2, Trash2, X, ArrowLeft, Download, Upload, Search } from 'luc
 import Colors from '@/constants/colors';
 import { ProductConversion } from '@/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import * as XLSX from 'xlsx';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 export default function ProductConversionsScreen() {
   const router = useRouter();
-  const { currentUser, isAdmin, isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
   const { products, productConversions, addProductConversion, updateProductConversion, deleteProductConversion, clearAllProductConversions } = useStock();
   const [showConversionModal, setShowConversionModal] = useState<boolean>(false);
   const [editingConversion, setEditingConversion] = useState<ProductConversion | null>(null);
@@ -145,7 +148,7 @@ export default function ProductConversionsScreen() {
         Alert.alert('Success', 'Product conversion added successfully.');
         resetConversionForm();
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to save product conversion.');
     }
   };
@@ -200,7 +203,7 @@ export default function ProductConversionsScreen() {
     });
   };
 
-  const handleExportConversions = () => {
+  const handleExportConversionsJSON = () => {
     if (productConversions.length === 0) {
       Alert.alert('No Data', 'There are no product conversions to export.');
       return;
@@ -233,10 +236,83 @@ export default function ProductConversionsScreen() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    Alert.alert('Success', `Exported ${productConversions.length} product conversions.`);
+    Alert.alert('Success', `Exported ${productConversions.length} product conversions to JSON.`);
   };
 
-  const handleImportConversions = () => {
+  const handleExportConversionsExcel = async () => {
+    if (productConversions.length === 0) {
+      Alert.alert('No Data', 'There are no product conversions to export.');
+      return;
+    }
+
+    try {
+      const exportData = productConversions.map(conversion => ({
+        'From Product Name': products.find(p => p.id === conversion.fromProductId)?.name || 'Unknown',
+        'From Product Unit': products.find(p => p.id === conversion.fromProductId)?.unit || 'Unknown',
+        'Conversion Factor': conversion.conversionFactor,
+        'To Product Name': products.find(p => p.id === conversion.toProductId)?.name || 'Unknown',
+        'To Product Unit': products.find(p => p.id === conversion.toProductId)?.unit || 'Unknown',
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      XLSX.utils.book_append_sheet(wb, ws, 'Product Conversions');
+      const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+      
+      const fileName = `product-conversions-${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      if (Platform.OS === 'web') {
+        const blob = base64ToBlob(wbout, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 100);
+        Alert.alert('Success', `Exported ${productConversions.length} product conversions to Excel.`);
+      } else {
+        if (!(FileSystem as any).documentDirectory) {
+          throw new Error('Document directory not available');
+        }
+        
+        const fileUri = `${(FileSystem as any).documentDirectory}${fileName}`;
+        await (FileSystem as any).writeAsStringAsync(fileUri, wbout, {
+          encoding: 'base64',
+        });
+        
+        const canShare = await Sharing.isAvailableAsync();
+        if (!canShare) {
+          throw new Error('Sharing is not available on this device');
+        }
+        
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          dialogTitle: 'Save Product Conversions',
+          UTI: 'com.microsoft.excel.xlsx',
+        });
+      }
+    } catch (error) {
+      console.error('Export error:', error);
+      Alert.alert('Error', 'Failed to export to Excel. Please try again.');
+    }
+  };
+
+  const base64ToBlob = (base64: string, mimeType: string): Blob => {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new Blob([byteArray], { type: mimeType });
+  };
+
+  const handleImportConversionsJSON = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -256,6 +332,8 @@ export default function ProductConversionsScreen() {
         let imported = 0;
         let skipped = 0;
         let errors = 0;
+
+        const conversionsToAdd: ProductConversion[] = [];
 
         for (const conversionData of data.conversions) {
           try {
@@ -291,12 +369,16 @@ export default function ProductConversionsScreen() {
               createdAt: Date.now(),
             };
 
-            await addProductConversion(newConversion);
+            conversionsToAdd.push(newConversion);
             imported++;
           } catch (error) {
             console.error('Error importing conversion:', error);
             errors++;
           }
+        }
+
+        for (const conversion of conversionsToAdd) {
+          await addProductConversion(conversion);
         }
 
         let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
@@ -310,6 +392,141 @@ export default function ProductConversionsScreen() {
       }
     };
     input.click();
+  };
+
+  const handleImportConversionsExcel = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls';
+    input.onchange = async (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      try {
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const data = event.target?.result;
+            if (!data) {
+              Alert.alert('Error', 'Failed to read file.');
+              return;
+            }
+
+            const workbook = XLSX.read(data, { type: 'binary' });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
+
+            if (jsonData.length === 0) {
+              Alert.alert('Error', 'No data found in the Excel file.');
+              return;
+            }
+
+            let imported = 0;
+            let skipped = 0;
+            let errors = 0;
+
+            const conversionsToAdd: ProductConversion[] = [];
+
+            for (const row of jsonData) {
+              try {
+                const fromProductName = row['From Product Name'];
+                const fromProductUnit = row['From Product Unit'];
+                const toProductName = row['To Product Name'];
+                const toProductUnit = row['To Product Unit'];
+                const conversionFactor = row['Conversion Factor'];
+
+                if (!fromProductName || !fromProductUnit || !toProductName || !toProductUnit || !conversionFactor) {
+                  skipped++;
+                  console.log('Skipped row - missing required fields:', row);
+                  continue;
+                }
+
+                const fromProduct = products.find(p => 
+                  p.name.toLowerCase().trim() === fromProductName.toLowerCase().trim() && 
+                  p.unit.toLowerCase().trim() === fromProductUnit.toLowerCase().trim()
+                );
+                const toProduct = products.find(p => 
+                  p.name.toLowerCase().trim() === toProductName.toLowerCase().trim() && 
+                  p.unit.toLowerCase().trim() === toProductUnit.toLowerCase().trim()
+                );
+
+                if (!fromProduct || !toProduct) {
+                  skipped++;
+                  console.log('Skipped conversion - products not found:', row);
+                  continue;
+                }
+
+                const existingConversion = productConversions.find(c => 
+                  c.fromProductId === fromProduct.id && c.toProductId === toProduct.id
+                );
+
+                if (existingConversion) {
+                  skipped++;
+                  continue;
+                }
+
+                const newConversion: ProductConversion = {
+                  id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                  fromProductId: fromProduct.id,
+                  toProductId: toProduct.id,
+                  conversionFactor: parseFloat(conversionFactor),
+                  createdAt: Date.now(),
+                };
+
+                conversionsToAdd.push(newConversion);
+                imported++;
+              } catch (error) {
+                console.error('Error importing conversion:', error);
+                errors++;
+              }
+            }
+
+            for (const conversion of conversionsToAdd) {
+              await addProductConversion(conversion);
+            }
+
+            let message = `Import complete:\n• Imported: ${imported}\n• Skipped: ${skipped}`;
+            if (errors > 0) {
+              message += `\n• Errors: ${errors}`;
+            }
+            Alert.alert('Import Complete', message);
+          } catch (error) {
+            console.error('Error parsing Excel:', error);
+            Alert.alert('Error', 'Failed to parse Excel file. Please check the file format.');
+          }
+        };
+        reader.readAsBinaryString(file);
+      } catch (error) {
+        console.error('Error importing conversions:', error);
+        Alert.alert('Error', 'Failed to import product conversions. Please try again.');
+      }
+    };
+    input.click();
+  };
+
+  const handleExportConversions = () => {
+    Alert.alert(
+      'Export Format',
+      'Choose export format:',
+      [
+        { text: 'JSON', onPress: handleExportConversionsJSON },
+        { text: 'Excel', onPress: handleExportConversionsExcel },
+        { text: 'Cancel', style: 'cancel' as const }
+      ]
+    );
+  };
+
+  const handleImportConversions = () => {
+    Alert.alert(
+      'Import Format',
+      'Choose import format:',
+      [
+        { text: 'JSON', onPress: handleImportConversionsJSON },
+        { text: 'Excel', onPress: handleImportConversionsExcel },
+        { text: 'Cancel', style: 'cancel' as const }
+      ]
+    );
   };
 
   return (
