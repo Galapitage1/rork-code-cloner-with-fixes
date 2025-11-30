@@ -456,6 +456,108 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     }
   }, [loadFromAsyncStorage]);
 
+  const removeDuplicateStoreProducts = useCallback(async () => {
+    console.log('[StoresContext] ========================================');
+    console.log('[StoresContext] removeDuplicateStoreProducts: Starting...');
+    
+    try {
+      console.log('[StoresContext] STEP 1: Reading fresh data from AsyncStorage...');
+      const storedData = await AsyncStorage.getItem(STORAGE_KEYS.STORE_PRODUCTS);
+      const freshStoreProducts: StoreProduct[] = storedData ? JSON.parse(storedData) : [];
+      console.log('[StoresContext] Total products in storage:', freshStoreProducts.length);
+      
+      const activeProducts = freshStoreProducts.filter(p => !p.deleted);
+      console.log('[StoresContext] Active products (not deleted):', activeProducts.length);
+      
+      console.log('[StoresContext] STEP 2: Identifying duplicates by name + unit...');
+      const seen = new Map<string, StoreProduct>();
+      const duplicates: string[] = [];
+      
+      activeProducts.forEach(product => {
+        const key = `${product.name.toLowerCase().trim()}_${product.unit.toLowerCase().trim()}`;
+        const existing = seen.get(key);
+        
+        if (existing) {
+          console.log(`[StoresContext] Found duplicate: "${product.name}" (${product.unit})`);
+          console.log(`[StoresContext]   - Existing ID: ${existing.id}, timestamp: ${existing.updatedAt || existing.createdAt}`);
+          console.log(`[StoresContext]   - Duplicate ID: ${product.id}, timestamp: ${product.updatedAt || product.createdAt}`);
+          
+          const existingTime = existing.updatedAt || existing.createdAt || 0;
+          const productTime = product.updatedAt || product.createdAt || 0;
+          
+          if (productTime > existingTime) {
+            console.log(`[StoresContext]   - Keeping newer product (${product.id}), marking older as duplicate`);
+            duplicates.push(existing.id);
+            seen.set(key, product);
+          } else {
+            console.log(`[StoresContext]   - Keeping older product (${existing.id}), marking newer as duplicate`);
+            duplicates.push(product.id);
+          }
+        } else {
+          seen.set(key, product);
+        }
+      });
+      
+      console.log('[StoresContext] Total duplicates found:', duplicates.length);
+      
+      if (duplicates.length === 0) {
+        console.log('[StoresContext] No duplicates to remove');
+        console.log('[StoresContext] ========================================');
+        return {
+          duplicatesRemoved: 0,
+          remainingCount: activeProducts.length,
+        };
+      }
+      
+      console.log('[StoresContext] STEP 3: Marking duplicates as deleted...');
+      const now = Date.now();
+      const updatedProducts = freshStoreProducts.map(p => {
+        if (duplicates.includes(p.id)) {
+          console.log(`[StoresContext] Marking as deleted: "${p.name}" (${p.unit}) - ID: ${p.id}`);
+          return { ...p, deleted: true as const, updatedAt: now };
+        }
+        return p;
+      });
+      
+      console.log('[StoresContext] STEP 4: Saving to AsyncStorage...');
+      await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(updatedProducts));
+      console.log('[StoresContext] ✓ Saved to AsyncStorage');
+      
+      console.log('[StoresContext] STEP 5: Updating local state...');
+      const remainingActive = updatedProducts.filter(p => !p.deleted);
+      setStoreProducts(remainingActive);
+      console.log('[StoresContext] ✓ Updated state with', remainingActive.length, 'active products');
+      
+      console.log('[StoresContext] STEP 6: Syncing to server...');
+      if (currentUser?.id) {
+        try {
+          const synced = await syncData('storeProducts', updatedProducts, currentUser.id, { 
+            isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
+          });
+          await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(synced));
+          const syncedActive = (synced as any[]).filter(p => !p?.deleted);
+          setStoreProducts(syncedActive);
+          console.log('[StoresContext] ✓ Synced to server, final count:', syncedActive.length);
+        } catch (syncError) {
+          console.log('[StoresContext] Sync failed (will retry on next auto-sync):', syncError);
+        }
+      }
+      
+      console.log('[StoresContext] ✓✓✓ Duplicate removal complete');
+      console.log('[StoresContext] ========================================');
+      
+      return {
+        duplicatesRemoved: duplicates.length,
+        remainingCount: remainingActive.length,
+      };
+    } catch (error) {
+      console.error('[StoresContext] ========================================');
+      console.error('[StoresContext] ❌ CRITICAL ERROR during duplicate removal:', error);
+      console.error('[StoresContext] ========================================');
+      throw error;
+    }
+  }, [currentUser]);
+
   return useMemo(() => ({
     storeProducts,
     suppliers,
@@ -478,6 +580,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     setUser,
     getLowStockStoreProducts,
     reloadFromStorage,
+    removeDuplicateStoreProducts,
   }), [
     storeProducts,
     suppliers,
@@ -500,5 +603,6 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     setUser,
     getLowStockStoreProducts,
     reloadFromStorage,
+    removeDuplicateStoreProducts,
   ]);
 });

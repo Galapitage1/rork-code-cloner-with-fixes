@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Modal, ScrollView, Alert, Platform } from 'react-native';
-import { Plus, Search, X, Download, Upload, Trash2 } from 'lucide-react-native';
+import { Plus, Search, X, Download, Upload, Trash2, GitMerge } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -12,7 +12,7 @@ import { StoreProduct, Supplier } from '@/types';
 import { exportStoreProductsToExcel, parseStoreProductsExcel } from '@/utils/storesExporter';
 
 export default function StoresScreen() {
-  const { storeProducts, addStoreProduct, updateStoreProduct, deleteStoreProduct, importStoreProducts, grns, suppliers } = useStores();
+  const { storeProducts, addStoreProduct, updateStoreProduct, deleteStoreProduct, importStoreProducts, grns, suppliers, removeDuplicateStoreProducts } = useStores();
   const { isSuperAdmin, currency } = useAuth();
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -206,6 +206,31 @@ export default function StoresScreen() {
       Alert.alert('Export Failed', error instanceof Error ? error.message : 'Failed to export store products');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleRemoveDuplicates = async () => {
+    if (!isSuperAdmin) {
+      Alert.alert('Permission Denied', 'Only Super Admin can remove duplicates');
+      return;
+    }
+
+    try {
+      console.log('[StoresScreen] Starting duplicate removal...');
+      const result = await removeDuplicateStoreProducts();
+      console.log('[StoresScreen] Duplicate removal complete:', result);
+      
+      if (result.duplicatesRemoved === 0) {
+        Alert.alert('No Duplicates', 'No duplicate store products found.');
+      } else {
+        Alert.alert(
+          'Duplicates Removed',
+          `Successfully removed ${result.duplicatesRemoved} duplicate store product(s).\n\nRemaining products: ${result.remainingCount}`
+        );
+      }
+    } catch (error) {
+      console.error('[StoresScreen] Remove duplicates error:', error);
+      Alert.alert('Error', 'Failed to remove duplicates');
     }
   };
 
@@ -411,6 +436,13 @@ export default function StoresScreen() {
         <View style={styles.actions}>
           {isSuperAdmin && (
             <>
+              <TouchableOpacity 
+                style={styles.actionButton} 
+                onPress={handleRemoveDuplicates}
+                disabled={isExporting || isImporting}
+              >
+                <GitMerge size={20} color={Colors.light.tint} />
+              </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.actionButton} 
                 onPress={handleExport}
