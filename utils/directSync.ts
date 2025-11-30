@@ -241,6 +241,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   }
   const merged = new Map<string, T>();
   const seenIds = new Set<string>();
+  const seenNames = new Set<string>(); // Track names to prevent duplicates with different IDs
   
   // CRITICAL: Normalize timestamps - treat missing/zero as oldest (epoch 0)
   const normalizeTimestamp = (ts?: number): number => {
@@ -259,6 +260,12 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
       return;
     }
     seenIds.add(item.id);
+    
+    // Track names for duplicate detection (outlets by name, etc.)
+    const itemName = (item as any).name;
+    if (itemName) {
+      seenNames.add(itemName.toLowerCase().trim());
+    }
     
     // Ensure all items have timestamps
     const normalized = { ...item, updatedAt: normalizeTimestamp(item.updatedAt) };
@@ -280,8 +287,23 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   let deletionWins = 0;
   let staleDataBlocked = 0;
   let deletionResurrectionBlocked = 0;
+  let duplicatesByNameBlocked = 0;
   
   remote.forEach(item => {
+    // CRITICAL: Check for duplicate names (e.g., outlets with same name but different IDs)
+    const itemName = (item as any).name;
+    if (itemName) {
+      const normalizedName = itemName.toLowerCase().trim();
+      if (seenNames.has(normalizedName) && !seenIds.has(item.id)) {
+        // This is a duplicate by name but different ID - block it
+        console.log('[mergeData] ⛔ BLOCKING DUPLICATE by name:', itemName, 'ID:', item.id);
+        console.log('[mergeData]   → Already have this name in local data, preventing duplicate sync');
+        duplicatesByNameBlocked++;
+        return;
+      }
+      seenNames.add(normalizedName);
+    }
+    
     // Prevent duplicate IDs in remote data
     if (!seenIds.has(item.id)) {
       seenIds.add(item.id);
@@ -302,20 +324,24 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     const remoteTime = normalizeTimestamp(item.updatedAt);
     const localTime = normalizeTimestamp(existing?.updatedAt);
     
-    // CRITICAL: If this is a protected ID, check permanent protection rules
+    // CRITICAL: If this is a protected ID, enforce strict permanent protection rules
     if (options?.protectedIds?.includes(item.id)) {
-      // Protected items can only be updated if local explicitly allows it
-      // Remote changes to protected items are BLOCKED
-      if (existing?.deleted) {
-        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Blocked resurrection of protected deleted item:', item.id);
-        return; // Keep local deleted state, ignore remote
-      } else if (localTime > remoteTime) {
-        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Local version is newer for protected item:', item.id);
-        return; // Keep local version
-      }
-      // If remote is newer but item is protected, still block it unless it's a deletion
-      if (!item.deleted) {
-        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Blocked remote update to protected item:', item.id);
+      // Protected items are LOCKED - remote changes are completely blocked
+      console.log('[mergeData] 🔒 PERMANENT PROTECTION - Remote changes blocked for protected item:', item.id);
+      console.log('[mergeData]   → Local state is authoritative for protected items');
+      return; // Always keep local version for protected items
+    }
+    
+    // CRITICAL: If permanent protection is enabled (we have protected IDs)
+    // Block ALL remote items that are not already in local
+    // This prevents resurrection of deleted outlets during sync
+    if (options?.protectedIds && options.protectedIds.length > 0) {
+      if (!existing && !item.deleted) {
+        // This is a NEW item from remote, but we have permanent protection enabled
+        // Only allow it if it's explicitly NOT a protected type (check by checking if it could be protected)
+        // For outlets: if permanent protection is active, block new outlets from remote
+        console.log('[mergeData] 🔒 PERMANENT PROTECTION ACTIVE - Blocking new item from remote:', item.id);
+        console.log('[mergeData]   → Permanent protection prevents new items during sync');
         return;
       }
     }
@@ -412,6 +438,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData]   Deletion wins:', deletionWins);
   console.log('[mergeData]   Stale data blocked:', staleDataBlocked, '← prevented stale data');
   console.log('[mergeData]   Deletion resurrection blocked:', deletionResurrectionBlocked, '← prevented deleted items from coming back');
+  console.log('[mergeData]   Duplicates by name blocked:', duplicatesByNameBlocked, '← prevented duplicates with different IDs');
   console.log('[mergeData]   Total merged items:', merged.size);
   
   const result = Array.from(merged.values());
