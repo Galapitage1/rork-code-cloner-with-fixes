@@ -1,4 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Image, Switch } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, Stack } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStock } from '@/contexts/StockContext';
@@ -9,7 +10,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
-import { Plus, Edit2, Trash2, X, ArrowLeft, Download, Upload, Search, Package, Camera, ImageIcon as ImageI } from 'lucide-react-native';
+import { Plus, Edit2, Trash2, X, ArrowLeft, Download, Upload, Package, Camera, ImageIcon as ImageI } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { Product, ProductType } from '@/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -18,8 +19,8 @@ import * as XLSX from 'xlsx';
 
 export default function ProductsScreen() {
   const router = useRouter();
-  const { currentUser, isAdmin, isSuperAdmin, currency } = useAuth();
-  const { products, addProduct, updateProduct, deleteProduct, clearAllProducts, showProductList, toggleShowProductList, syncAll } = useStock();
+  const { isAdmin, isSuperAdmin, currency } = useAuth();
+  const { products, addProduct, updateProduct, deleteProduct, showProductList, toggleShowProductList, syncAll } = useStock();
   const { recipes } = useRecipes();
   const { orders } = useOrders();
   
@@ -517,7 +518,7 @@ export default function ProductsScreen() {
         message += `\n...and ${duplicateEntries.length - displayLimit} more duplicates\n`;
       }
       
-      message += '\nThe oldest entries will be kept. Duplicates connected to recipes/orders will be preserved.\n\nThis may take a moment for large datasets.';
+      message += '\nThe oldest entries will be kept. Duplicates connected to recipes/orders will be preserved.';
       
       openConfirm({
         title: 'Remove Duplicates',
@@ -526,25 +527,15 @@ export default function ProductsScreen() {
         testID: 'confirm-remove-duplicates',
         onConfirm: async () => {
           try {
-            console.log('[RemoveDuplicates] ========== STEP 1: SYNC TO SERVER FIRST ==========');
-            console.log('[RemoveDuplicates] Syncing existing data to server before making changes...');
+            console.log('[RemoveDuplicates] Starting duplicate removal process...');
+            console.log('[RemoveDuplicates] Total duplicates to process:', duplicateEntries.length);
             
-            try {
-              await syncAll(false);
-              console.log('[RemoveDuplicates] ✓ Initial sync completed - server has current state');
-            } catch (syncError) {
-              console.error('[RemoveDuplicates] Initial sync failed:', syncError);
-              Alert.alert('Sync Error', 'Failed to sync with server before removing duplicates. Please check your connection and try again.');
-              return;
-            }
-            
-            console.log('[RemoveDuplicates] ========== STEP 2: IDENTIFY AND DELETE DUPLICATES ==========');
             let removedCount = 0;
             let skippedCount = 0;
-            let errorCount = 0;
             const skippedProducts: string[] = [];
+            const idsToDelete: string[] = [];
             
-            for (const [key, items] of duplicateEntries) {
+            for (const [, items] of duplicateEntries) {
               const sortedByTimestamp = items.sort((a, b) => {
                 const timeA = a.updatedAt || 0;
                 const timeB = b.updatedAt || 0;
@@ -554,7 +545,7 @@ export default function ProductsScreen() {
               const toKeep = sortedByTimestamp[0];
               const toRemove = sortedByTimestamp.slice(1);
               
-              console.log(`[RemoveDuplicates] Processing "${items[0].name}" - keeping oldest (${toKeep.id}), removing ${toRemove.length} duplicates`);
+              console.log(`[RemoveDuplicates] "${items[0].name}" - keeping oldest (${toKeep.id}), checking ${toRemove.length} duplicates`);
               
               for (const product of toRemove) {
                 const deps = checkProductDependencies(product.id);
@@ -568,39 +559,40 @@ export default function ProductsScreen() {
                   continue;
                 }
                 
-                try {
-                  console.log(`[RemoveDuplicates] Marking product ${product.id} (${product.name}) as deleted`);
-                  await deleteProduct(product.id);
-                  removedCount++;
-                  
-                  if (removedCount % 5 === 0) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                  }
-                } catch (err) {
-                  console.error(`[RemoveDuplicates] Failed to delete product ${product.id}:`, err);
-                  errorCount++;
-                }
+                idsToDelete.push(product.id);
               }
             }
             
-            console.log(`[RemoveDuplicates] ========== STEP 3: SYNC DELETIONS TO SERVER ==========`);
-            console.log(`[RemoveDuplicates] Local changes - removed: ${removedCount}, skipped: ${skippedCount}, errors: ${errorCount}`);
-            console.log('[RemoveDuplicates] Syncing deletions to server (this ensures they are marked as deleted on server)...');
+            if (idsToDelete.length === 0) {
+              Alert.alert('No Changes', 'All duplicates are connected to recipes or orders and cannot be removed.');
+              return;
+            }
+            
+            console.log(`[RemoveDuplicates] Removing ${idsToDelete.length} duplicates in one batch...`);
+            
+            const updatedProducts = products.map(p => 
+              idsToDelete.includes(p.id) ? { ...p, deleted: true as const, updatedAt: Date.now() } : p
+            );
+            
+            await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedProducts));
+            removedCount = idsToDelete.length;
+            
+            console.log('[RemoveDuplicates] Waiting for sync...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
             
             try {
               await syncAll(false);
-              console.log('[RemoveDuplicates] ✓ Deletions synced to server successfully');
-              console.log('[RemoveDuplicates] ========== DUPLICATE REMOVAL COMPLETE ==========');
+              console.log('[RemoveDuplicates] Sync completed');
             } catch (syncError) {
-              console.error('[RemoveDuplicates] Failed to sync deletions to server:', syncError);
+              console.error('[RemoveDuplicates] Sync failed:', syncError);
               Alert.alert(
-                'Partial Success',
-                `Deleted ${removedCount} duplicate(s) locally, but failed to sync to server. They may reappear on next sync. Please check your connection and run the duplicate removal again.`
+                'Warning',
+                `Deleted ${removedCount} duplicate(s) locally. If they reappear, please check your internet connection and try again.`
               );
               return;
             }
             
-            let resultMessage = `Removed ${removedCount} duplicate product(s) from both local storage and server.`;
+            let resultMessage = `Removed ${removedCount} duplicate product(s).`;
             if (skippedCount > 0) {
               resultMessage += `\n\nSkipped ${skippedCount} duplicate(s) that are connected to recipes or orders.`;
               if (skippedProducts.length > 0) {
@@ -613,14 +605,8 @@ export default function ProductsScreen() {
                 }
               }
             }
-            if (errorCount > 0) {
-              resultMessage += `\n\n${errorCount} product(s) failed to delete.`;
-            }
             
-            Alert.alert(
-              removedCount > 0 ? 'Success' : 'No Changes', 
-              resultMessage
-            );
+            Alert.alert('Success', resultMessage);
           } catch (error) {
             console.error('[RemoveDuplicates] Error removing duplicates:', error);
             Alert.alert('Error', 'Failed to remove duplicate products.');
