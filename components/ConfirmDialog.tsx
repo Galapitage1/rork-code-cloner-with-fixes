@@ -79,13 +79,17 @@ function ConfirmDialogComponent({
 
 const styles = StyleSheet.create({
   overlay: {
-    flex: 1,
+    position: 'absolute' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.5)',
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     padding: 20,
-    zIndex: 9999,
-    elevation: 9999,
+    zIndex: 999999,
+    elevation: 999999,
   },
   card: {
     width: '100%',
@@ -96,8 +100,12 @@ const styles = StyleSheet.create({
     padding: 18,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    zIndex: 10000,
-    elevation: 10000,
+    zIndex: 1000000,
+    elevation: 1000000,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
   header: {
     flexDirection: 'row' as const,
