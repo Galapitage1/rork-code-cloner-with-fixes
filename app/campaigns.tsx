@@ -305,18 +305,67 @@ export default function CampaignsScreen() {
                   }
 
                   return {
-                    name: att.name,
+                    filename: att.name,
                     content: base64Content,
+                    encoding: 'base64' as const,
                     contentType: att.mimeType,
                   };
                 })
               );
 
+              const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+              const response = await fetch(`${apiUrl}/api/send-email`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  smtpConfig: {
+                    host: smtpHost,
+                    port: smtpPort,
+                    username: smtpUsername,
+                    password: smtpPassword,
+                  },
+                  emailData: {
+                    senderName,
+                    senderEmail,
+                    subject,
+                    message,
+                    htmlContent,
+                    format: emailFormat,
+                    attachments: processedAttachments,
+                  },
+                  recipients: selectedCustomers.map(c => ({
+                    name: c.name,
+                    email: c.email,
+                  })),
+                }),
+              });
+
+              const result = await response.json();
+
+              if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Failed to send emails');
+              }
+
+              const { results } = result;
+              const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
+                results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+              }`;
+
               Alert.alert(
-                'Email Campaign Disabled',
-                'Email campaign functionality has been disabled as tRPC backend was removed. Please contact support if you need this feature.',
+                'Email Campaign Complete',
+                resultMessage,
                 [{ text: 'OK' }]
               );
+
+              if (results.success > 0) {
+                setSubject('');
+                setMessage('');
+                setHtmlContent('');
+                setAttachments([]);
+                setSelectedCustomerIds(new Set());
+              }
 
             } catch (error) {
               console.error('Email campaign error:', error);
