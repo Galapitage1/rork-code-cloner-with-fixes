@@ -140,39 +140,76 @@ export const [StoresProvider, useStores] = createContextHook(() => {
   }, [storeProducts, saveStoreProducts]);
 
   const deleteStoreProduct = useCallback(async (productId: string) => {
-    console.log('[StoresContext] Deleting store product:', productId);
+    console.log('[StoresContext] ========================================');
+    console.log('[StoresContext] deleteStoreProduct: Starting deletion for:', productId);
     
-    // CRITICAL: Read fresh data from AsyncStorage to prevent race conditions
-    console.log('[StoresContext] Reading fresh store products from AsyncStorage...');
-    const storedData = await AsyncStorage.getItem(STORAGE_KEYS.STORE_PRODUCTS);
-    const freshStoreProducts = storedData ? JSON.parse(storedData) : storeProducts;
-    console.log('[StoresContext] Fresh store products count:', freshStoreProducts.length);
-    
-    const updatedProducts = freshStoreProducts.map((p: StoreProduct) =>
-      p.id === productId ? { ...p, deleted: true as const, updatedAt: Date.now() } : p
-    );
-    
-    console.log('[StoresContext] Saving deletion to AsyncStorage...');
-    await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(updatedProducts));
-    console.log('[StoresContext] ✓ Saved to AsyncStorage');
-    
-    // CRITICAL: Sync OUT to server immediately to persist deletion
-    if (currentUser?.id) {
-      console.log('[StoresContext] Syncing deletion to server...');
-      try {
-        const synced = await syncData('storeProducts', updatedProducts, currentUser.id, { 
-          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
-        });
-        await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(synced));
-        setStoreProducts((synced as any[]).filter(p => !p?.deleted));
-        console.log('[StoresContext] ✓ Deletion synced to server');
-      } catch (syncError) {
-        console.error('[StoresContext] Sync failed:', syncError);
-        // Still update local state even if sync fails
+    try {
+      // CRITICAL STEP 1: Read FRESH data from AsyncStorage to prevent race conditions
+      console.log('[StoresContext] STEP 1: Reading fresh store products from AsyncStorage...');
+      const storedData = await AsyncStorage.getItem(STORAGE_KEYS.STORE_PRODUCTS);
+      const freshStoreProducts = storedData ? JSON.parse(storedData) : storeProducts;
+      console.log('[StoresContext] Fresh store products count:', freshStoreProducts.length);
+      
+      const productToDelete = freshStoreProducts.find((p: StoreProduct) => p.id === productId);
+      if (!productToDelete) {
+        console.error('[StoresContext] ERROR: Product not found in storage:', productId);
+        throw new Error('Product not found');
+      }
+      console.log('[StoresContext] Found product to delete:', productToDelete.name, '(', productToDelete.unit, ')');
+      
+      // CRITICAL STEP 2: Mark product as deleted with CURRENT timestamp
+      // This timestamp is crucial for preventing resurrection during sync
+      const now = Date.now();
+      console.log('[StoresContext] STEP 2: Marking product as deleted with timestamp:', now);
+      const updatedProducts = freshStoreProducts.map((p: StoreProduct) =>
+        p.id === productId ? { ...p, deleted: true as const, updatedAt: now } : p
+      );
+      console.log('[StoresContext] Deletion timestamp:', now, '(', new Date(now).toISOString(), ')');
+      
+      // CRITICAL STEP 3: Immediately save to AsyncStorage
+      console.log('[StoresContext] STEP 3: Saving deletion to AsyncStorage...');
+      await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(updatedProducts));
+      console.log('[StoresContext] ✓ Saved to AsyncStorage');
+      
+      // CRITICAL STEP 4: Sync OUT to server immediately BEFORE updating UI
+      // This ensures the server has the deletion timestamp before any other operations
+      if (currentUser?.id) {
+        console.log('[StoresContext] STEP 4: Syncing deletion OUT to server (CRITICAL)...');
+        console.log('[StoresContext] This sync will mark the product as deleted on the server');
+        console.log('[StoresContext] Server will then propagate deletion to all other devices');
+        try {
+          const synced = await syncData('storeProducts', updatedProducts, currentUser.id, { 
+            isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
+          });
+          console.log('[StoresContext] ✓ Server responded with', (synced as any[]).length, 'products');
+          console.log('[StoresContext] ✓ Deletion synced successfully');
+          
+          // Save synced data back to AsyncStorage
+          await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(synced));
+          console.log('[StoresContext] ✓ Synced data saved back to AsyncStorage');
+          
+          // Filter out deleted products for UI
+          const activeProducts = (synced as any[]).filter(p => !p?.deleted);
+          setStoreProducts(activeProducts);
+          console.log('[StoresContext] ✓ UI updated with', activeProducts.length, 'active products');
+        } catch (syncError) {
+          console.error('[StoresContext] ❌ Sync to server failed:', syncError);
+          console.error('[StoresContext] Continuing with local deletion only');
+          // Still update local state even if sync fails
+          setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
+        }
+      } else {
+        console.log('[StoresContext] No user logged in, skipping server sync');
         setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
       }
-    } else {
-      setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
+      
+      console.log('[StoresContext] ✓✓✓ Deletion complete for:', productToDelete.name);
+      console.log('[StoresContext] ========================================');
+    } catch (error) {
+      console.error('[StoresContext] ========================================');
+      console.error('[StoresContext] ❌ CRITICAL ERROR during deletion:', error);
+      console.error('[StoresContext] ========================================');
+      throw error;
     }
   }, [storeProducts, currentUser]);
 
