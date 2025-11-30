@@ -671,9 +671,21 @@ export default function ProductsScreen() {
             
             if (orphanedStoreProducts.length > 0) {
               console.log(`[RemoveDuplicates] Removing ${orphanedStoreProducts.length} orphaned store products...`);
-              for (const storeProduct of orphanedStoreProducts) {
-                await deleteStoreProduct(storeProduct.id);
+              
+              // CRITICAL: Delete all orphaned store products at once and sync
+              const storeIdsToRemove: string[] = [];
+              orphanedStoreProducts.forEach(storeProduct => {
+                storeIdsToRemove.push(storeProduct.id);
+              });
+              
+              console.log(`[RemoveDuplicates] Deleting ${storeIdsToRemove.length} orphaned store products in batch...`);
+              for (const id of storeIdsToRemove) {
+                await deleteStoreProduct(id);
               }
+              
+              console.log(`[RemoveDuplicates] Waiting for store products sync to complete...`);
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
               removedCount += orphanedStoreProducts.length;
             }
             

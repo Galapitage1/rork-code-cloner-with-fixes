@@ -141,11 +141,40 @@ export const [StoresProvider, useStores] = createContextHook(() => {
 
   const deleteStoreProduct = useCallback(async (productId: string) => {
     console.log('[StoresContext] Deleting store product:', productId);
-    const updatedProducts = storeProducts.map(p =>
+    
+    // CRITICAL: Read fresh data from AsyncStorage to prevent race conditions
+    console.log('[StoresContext] Reading fresh store products from AsyncStorage...');
+    const storedData = await AsyncStorage.getItem(STORAGE_KEYS.STORE_PRODUCTS);
+    const freshStoreProducts = storedData ? JSON.parse(storedData) : storeProducts;
+    console.log('[StoresContext] Fresh store products count:', freshStoreProducts.length);
+    
+    const updatedProducts = freshStoreProducts.map((p: StoreProduct) =>
       p.id === productId ? { ...p, deleted: true as const, updatedAt: Date.now() } : p
     );
-    await saveStoreProducts(updatedProducts as any);
-  }, [storeProducts, saveStoreProducts]);
+    
+    console.log('[StoresContext] Saving deletion to AsyncStorage...');
+    await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(updatedProducts));
+    console.log('[StoresContext] ✓ Saved to AsyncStorage');
+    
+    // CRITICAL: Sync OUT to server immediately to persist deletion
+    if (currentUser?.id) {
+      console.log('[StoresContext] Syncing deletion to server...');
+      try {
+        const synced = await syncData('storeProducts', updatedProducts, currentUser.id, { 
+          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
+        });
+        await AsyncStorage.setItem(STORAGE_KEYS.STORE_PRODUCTS, JSON.stringify(synced));
+        setStoreProducts((synced as any[]).filter(p => !p?.deleted));
+        console.log('[StoresContext] ✓ Deletion synced to server');
+      } catch (syncError) {
+        console.error('[StoresContext] Sync failed:', syncError);
+        // Still update local state even if sync fails
+        setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
+      }
+    } else {
+      setStoreProducts(updatedProducts.filter((p: StoreProduct) => !p.deleted));
+    }
+  }, [storeProducts, currentUser]);
 
   const importStoreProducts = useCallback(async (newProducts: Omit<StoreProduct, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
     const existingProductsMap = new Map(
