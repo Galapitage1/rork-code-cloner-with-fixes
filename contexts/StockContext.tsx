@@ -896,6 +896,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     console.log('handleReplaceAllInventory: Stock check counts:', stockCheck.counts.length);
     console.log('handleReplaceAllInventory: This will REPLACE ALL inventory for this outlet and date in live inventory');
     console.log('handleReplaceAllInventory: Including setting products to 0 if not in stock check');
+    console.log('handleReplaceAllInventory: Will also CREATE inventory entries for products that don\'t exist yet');
     
     let updatedInventoryStocks = [...currentInventoryStocks];
     
@@ -909,6 +910,34 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     
     if (outlet.outletType === 'production') {
       console.log('handleReplaceAllInventory: Replacing PRODUCTION inventory');
+      
+      // First, create inventory entries for products with conversions that don't exist yet
+      console.log('handleReplaceAllInventory: Checking for missing inventory entries...');
+      const existingInventoryProductIds = new Set(updatedInventoryStocks.map(inv => inv.productId));
+      
+      stockCheck.counts.forEach(count => {
+        const productPair = getProductPairForInventory(count.productId);
+        if (productPair) {
+          const wholeProductId = productPair.wholeProductId;
+          if (!existingInventoryProductIds.has(wholeProductId)) {
+            const wholeProduct = products.find(p => p.id === wholeProductId);
+            console.log('handleReplaceAllInventory: Creating NEW inventory entry for', wholeProduct?.name, '(product was not in inventory)');
+            
+            const salesOutlets = outlets.filter(o => o.outletType === 'sales');
+            const newInv: InventoryStock = {
+              id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              productId: wholeProductId,
+              productionWhole: 0,
+              productionSlices: 0,
+              outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+              updatedAt: Date.now(),
+            };
+            updatedInventoryStocks.push(newInv);
+            existingInventoryProductIds.add(wholeProductId);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry for', wholeProduct?.name);
+          }
+        }
+      });
       
       // Process ALL products with conversions in inventory
       for (const invStock of updatedInventoryStocks) {
@@ -971,6 +1000,32 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       productConversions.forEach(conv => {
         productsWithConversions.add(conv.fromProductId);
         productsWithConversions.add(conv.toProductId);
+      });
+      
+      // Create inventory entries for products WITHOUT conversions that don't exist yet
+      stockCheck.counts.forEach(count => {
+        if (!productsWithConversions.has(count.productId)) {
+          const product = products.find(p => p.id === count.productId);
+          const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
+          
+          if (invIndex === -1) {
+            // Product doesn't exist in inventory - CREATE IT
+            const qty = count.quantity || 0;
+            console.log('handleReplaceAllInventory: Creating NEW inventory entry for', product?.name, '(no conversion, not in inventory) with qty:', qty);
+            
+            const salesOutlets = outlets.filter(o => o.outletType === 'sales');
+            const newInv: InventoryStock = {
+              id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              productId: count.productId,
+              productionWhole: qty,
+              productionSlices: 0,
+              outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+              updatedAt: Date.now(),
+            };
+            updatedInventoryStocks.push(newInv);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry for', product?.name);
+          }
+        }
       });
       
       // Get all products from stock check that don't have conversions
@@ -1060,6 +1115,34 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       console.log('handleReplaceAllInventory: Finished setting missing products to 0');
     } else if (outlet.outletType === 'sales') {
       console.log('handleReplaceAllInventory: Replacing SALES outlet inventory for:', outlet.name);
+      
+      // Create inventory entries for products with conversions that don't exist yet
+      console.log('handleReplaceAllInventory: Checking for missing inventory entries for sales outlet...');
+      const existingInventoryProductIds = new Set(updatedInventoryStocks.map(inv => inv.productId));
+      
+      stockCheck.counts.forEach(count => {
+        const productPair = getProductPairForInventory(count.productId);
+        if (productPair) {
+          const wholeProductId = productPair.wholeProductId;
+          if (!existingInventoryProductIds.has(wholeProductId)) {
+            const wholeProduct = products.find(p => p.id === wholeProductId);
+            console.log('handleReplaceAllInventory: Creating NEW inventory entry for', wholeProduct?.name, '(product was not in inventory)');
+            
+            const salesOutlets = outlets.filter(o => o.outletType === 'sales');
+            const newInv: InventoryStock = {
+              id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              productId: wholeProductId,
+              productionWhole: 0,
+              productionSlices: 0,
+              outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+              updatedAt: Date.now(),
+            };
+            updatedInventoryStocks.push(newInv);
+            existingInventoryProductIds.add(wholeProductId);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry for', wholeProduct?.name);
+          }
+        }
+      });
       
       // Process ALL products with conversions in inventory
       for (const invStock of updatedInventoryStocks) {
