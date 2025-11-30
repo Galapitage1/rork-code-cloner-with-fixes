@@ -202,7 +202,55 @@ export default function SettingsScreen() {
   };
   
   const testEmailConnection = async () => {
-    setConnectionStatus({ type: 'error', message: 'Email testing is not available - tRPC removed' });
+    if (!smtpHost || !smtpUsername || !smtpPassword) {
+      setConnectionStatus({ type: 'error', message: 'Please fill in all SMTP settings' });
+      return;
+    }
+
+    try {
+      setIsTestingEmail(true);
+      setConnectionStatus(null);
+
+      const baseUrl = backendStatus.baseUrl;
+      console.log('[Email Test] Testing connection to:', baseUrl);
+
+      const response = await fetch(`${baseUrl}/api/test-email-connection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          smtpConfig: {
+            host: smtpHost,
+            port: smtpPort,
+            username: smtpUsername,
+            password: smtpPassword,
+          },
+        }),
+      });
+
+      const result = await response.json();
+      console.log('[Email Test] Result:', result);
+
+      if (response.ok && result.success) {
+        const smtpResult = result.results?.smtp;
+        if (smtpResult?.success) {
+          setConnectionStatus({ type: 'success', message: smtpResult.message || 'SMTP connection successful' });
+        } else {
+          setConnectionStatus({ type: 'error', message: smtpResult?.message || 'SMTP connection failed' });
+        }
+      } else {
+        setConnectionStatus({ type: 'error', message: result.error || 'Connection test failed' });
+      }
+    } catch (error: any) {
+      console.error('[Email Test] Error:', error);
+      setConnectionStatus({ 
+        type: 'error', 
+        message: error.message || 'Failed to test connection. Check if backend server is running.' 
+      });
+    } finally {
+      setIsTestingEmail(false);
+    }
   };
 
   useEffect(() => {
