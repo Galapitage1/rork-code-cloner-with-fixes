@@ -251,6 +251,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   let remoteNewer = 0;
   let localNewer = 0;
   let remoteNew = 0;
+  let deletionWins = 0;
   
   remote.forEach(item => {
     const existing = merged.get(item.id);
@@ -261,7 +262,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
       // Item exists on server but not locally - add it
       merged.set(item.id, item);
       remoteNew++;
-      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime);
+      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime, 'deleted:', item.deleted);
     } else if (remoteTime > localTime) {
       // Remote is NEWER - use remote version
       merged.set(item.id, item);
@@ -278,9 +279,21 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
         console.log('[mergeData]   → Deletion status differs - keeping local:', existing.deleted);
       }
     } else {
-      // Timestamps are EQUAL - keep local (last write wins with client preference)
-      localNewer++;
-      console.log('[mergeData] ✓ Keeping LOCAL (equal timestamp):', item.id, 'timestamp:', new Date(localTime).toISOString());
+      // CRITICAL FIX: When timestamps are equal, deletion always wins
+      // This prevents duplicates from coming back after being deleted
+      if (existing.deleted && !item.deleted) {
+        console.log('[mergeData] ✓ Keeping LOCAL DELETION (equal timestamp, deletion wins):', item.id);
+        deletionWins++;
+        // Keep existing (which is deleted)
+      } else if (!existing.deleted && item.deleted) {
+        console.log('[mergeData] ✓ Using REMOTE DELETION (equal timestamp, deletion wins):', item.id);
+        merged.set(item.id, item);
+        deletionWins++;
+      } else {
+        // Both have same deleted status, keep local
+        localNewer++;
+        console.log('[mergeData] ✓ Keeping LOCAL (equal timestamp):', item.id, 'timestamp:', new Date(localTime).toISOString());
+      }
     }
   });
   
@@ -288,6 +301,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData]   New from server:', remoteNew);
   console.log('[mergeData]   Remote was newer:', remoteNewer);
   console.log('[mergeData]   Local was newer:', localNewer);
+  console.log('[mergeData]   Deletion wins (equal timestamp):', deletionWins);
   console.log('[mergeData]   Total merged items:', merged.size);
   
   const result = Array.from(merged.values());
