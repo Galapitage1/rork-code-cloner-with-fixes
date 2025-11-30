@@ -238,11 +238,22 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData] Merging data - local:', local.length, 'remote:', remote.length);
   const merged = new Map<string, T>();
   
+  // CRITICAL: Normalize timestamps - treat missing/zero as oldest (epoch 0)
+  const normalizeTimestamp = (ts?: number): number => {
+    if (!ts || ts === 0) {
+      console.log('[mergeData] ⚠️ Found item with NO TIMESTAMP (treating as oldest)');
+      return 0; // Oldest possible timestamp
+    }
+    return ts;
+  };
+  
   // First, add all local items with their timestamps
   local.forEach(item => {
-    merged.set(item.id, item);
+    // Ensure all items have timestamps
+    const normalized = { ...item, updatedAt: normalizeTimestamp(item.updatedAt) };
+    merged.set(item.id, normalized as T);
     if (item.deleted) {
-      console.log('[mergeData] Local has DELETED item:', item.id, 'timestamp:', item.updatedAt);
+      console.log('[mergeData] Local has DELETED item:', item.id, 'timestamp:', normalized.updatedAt);
     }
   });
   console.log('[mergeData] Added local items:', merged.size);
@@ -252,44 +263,62 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   let localNewer = 0;
   let remoteNew = 0;
   let deletionWins = 0;
+  let staleDataBlocked = 0;
   
   remote.forEach(item => {
     const existing = merged.get(item.id);
-    const remoteTime = item.updatedAt || 0;
-    const localTime = existing?.updatedAt || 0;
+    const remoteTime = normalizeTimestamp(item.updatedAt);
+    const localTime = normalizeTimestamp(existing?.updatedAt);
     
-    // CRITICAL FIX: Deletion always wins, regardless of timestamp
+    // CRITICAL FIX 1: Deletion always wins, regardless of timestamp
     // This prevents deleted items from coming back during sync
     if (existing && existing.deleted) {
-      // Local has deleted this item - keep it deleted regardless of remote timestamp
-      console.log('[mergeData] ✓ Preserving LOCAL DELETION:', item.id, 'ignoring remote (deletion always wins)');
+      // Local has deleted this item - NEVER resurrect it, even if remote is newer
+      console.log('[mergeData] ✓ DELETION PROTECTION - Preserving LOCAL DELETION:', item.id, 'localTime:', localTime, 'remoteTime:', remoteTime);
+      console.log('[mergeData]   → Blocking stale device from re-syncing this deleted item');
       deletionWins++;
       // Keep existing (which is deleted)
       return;
     }
     
     if (item.deleted) {
-      // Remote has deleted this item - use the deletion
+      // Remote has deleted this item - apply the deletion
       console.log('[mergeData] ✓ Applying REMOTE DELETION:', item.id, 'marking local as deleted');
-      merged.set(item.id, item);
+      const normalized = { ...item, updatedAt: normalizeTimestamp(item.updatedAt) };
+      merged.set(item.id, normalized as T);
       deletionWins++;
       return;
     }
     
+    // CRITICAL FIX 2: Reject data with missing/zero timestamps if we have newer data
+    if (remoteTime === 0 && localTime > 0) {
+      console.log('[mergeData] ⛔ BLOCKING STALE DATA from old device:', item.id);
+      console.log('[mergeData]   → Remote has NO timestamp (0), but local has valid timestamp:', new Date(localTime).toISOString());
+      console.log('[mergeData]   → This is likely from an old device that never got timestamps');
+      staleDataBlocked++;
+      return; // Keep local version, reject stale remote
+    }
+    
     if (!existing) {
       // Item exists on server but not locally - add it (only if not deleted)
-      merged.set(item.id, item);
+      const normalized = { ...item, updatedAt: remoteTime };
+      merged.set(item.id, normalized as T);
       remoteNew++;
-      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime);
+      console.log('[mergeData] Adding NEW item from server:', item.id, 'timestamp:', remoteTime === 0 ? 'NONE (0)' : new Date(remoteTime).toISOString());
     } else if (remoteTime > localTime) {
       // Remote is NEWER - use remote version
-      merged.set(item.id, item);
+      const normalized = { ...item, updatedAt: remoteTime };
+      merged.set(item.id, normalized as T);
       remoteNewer++;
       console.log('[mergeData] ✓ Using REMOTE (newer):', item.id, 'remoteTime:', new Date(remoteTime).toISOString(), 'localTime:', new Date(localTime).toISOString());
     } else {
       // Local is NEWER or EQUAL - keep local version
       localNewer++;
-      console.log('[mergeData] ✓ Keeping LOCAL (newer or equal):', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
+      if (remoteTime === localTime) {
+        console.log('[mergeData] ✓ Keeping LOCAL (equal timestamp):', item.id, 'time:', new Date(localTime).toISOString());
+      } else {
+        console.log('[mergeData] ✓ Keeping LOCAL (newer):', item.id, 'localTime:', new Date(localTime).toISOString(), 'remoteTime:', new Date(remoteTime).toISOString());
+      }
     }
   });
   
@@ -297,7 +326,8 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData]   New from server:', remoteNew);
   console.log('[mergeData]   Remote was newer:', remoteNewer);
   console.log('[mergeData]   Local was newer:', localNewer);
-  console.log('[mergeData]   Deletion wins (equal timestamp):', deletionWins);
+  console.log('[mergeData]   Deletion wins:', deletionWins);
+  console.log('[mergeData]   Stale data blocked:', staleDataBlocked, '← prevented resurrections');
   console.log('[mergeData]   Total merged items:', merged.size);
   
   const result = Array.from(merged.values());
