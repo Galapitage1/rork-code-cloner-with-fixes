@@ -1,4 +1,5 @@
 import { saveToServer, getFromServer, mergeData } from './directSync';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export async function syncData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(
   dataType: string,
@@ -12,6 +13,27 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
 
   try {
     console.log(`[syncData] ${dataType}: Starting sync - local items:`, localData.length);
+    
+    // CRITICAL: Load permanent settings lock
+    let protectedIds: string[] = [];
+    try {
+      const permanentLock = await AsyncStorage.getItem('@permanent_settings_lock');
+      if (permanentLock) {
+        const parsed = JSON.parse(permanentLock);
+        console.log(`[syncData] ${dataType}: Permanent settings lock loaded - saved at:`, new Date(parsed.savedAt).toISOString());
+        
+        // Map dataType to the protected IDs
+        if (dataType === 'outlets' && parsed.outlets) {
+          protectedIds = parsed.outlets;
+          console.log(`[syncData] ${dataType}: 🔒 Protected outlets:`, protectedIds.length);
+        } else if (dataType === 'users' && parsed.users) {
+          protectedIds = parsed.users;
+          console.log(`[syncData] ${dataType}: 🔒 Protected users:`, protectedIds.length);
+        }
+      }
+    } catch {
+      console.log(`[syncData] ${dataType}: No permanent settings lock found (this is normal)`);
+    }
     
     // Count local deletions and edits
     const localDeleted = localData.filter(item => item.deleted).length;
@@ -37,7 +59,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
     // STEP 3: Merge with timestamp-based conflict resolution
     // This ensures newer timestamps always win (whether local or remote)
     console.log(`[syncData] ${dataType}: STEP 3 - Merging with timestamp-based conflict resolution...`);
-    const merged = mergeData(savedToServer, remoteData);
+    const merged = mergeData(savedToServer, remoteData, { protectedIds });
     const deletedInMerge = merged.filter(item => item.deleted).length;
     const activeInMerge = merged.length - deletedInMerge;
     console.log(`[syncData] ${dataType}: ✓ Merge complete:`, merged.length, 'total items (active:', activeInMerge, ', deleted:', deletedInMerge, ')');

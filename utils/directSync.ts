@@ -233,9 +233,12 @@ export async function getFromServer<T>(
   }
 }
 
-export function mergeData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(local: T[], remote: T[]): T[] {
+export function mergeData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(local: T[], remote: T[], options?: { protectedIds?: string[] }): T[] {
   console.log('[mergeData] ========== TIMESTAMP-BASED MERGE START ==========');
   console.log('[mergeData] Merging data - local:', local.length, 'remote:', remote.length);
+  if (options?.protectedIds && options.protectedIds.length > 0) {
+    console.log('[mergeData] ⚠️ PERMANENT PROTECTION ACTIVE - Protected IDs:', options.protectedIds.length);
+  }
   const merged = new Map<string, T>();
   const seenIds = new Set<string>();
   
@@ -262,6 +265,10 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     merged.set(item.id, normalized as T);
     if (item.deleted) {
       console.log('[mergeData] Local has DELETED item:', item.id, 'timestamp:', normalized.updatedAt);
+      // CRITICAL: If this is a protected ID and it's deleted, it stays deleted
+      if (options?.protectedIds?.includes(item.id)) {
+        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Deletion of protected item:', item.id);
+      }
     }
   });
   console.log('[mergeData] Added local items:', merged.size);
@@ -294,6 +301,24 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     const existing = merged.get(item.id);
     const remoteTime = normalizeTimestamp(item.updatedAt);
     const localTime = normalizeTimestamp(existing?.updatedAt);
+    
+    // CRITICAL: If this is a protected ID, check permanent protection rules
+    if (options?.protectedIds?.includes(item.id)) {
+      // Protected items can only be updated if local explicitly allows it
+      // Remote changes to protected items are BLOCKED
+      if (existing?.deleted) {
+        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Blocked resurrection of protected deleted item:', item.id);
+        return; // Keep local deleted state, ignore remote
+      } else if (localTime > remoteTime) {
+        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Local version is newer for protected item:', item.id);
+        return; // Keep local version
+      }
+      // If remote is newer but item is protected, still block it unless it's a deletion
+      if (!item.deleted) {
+        console.log('[mergeData] 🔒 PERMANENT PROTECTION - Blocked remote update to protected item:', item.id);
+        return;
+      }
+    }
     
     // CRITICAL FIX 1: Deletion ALWAYS wins when either local OR remote is deleted
     // AND the deletion timestamp is newer than the creation/update timestamp
@@ -378,6 +403,9 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   });
   
   console.log('[mergeData] ========== MERGE STATISTICS ==========');
+  if (options?.protectedIds && options.protectedIds.length > 0) {
+    console.log('[mergeData]   🔒 Protected items:', options.protectedIds.length);
+  }
   console.log('[mergeData]   New from server:', remoteNew);
   console.log('[mergeData]   Remote was newer:', remoteNewer);
   console.log('[mergeData]   Local was newer:', localNewer);

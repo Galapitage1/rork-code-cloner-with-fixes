@@ -108,6 +108,7 @@ export default function SettingsScreen() {
   const [isTestingEmail, setIsTestingEmail] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [isSavingPermanentSettings, setIsSavingPermanentSettings] = useState<boolean>(false);
 
   const backendStatus = useBackendStatus();
 
@@ -489,6 +490,84 @@ export default function SettingsScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Permanent Settings Save - Super Admin Only */}
+      {isSuperAdmin && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Save size={24} color={Colors.light.tint} />
+            <Text style={styles.sectionTitle}>Permanent Settings Protection</Text>
+          </View>
+
+          <View style={styles.syncInfoCard}>
+            <Text style={styles.syncInfoText}>
+              Save all current settings (outlets, users, campaign settings) as PERMANENT. Once saved, these settings will never be replaced during sync. This prevents deleted items from coming back during automatic sync.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.button, styles.primaryButton]}
+            onPress={async () => {
+              openConfirm({
+                title: 'Save Permanent Settings',
+                message: 'This will lock all current settings (outlets, users, campaign settings) and prevent sync from overwriting them. Are you sure?',
+                destructive: false,
+                testID: 'confirm-save-permanent-settings',
+                onConfirm: async () => {
+                  try {
+                    setIsSavingPermanentSettings(true);
+                    
+                    // Save a permanent settings flag with timestamp
+                    const permanentSettings = {
+                      id: 'permanent_settings_lock',
+                      outlets: outlets.map(o => o.id),
+                      users: users.map(u => u.id),
+                      savedAt: Date.now(),
+                      updatedAt: Date.now(),
+                    };
+                    
+                    await AsyncStorage.setItem('@permanent_settings_lock', JSON.stringify(permanentSettings));
+                    
+                    if (currentUser) {
+                      try {
+                        await syncData('permanent_settings_lock', [permanentSettings], currentUser.id);
+                      } catch (syncError) {
+                        console.error('[SETTINGS] Failed to sync permanent settings lock:', syncError);
+                      }
+                    }
+                    
+                    Alert.alert(
+                      'Success',
+                      `Settings saved as permanent:\n- ${outlets.length} outlets\n- ${users.length} users\n\nThese settings will now be protected from sync overwrites.`
+                    );
+                  } catch (error) {
+                    console.error('[SETTINGS] Failed to save permanent settings:', error);
+                    Alert.alert('Error', 'Failed to save permanent settings. Please try again.');
+                  } finally {
+                    setIsSavingPermanentSettings(false);
+                  }
+                },
+              });
+            }}
+            disabled={isSavingPermanentSettings}
+          >
+            {isSavingPermanentSettings ? (
+              <ActivityIndicator color={Colors.light.card} />
+            ) : (
+              <>
+                <Save size={20} color={Colors.light.card} />
+                <Text style={styles.buttonText}>Save Permanent Settings</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <View style={[styles.syncInfoCard, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+            <Text style={[styles.syncInfoText, { color: '#92400E' }]}>
+              ⚠️ This is a powerful feature. Once saved, these settings cannot be changed through sync. You can still manually edit them on this device, but other devices will respect these permanent settings during sync.
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* User Data Section */}
       {isAdmin && (
