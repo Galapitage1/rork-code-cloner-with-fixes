@@ -219,6 +219,11 @@ function LiveInventoryScreen() {
         // STEP 4: Sold/Transferred
         let soldWhole = 0;
         let soldSlices = 0;
+        
+        // STEP 4.1: Check if this product is a raw material that should show consumption from menu sales
+        // If a menu product has "Calculate raw materials based on sales" enabled, show the raw material usage here
+        let rawMaterialUsageWhole = 0;
+        let rawMaterialUsageSlices = 0;
 
         if (outlet.outletType === 'production') {
           // Production: Get approved OUT requests FROM this outlet

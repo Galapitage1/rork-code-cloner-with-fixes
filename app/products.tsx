@@ -455,6 +455,69 @@ export default function ProductsScreen() {
     });
   };
 
+  const handleRemoveDuplicates = async () => {
+    try {
+      const duplicates = new Map<string, Product[]>();
+      
+      products.forEach(product => {
+        const key = `${product.name.toLowerCase().trim()}_${product.unit.toLowerCase().trim()}`;
+        if (!duplicates.has(key)) {
+          duplicates.set(key, []);
+        }
+        duplicates.get(key)?.push(product);
+      });
+      
+      const duplicateEntries = Array.from(duplicates.entries()).filter(([_, items]) => items.length > 1);
+      
+      if (duplicateEntries.length === 0) {
+        Alert.alert('No Duplicates', 'No duplicate products found.');
+        return;
+      }
+      
+      let message = `Found ${duplicateEntries.length} duplicate product(s):\n\n`;
+      duplicateEntries.forEach(([key, items]) => {
+        message += `• ${items[0].name} (${items[0].unit}) - ${items.length} duplicates\n`;
+      });
+      message += '\nThe oldest entries will be kept and newer duplicates will be removed.';
+      
+      openConfirm({
+        title: 'Remove Duplicates',
+        message: message,
+        destructive: true,
+        testID: 'confirm-remove-duplicates',
+        onConfirm: async () => {
+          try {
+            let removedCount = 0;
+            
+            for (const [key, items] of duplicateEntries) {
+              const sortedByTimestamp = items.sort((a, b) => {
+                const timeA = a.updatedAt || 0;
+                const timeB = b.updatedAt || 0;
+                return timeA - timeB;
+              });
+              
+              const toKeep = sortedByTimestamp[0];
+              const toRemove = sortedByTimestamp.slice(1);
+              
+              for (const product of toRemove) {
+                await deleteProduct(product.id);
+                removedCount++;
+              }
+            }
+            
+            Alert.alert('Success', `Removed ${removedCount} duplicate product(s).`);
+          } catch (error) {
+            console.error('Error removing duplicates:', error);
+            Alert.alert('Error', 'Failed to remove duplicate products.');
+          }
+        },
+      });
+    } catch (error) {
+      console.error('Error checking duplicates:', error);
+      Alert.alert('Error', 'Failed to check for duplicates.');
+    }
+  };
+
   const handlePickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -581,6 +644,17 @@ export default function ProductsScreen() {
           >
             <Package size={20} color={Colors.light.tint} />
             <Text style={[styles.buttonText, styles.secondaryButtonText]}>Product Unit Conversions</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
+            onPress={handleRemoveDuplicates}
+            disabled={products.length === 0}
+          >
+            <Trash2 size={20} color={products.length === 0 ? Colors.light.muted : Colors.light.tint} />
+            <Text style={[styles.buttonText, styles.secondaryButtonText, products.length === 0 && styles.disabledText]}>
+              Remove Duplicates
+            </Text>
           </TouchableOpacity>
 
           <View style={styles.toggleContainer}>
