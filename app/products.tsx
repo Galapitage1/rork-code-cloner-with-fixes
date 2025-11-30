@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useStock } from '@/contexts/StockContext';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useOrders } from '@/contexts/OrderContext';
+import { useStores } from '@/contexts/StoresContext';
 import { useState, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -23,6 +24,7 @@ export default function ProductsScreen() {
   const { products, addProduct, updateProduct, deleteProduct, showProductList, toggleShowProductList, syncAll } = useStock();
   const { recipes } = useRecipes();
   const { orders } = useOrders();
+  const { storeProducts, deleteStoreProduct } = useStores();
   
   const [showProductModal, setShowProductModal] = useState<boolean>(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -501,21 +503,51 @@ export default function ProductsScreen() {
       
       const duplicateEntries = Array.from(duplicates.entries()).filter(([_, items]) => items.length > 1);
       
-      if (duplicateEntries.length === 0) {
+      const storeDuplicates = new Map<string, typeof storeProducts[0][]>();
+      
+      storeProducts.forEach(product => {
+        const key = `${product.name.toLowerCase().trim()}_${product.unit.toLowerCase().trim()}`;
+        if (!storeDuplicates.has(key)) {
+          storeDuplicates.set(key, []);
+        }
+        storeDuplicates.get(key)?.push(product);
+      });
+      
+      const storeDuplicateEntries = Array.from(storeDuplicates.entries()).filter(([_, items]) => items.length > 1);
+      
+      if (duplicateEntries.length === 0 && storeDuplicateEntries.length === 0) {
         Alert.alert('No Duplicates', 'No duplicate products found.');
         return;
       }
       
       const removableCount = duplicateEntries.reduce((sum, [_, items]) => sum + (items.length - 1), 0);
+      const storeRemovableCount = storeDuplicateEntries.reduce((sum, [_, items]) => sum + (items.length - 1), 0);
       
-      let message = `Found ${duplicateEntries.length} duplicate product(s) with ${removableCount} duplicate entries to remove:\n\n`;
-      const displayLimit = 10;
-      duplicateEntries.slice(0, displayLimit).forEach(([key, items]) => {
-        message += `• ${items[0].name} (${items[0].unit}) - ${items.length} copies\n`;
-      });
+      let message = '';
       
-      if (duplicateEntries.length > displayLimit) {
-        message += `\n...and ${duplicateEntries.length - displayLimit} more duplicates\n`;
+      if (duplicateEntries.length > 0) {
+        message += `Found ${duplicateEntries.length} duplicate product(s) with ${removableCount} duplicate entries in Products.\n\n`;
+        const displayLimit = 5;
+        duplicateEntries.slice(0, displayLimit).forEach(([key, items]) => {
+          message += `• ${items[0].name} (${items[0].unit}) - ${items.length} copies\n`;
+        });
+        
+        if (duplicateEntries.length > displayLimit) {
+          message += `...and ${duplicateEntries.length - displayLimit} more\n`;
+        }
+      }
+      
+      if (storeDuplicateEntries.length > 0) {
+        if (message) message += '\n';
+        message += `Found ${storeDuplicateEntries.length} duplicate store product(s) with ${storeRemovableCount} duplicate entries in Stores.\n\n`;
+        const displayLimit = 5;
+        storeDuplicateEntries.slice(0, displayLimit).forEach(([key, items]) => {
+          message += `• ${items[0].name} (${items[0].unit}) - ${items.length} copies\n`;
+        });
+        
+        if (storeDuplicateEntries.length > displayLimit) {
+          message += `...and ${storeDuplicateEntries.length - displayLimit} more\n`;
+        }
       }
       
       message += '\nThe oldest entries will be kept. Duplicates connected to recipes/orders will be preserved.';
@@ -534,6 +566,7 @@ export default function ProductsScreen() {
             let skippedCount = 0;
             const skippedProducts: string[] = [];
             const idsToDelete: string[] = [];
+            const storeIdsToDelete: string[] = [];
             
             for (const [, items] of duplicateEntries) {
               const sortedByTimestamp = items.sort((a, b) => {
@@ -576,6 +609,31 @@ export default function ProductsScreen() {
             
             await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedProducts));
             removedCount = idsToDelete.length;
+            
+            for (const [, items] of storeDuplicateEntries) {
+              const sortedByTimestamp = items.sort((a, b) => {
+                const timeA = a.updatedAt || 0;
+                const timeB = b.updatedAt || 0;
+                return timeA - timeB;
+              });
+              
+              const toKeep = sortedByTimestamp[0];
+              const toRemove = sortedByTimestamp.slice(1);
+              
+              console.log(`[RemoveDuplicates] Store: "${items[0].name}" - keeping oldest (${toKeep.id}), removing ${toRemove.length} duplicates`);
+              
+              for (const product of toRemove) {
+                storeIdsToDelete.push(product.id);
+              }
+            }
+            
+            if (storeIdsToDelete.length > 0) {
+              console.log(`[RemoveDuplicates] Removing ${storeIdsToDelete.length} store product duplicates...`);
+              for (const id of storeIdsToDelete) {
+                await deleteStoreProduct(id);
+              }
+              removedCount += storeIdsToDelete.length;
+            }
             
             console.log('[RemoveDuplicates] Waiting for sync...');
             await new Promise(resolve => setTimeout(resolve, 2000));
