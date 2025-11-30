@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 
-import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip } from 'lucide-react-native';
+import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings } from 'lucide-react-native';
 import { useCustomers } from '@/contexts/CustomerContext';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
@@ -52,11 +52,16 @@ export default function CampaignsScreen() {
   
   const [isSending, setIsSending] = useState(false);
   const [testingSMS, setTestingSMS] = useState(false);
+  const [showEmailSettings, setShowEmailSettings] = useState(false);
   
   const [smtpHost, setSmtpHost] = useState<string>('');
   const [smtpPort, setSmtpPort] = useState<string>('587');
   const [smtpUsername, setSmtpUsername] = useState<string>('');
   const [smtpPassword, setSmtpPassword] = useState<string>('');
+  const [imapHost, setImapHost] = useState<string>('');
+  const [imapPort, setImapPort] = useState<string>('993');
+  const [imapUsername, setImapUsername] = useState<string>('');
+  const [imapPassword, setImapPassword] = useState<string>('');
   const [smsApiUrl, setSmsApiUrl] = useState<string>('https://app.notify.lk/api/v1/send');
   const [smsApiKey, setSmsApiKey] = useState<string>('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
 
@@ -69,11 +74,37 @@ export default function CampaignsScreen() {
         setSmtpPort(parsed.smtpPort || '587');
         setSmtpUsername(parsed.smtpUsername || '');
         setSmtpPassword(parsed.smtpPassword || '');
+        setImapHost(parsed.imapHost || '');
+        setImapPort(parsed.imapPort || '993');
+        setImapUsername(parsed.imapUsername || '');
+        setImapPassword(parsed.imapPassword || '');
         setSmsApiUrl(parsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
         setSmsApiKey(parsed.smsApiKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
       }
     } catch (error) {
       console.error('Failed to load campaign settings:', error);
+    }
+  };
+
+  const saveCampaignSettings = async () => {
+    try {
+      const settings = {
+        smtpHost,
+        smtpPort,
+        smtpUsername,
+        smtpPassword,
+        imapHost,
+        imapPort,
+        imapUsername,
+        imapPassword,
+        smsApiUrl,
+        smsApiKey,
+      };
+      await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
+      Alert.alert('Success', 'Email settings saved successfully');
+    } catch (error) {
+      console.error('Failed to save campaign settings:', error);
+      Alert.alert('Error', 'Failed to save settings');
     }
   };
 
@@ -455,121 +486,231 @@ export default function CampaignsScreen() {
         </View>
 
         {campaignType === 'email' && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Email Settings</Text>
-            
-            <Text style={styles.label}>Sender Email *</Text>
-            <TextInput
-              style={styles.input}
-              value={senderEmail}
-              onChangeText={setSenderEmail}
-              placeholder="your@email.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.label}>Sender Name *</Text>
-            <TextInput
-              style={styles.input}
-              value={senderName}
-              onChangeText={setSenderName}
-              placeholder="Your Company Name"
-            />
-
-            <Text style={styles.label}>Email Format</Text>
-            <View style={styles.formatSelector}>
-              <TouchableOpacity
-                style={[
-                  styles.formatButton,
-                  emailFormat === 'text' && styles.formatButtonActive,
-                ]}
-                onPress={() => setEmailFormat('text')}
-              >
-                <Text
-                  style={[
-                    styles.formatButtonText,
-                    emailFormat === 'text' && styles.formatButtonTextActive,
-                  ]}
-                >
-                  Plain Text
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.formatButton,
-                  emailFormat === 'html' && styles.formatButtonActive,
-                ]}
-                onPress={() => setEmailFormat('html')}
-              >
-                <Text
-                  style={[
-                    styles.formatButtonText,
-                    emailFormat === 'html' && styles.formatButtonTextActive,
-                  ]}
-                >
-                  HTML
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.label}>Subject *</Text>
-            <TextInput
-              style={styles.input}
-              value={subject}
-              onChangeText={setSubject}
-              placeholder="Email subject"
-            />
-
-            {emailFormat === 'text' ? (
-              <>
-                <Text style={styles.label}>Message *</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={message}
-                  onChangeText={setMessage}
-                  placeholder="Your email message..."
-                  multiline
-                  numberOfLines={8}
-                  textAlignVertical="top"
-                />
-              </>
-            ) : (
-              <>
-                <Text style={styles.label}>HTML Content *</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={htmlContent}
-                  onChangeText={setHtmlContent}
-                  placeholder="<html><body>Your HTML content...</body></html>"
-                  multiline
-                  numberOfLines={10}
-                  textAlignVertical="top"
-                />
-              </>
-            )}
-
-            <Text style={styles.label}>Attachments</Text>
-            <TouchableOpacity style={styles.attachmentButton} onPress={pickDocument}>
-              <Paperclip size={20} color={Colors.light.tint} />
-              <Text style={styles.attachmentButtonText}>Add Attachments</Text>
+          <>
+            <TouchableOpacity
+              style={styles.settingsToggle}
+              onPress={() => setShowEmailSettings(!showEmailSettings)}
+            >
+              <View style={styles.settingsToggleLeft}>
+                <Settings size={20} color={Colors.light.tint} />
+                <Text style={styles.settingsToggleText}>Email Configuration</Text>
+              </View>
+              {showEmailSettings ? (
+                <ChevronUp size={20} color={Colors.light.tint} />
+              ) : (
+                <ChevronDown size={20} color={Colors.light.tint} />
+              )}
             </TouchableOpacity>
 
-            {attachments.map((attachment, index) => (
-              <View key={index} style={styles.attachmentItem}>
-                <View style={styles.attachmentInfo}>
-                  <Text style={styles.attachmentName} numberOfLines={1}>
-                    {attachment.name}
-                  </Text>
-                  <Text style={styles.attachmentSize}>
-                    {(attachment.size / 1024).toFixed(1)} KB
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={() => removeAttachment(index)}>
-                  <X size={20} color={Colors.light.danger} />
+            {showEmailSettings && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>SMTP Settings (Outgoing Mail)</Text>
+                
+                <Text style={styles.label}>SMTP Host *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smtpHost}
+                  onChangeText={setSmtpHost}
+                  placeholder="smtp.gmail.com"
+                  autoCapitalize="none"
+                />
+
+                <Text style={styles.label}>SMTP Port *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smtpPort}
+                  onChangeText={setSmtpPort}
+                  placeholder="587"
+                  keyboardType="number-pad"
+                />
+
+                <Text style={styles.label}>SMTP Username *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smtpUsername}
+                  onChangeText={setSmtpUsername}
+                  placeholder="your@email.com"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+
+                <Text style={styles.label}>SMTP Password *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smtpPassword}
+                  onChangeText={setSmtpPassword}
+                  placeholder="Your password or app password"
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+
+                <View style={styles.divider} />
+
+                <Text style={styles.sectionTitle}>IMAP Settings (Incoming Mail)</Text>
+                
+                <Text style={styles.label}>IMAP Host</Text>
+                <TextInput
+                  style={styles.input}
+                  value={imapHost}
+                  onChangeText={setImapHost}
+                  placeholder="imap.gmail.com"
+                  autoCapitalize="none"
+                />
+
+                <Text style={styles.label}>IMAP Port</Text>
+                <TextInput
+                  style={styles.input}
+                  value={imapPort}
+                  onChangeText={setImapPort}
+                  placeholder="993"
+                  keyboardType="number-pad"
+                />
+
+                <Text style={styles.label}>IMAP Username</Text>
+                <TextInput
+                  style={styles.input}
+                  value={imapUsername}
+                  onChangeText={setImapUsername}
+                  placeholder="your@email.com"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+
+                <Text style={styles.label}>IMAP Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={imapPassword}
+                  onChangeText={setImapPassword}
+                  placeholder="Your password or app password"
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+
+                <TouchableOpacity
+                  style={styles.saveSettingsButton}
+                  onPress={saveCampaignSettings}
+                >
+                  <Text style={styles.saveSettingsButtonText}>Save Email Settings</Text>
                 </TouchableOpacity>
               </View>
-            ))}
-          </View>
+            )}
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Email Campaign</Text>
+              
+              <Text style={styles.label}>Sender Email *</Text>
+              <TextInput
+                style={styles.input}
+                value={senderEmail}
+                onChangeText={setSenderEmail}
+                placeholder="your@email.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+
+              <Text style={styles.label}>Sender Name *</Text>
+              <TextInput
+                style={styles.input}
+                value={senderName}
+                onChangeText={setSenderName}
+                placeholder="Your Company Name"
+              />
+
+              <Text style={styles.label}>Email Format</Text>
+              <View style={styles.formatSelector}>
+                <TouchableOpacity
+                  style={[
+                    styles.formatButton,
+                    emailFormat === 'text' && styles.formatButtonActive,
+                  ]}
+                  onPress={() => setEmailFormat('text')}
+                >
+                  <Text
+                    style={[
+                      styles.formatButtonText,
+                      emailFormat === 'text' && styles.formatButtonTextActive,
+                    ]}
+                  >
+                    Plain Text
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.formatButton,
+                    emailFormat === 'html' && styles.formatButtonActive,
+                  ]}
+                  onPress={() => setEmailFormat('html')}
+                >
+                  <Text
+                    style={[
+                      styles.formatButtonText,
+                      emailFormat === 'html' && styles.formatButtonTextActive,
+                    ]}
+                  >
+                    HTML
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.label}>Subject *</Text>
+              <TextInput
+                style={styles.input}
+                value={subject}
+                onChangeText={setSubject}
+                placeholder="Email subject"
+              />
+
+              {emailFormat === 'text' ? (
+                <>
+                  <Text style={styles.label}>Message *</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={message}
+                    onChangeText={setMessage}
+                    placeholder="Your email message..."
+                    multiline
+                    numberOfLines={8}
+                    textAlignVertical="top"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.label}>HTML Content *</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={htmlContent}
+                    onChangeText={setHtmlContent}
+                    placeholder="<html><body>Your HTML content...</body></html>"
+                    multiline
+                    numberOfLines={10}
+                    textAlignVertical="top"
+                  />
+                </>
+              )}
+
+              <Text style={styles.label}>Attachments</Text>
+              <TouchableOpacity style={styles.attachmentButton} onPress={pickDocument}>
+                <Paperclip size={20} color={Colors.light.tint} />
+                <Text style={styles.attachmentButtonText}>Add Attachments</Text>
+              </TouchableOpacity>
+
+              {attachments.map((attachment, index) => (
+                <View key={index} style={styles.attachmentItem}>
+                  <View style={styles.attachmentInfo}>
+                    <Text style={styles.attachmentName} numberOfLines={1}>
+                      {attachment.name}
+                    </Text>
+                    <Text style={styles.attachmentSize}>
+                      {(attachment.size / 1024).toFixed(1)} KB
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => removeAttachment(index)}>
+                    <X size={20} color={Colors.light.danger} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          </>
         )}
 
         {campaignType === 'sms' && (
@@ -955,6 +1096,46 @@ const styles = StyleSheet.create({
   },
   sendButtonText: {
     fontSize: 16,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
+  },
+  settingsToggle: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  settingsToggleLeft: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  settingsToggleText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: Colors.light.border,
+    marginVertical: 20,
+  },
+  saveSettingsButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.light.tint,
+    alignItems: 'center' as const,
+    marginTop: 20,
+  },
+  saveSettingsButtonText: {
+    fontSize: 15,
     fontWeight: '700' as const,
     color: '#FFFFFF',
   },
