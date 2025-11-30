@@ -28,8 +28,9 @@ function RootLayoutNav() {
   const { currentUser } = useAuth();
 
   useEffect(() => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined' && currentUser && pathname && pathname !== '/') {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && currentUser && pathname && pathname !== '/' && pathname !== '/login') {
       localStorage.setItem('app-reload-path', pathname);
+      console.log('[RootLayoutNav] Saved path for reload:', pathname);
     }
   }, [pathname, currentUser]);
 

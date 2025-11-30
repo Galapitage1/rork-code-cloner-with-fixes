@@ -7,19 +7,25 @@ import { useEffect, useState } from 'react';
 export default function Index() {
   const { currentUser, isLoading } = useAuth();
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
+  const [shouldRedirect, setShouldRedirect] = useState(false);
 
   useEffect(() => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      const savedPath = localStorage.getItem('app-reload-path');
-      if (savedPath && savedPath !== '/' && currentUser) {
-        console.log('[Index] Restoring saved path:', savedPath);
-        setRedirectPath(savedPath);
-        localStorage.removeItem('app-reload-path');
+    if (!isLoading) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        const savedPath = localStorage.getItem('app-reload-path');
+        if (savedPath && savedPath !== '/' && currentUser) {
+          console.log('[Index] Restoring saved path:', savedPath);
+          setRedirectPath(savedPath);
+          localStorage.removeItem('app-reload-path');
+        } else if (!currentUser) {
+          localStorage.removeItem('app-reload-path');
+        }
       }
+      setShouldRedirect(true);
     }
-  }, [currentUser]);
+  }, [isLoading, currentUser]);
 
-  if (isLoading) {
+  if (isLoading || !shouldRedirect) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color={Colors.light.tint} />
@@ -28,9 +34,6 @@ export default function Index() {
   }
 
   if (!currentUser) {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      localStorage.removeItem('app-reload-path');
-    }
     return <Redirect href="/login" />;
   }
 
