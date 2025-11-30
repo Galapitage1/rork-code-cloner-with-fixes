@@ -906,15 +906,13 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     // Create a map of all current stock values from the stock check (use Current Stock Auto-calculated)
     const stockCheckQuantities = new Map<string, number>();
     stockCheck.counts.forEach(count => {
-      // CRITICAL: Use Current Stock (Auto-calculated) = Opening + Received - Wastage
-      const opening = count.openingStock || 0;
-      const received = count.receivedStock || 0;
-      const wastage = count.wastage || 0;
-      const currentStock = opening + received - wastage;
+      // CRITICAL: Use Current Stock from count.quantity which is the EDITED value
+      // When editing in History with "Replace All Inventory", count.quantity contains the Current Stock value
+      const currentStock = count.quantity;
       
       stockCheckQuantities.set(count.productId, currentStock);
       const product = products.find(p => p.id === count.productId);
-      console.log('Stock check entry:', product?.name, 'opening:', opening, 'received:', received, 'wastage:', wastage, 'Current Stock:', currentStock);
+      console.log('Stock check entry:', product?.name, 'Current Stock (from quantity):', currentStock);
     });
     
     if (outlet.outletType === 'production') {
@@ -1042,13 +1040,10 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       stockCheck.counts.forEach(count => {
         if (!productsWithConversions.has(count.productId)) {
           const product = products.find(p => p.id === count.productId);
-          // CRITICAL: Use current stock (opening + received - wastage) instead of just quantity
-          const opening = count.openingStock || 0;
-          const received = count.receivedStock || 0;
-          const wastage = count.wastage || 0;
-          const currentStock = opening + received - wastage;
+          // CRITICAL: Use count.quantity which is the EDITED Current Stock value
+          const currentStock = count.quantity;
           
-          console.log('Replace All: Product without conversion:', product?.name, 'opening:', opening, 'received:', received, 'wastage:', wastage, 'currentStock:', currentStock);
+          console.log('Replace All: Product without conversion:', product?.name, 'currentStock:', currentStock);
           
           // Find or create inventory stock for this product
           const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === count.productId);
