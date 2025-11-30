@@ -68,13 +68,27 @@ function LiveInventoryScreen() {
   }, []);
 
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
+    console.log('\n========================================');
     console.log('[LIVE INVENTORY] Recalculating inventory history at', new Date().toISOString());
     console.log('[LIVE INVENTORY] reconcileHistory count:', reconcileHistory.length);
     if (reconcileHistory.length > 0) {
       console.log('[LIVE INVENTORY] First reconcile entry:', JSON.stringify(reconcileHistory[0], null, 2));
       console.log('[LIVE INVENTORY] All reconcile outlets:', reconcileHistory.map(r => r.outlet).join(', '));
       console.log('[LIVE INVENTORY] All reconcile dates:', reconcileHistory.map(r => r.date).join(', '));
+      
+      // Check for raw consumption data
+      reconcileHistory.forEach((r, idx) => {
+        if (r.rawConsumption && r.rawConsumption.length > 0) {
+          console.log(`[LIVE INVENTORY] Reconcile entry ${idx}: outlet=${r.outlet}, date=${r.date}, rawConsumption entries:`, r.rawConsumption.length);
+          r.rawConsumption.forEach(rc => {
+            console.log(`  - Raw Product ID: ${rc.rawProductId}, Consumed: ${rc.consumed}`);
+          });
+        } else {
+          console.log(`[LIVE INVENTORY] Reconcile entry ${idx}: outlet=${r.outlet}, date=${r.date}, NO rawConsumption data`);
+        }
+      });
     }
+    console.log('========================================\n')
     if (!selectedOutlet) return [];
 
     const dates = getDateRange(selectedDate, dateRange);
