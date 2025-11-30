@@ -115,13 +115,15 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     loadCampaignSettings();
-  }, []);
+  }, [currentUser]);
 
   const loadCampaignSettings = async () => {
     try {
+      console.log('[SETTINGS] Loading campaign settings from local storage...');
       const settings = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
       if (settings) {
         const parsed = JSON.parse(settings);
+        console.log('[SETTINGS] Loaded local settings:', { hasEmail: !!parsed.emailApiKey, hasSmtp: !!parsed.smtpHost });
         setEmailApiKey(parsed.emailApiKey || '');
         setEmailApiProvider(parsed.emailApiProvider || 'smtp');
         setSmsApiKey(parsed.smsApiKey || '');
@@ -130,9 +132,33 @@ export default function SettingsScreen() {
         setSmtpPort(parsed.smtpPort || '587');
         setSmtpUsername(parsed.smtpUsername || '');
         setSmtpPassword(parsed.smtpPassword || '');
+      } else {
+        console.log('[SETTINGS] No local settings found');
+      }
+      
+      if (currentUser) {
+        console.log('[SETTINGS] Syncing settings from server for user:', currentUser.id);
+        try {
+          const synced = await syncData<any>('campaign_settings', [], currentUser.id);
+          if (synced && synced.length > 0) {
+            const latest = synced[0];
+            console.log('[SETTINGS] Synced settings from server:', { hasEmail: !!latest?.emailApiKey, hasSmtp: !!latest?.smtpHost });
+            await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(latest));
+            setEmailApiKey(latest?.emailApiKey || '');
+            setEmailApiProvider(latest?.emailApiProvider || 'smtp');
+            setSmsApiKey(latest?.smsApiKey || '');
+            setSmsApiUrl(latest?.smsApiUrl || 'https://app.notify.lk/api/v1/send');
+            setSmtpHost(latest?.smtpHost || '');
+            setSmtpPort(latest?.smtpPort || '587');
+            setSmtpUsername(latest?.smtpUsername || '');
+            setSmtpPassword(latest?.smtpPassword || '');
+          }
+        } catch (syncError) {
+          console.error('[SETTINGS] Failed to sync campaign settings from server:', syncError);
+        }
       }
     } catch (error) {
-      console.error('Failed to load campaign settings:', error);
+      console.error('[SETTINGS] Failed to load campaign settings:', error);
     }
   };
 

@@ -237,6 +237,7 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   console.log('[mergeData] ========== TIMESTAMP-BASED MERGE START ==========');
   console.log('[mergeData] Merging data - local:', local.length, 'remote:', remote.length);
   const merged = new Map<string, T>();
+  const seenIds = new Set<string>();
   
   // CRITICAL: Normalize timestamps - treat missing/zero as oldest (epoch 0)
   const normalizeTimestamp = (ts?: number): number => {
@@ -249,6 +250,13 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   
   // First, add all local items with their timestamps
   local.forEach(item => {
+    // Prevent duplicates in local data itself
+    if (seenIds.has(item.id)) {
+      console.log('[mergeData] ⚠️ SKIPPING DUPLICATE in local data:', item.id);
+      return;
+    }
+    seenIds.add(item.id);
+    
     // Ensure all items have timestamps
     const normalized = { ...item, updatedAt: normalizeTimestamp(item.updatedAt) };
     merged.set(item.id, normalized as T);
@@ -266,6 +274,22 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
   let staleDataBlocked = 0;
   
   remote.forEach(item => {
+    // Prevent duplicate IDs in remote data
+    if (!seenIds.has(item.id)) {
+      seenIds.add(item.id);
+    } else {
+      // Already processed this ID from local or earlier in remote
+      const existing = merged.get(item.id);
+      const remoteTime = normalizeTimestamp(item.updatedAt);
+      const existingTime = normalizeTimestamp(existing?.updatedAt);
+      
+      // Only update if remote is actually newer
+      if (remoteTime <= existingTime) {
+        console.log('[mergeData] ⚠️ SKIPPING DUPLICATE in remote data (not newer):', item.id);
+        return;
+      }
+    }
+    
     const existing = merged.get(item.id);
     const remoteTime = normalizeTimestamp(item.updatedAt);
     const localTime = normalizeTimestamp(existing?.updatedAt);
