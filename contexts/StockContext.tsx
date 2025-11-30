@@ -3339,6 +3339,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     setViewMode,
     isSyncPaused,
     toggleSyncPause,
+    syncAll,
   ]);
 
   return <StockContext.Provider value={value}>{children}</StockContext.Provider>;

@@ -186,7 +186,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
       console.error('[StoresContext] ========================================');
       throw error;
     }
-  }, [storeProducts, currentUser]);
+  }, [storeProducts]);
 
   const importStoreProducts = useCallback(async (newProducts: Omit<StoreProduct, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
     const existingProductsMap = new Map(
