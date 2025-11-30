@@ -53,6 +53,7 @@ export default function CampaignsScreen() {
   
   const [isSending, setIsSending] = useState(false);
   const [testingSMS, setTestingSMS] = useState(false);
+  const [testingEmail, setTestingEmail] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmState, setConfirmState] = useState<{
     title: string;
@@ -200,6 +201,74 @@ export default function CampaignsScreen() {
 
   const removeAttachment = (index: number) => {
     setAttachments(attachments.filter((_, i) => i !== index));
+  };
+
+  const testEmailConnection = async () => {
+    try {
+      setTestingEmail(true);
+      console.log('[Email Test] Starting connection test...');
+
+      const smtpConfig = smtpHost && smtpUsername && smtpPassword ? {
+        host: smtpHost,
+        port: smtpPort,
+        username: smtpUsername,
+        password: smtpPassword,
+      } : null;
+
+      const imapConfig = imapHost && imapUsername && imapPassword ? {
+        host: imapHost,
+        port: imapPort,
+        username: imapUsername,
+        password: imapPassword,
+      } : null;
+
+      if (!smtpConfig && !imapConfig) {
+        Alert.alert('Configuration Missing', 'Please configure at least SMTP or IMAP settings before testing.');
+        return;
+      }
+
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+      const response = await fetch(`${apiUrl}/api/test-email-connection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          smtpConfig,
+          imapConfig,
+        }),
+      });
+
+      const result = await response.json();
+      console.log('[Email Test] Response:', result);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Connection test failed');
+      }
+
+      const { results } = result;
+      let message = '';
+
+      if (results.smtp.message) {
+        message += `SMTP: ${results.smtp.message}\n`;
+      }
+      if (results.imap.message) {
+        message += `IMAP: ${results.imap.message}`;
+      }
+
+      const allSuccess = (!smtpConfig || results.smtp.success) && (!imapConfig || results.imap.success);
+
+      Alert.alert(
+        allSuccess ? 'Connection Test Successful' : 'Connection Test Results',
+        message.trim(),
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('[Email Test] Error:', error);
+      Alert.alert('Connection Test Failed', (error as Error).message);
+    } finally {
+      setTestingEmail(false);
+    }
   };
 
   const testSMSConnection = async () => {
@@ -662,12 +731,26 @@ export default function CampaignsScreen() {
                   autoCapitalize="none"
                 />
 
-                <TouchableOpacity
-                  style={styles.saveSettingsButton}
-                  onPress={saveCampaignSettings}
-                >
-                  <Text style={styles.saveSettingsButtonText}>Save Email Settings</Text>
-                </TouchableOpacity>
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.testButton]}
+                    onPress={testEmailConnection}
+                    disabled={testingEmail}
+                  >
+                    {testingEmail ? (
+                      <ActivityIndicator size="small" color={Colors.light.tint} />
+                    ) : (
+                      <Text style={styles.testButtonText}>Test Connection</Text>
+                    )}
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton]}
+                    onPress={saveCampaignSettings}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 
@@ -794,14 +877,14 @@ export default function CampaignsScreen() {
             <Text style={styles.sectionTitle}>SMS Settings</Text>
             
             <TouchableOpacity
-              style={styles.testButton}
+              style={styles.smsTestButton}
               onPress={testSMSConnection}
               disabled={testingSMS}
             >
               {testingSMS ? (
                 <ActivityIndicator size="small" color={Colors.light.tint} />
               ) : (
-                <Text style={styles.testButtonText}>Test SMS Connection</Text>
+                <Text style={styles.smsTestButtonText}>Test SMS Connection</Text>
               )}
             </TouchableOpacity>
 
@@ -1077,7 +1160,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.light.tabIconDefault,
   },
-  testButton: {
+  smsTestButton: {
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
@@ -1087,7 +1170,7 @@ const styles = StyleSheet.create({
     alignItems: 'center' as const,
     marginBottom: 12,
   },
-  testButtonText: {
+  smsTestButtonText: {
     fontSize: 14,
     fontWeight: '600' as const,
     color: Colors.light.tint,
@@ -1221,13 +1304,31 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.border,
     marginVertical: 20,
   },
-  saveSettingsButton: {
+  buttonRow: {
+    flexDirection: 'row' as const,
+    gap: 12,
+    marginTop: 20,
+  },
+  actionButton: {
+    flex: 1,
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 8,
-    backgroundColor: Colors.light.tint,
     alignItems: 'center' as const,
-    marginTop: 20,
+    justifyContent: 'center' as const,
+  },
+  testButton: {
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  testButtonText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
+  },
+  saveSettingsButton: {
+    backgroundColor: Colors.light.tint,
   },
   saveSettingsButtonText: {
     fontSize: 15,

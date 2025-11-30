@@ -101,6 +101,87 @@ app.get("/api/health", (c) => {
   return c.json({ status: "healthy", timestamp: Date.now() });
 });
 
+app.post("/api/test-email-connection", async (c) => {
+  try {
+    console.log('[Email Test] Starting connection test...');
+    const body = await c.req.json();
+    const { smtpConfig, imapConfig } = body;
+
+    const results: any = {
+      smtp: { success: false, message: '' },
+      imap: { success: false, message: '' },
+    };
+
+    if (smtpConfig && smtpConfig.host && smtpConfig.username && smtpConfig.password) {
+      try {
+        console.log('[Email Test] Testing SMTP connection...');
+        const transporter = nodemailer.createTransport({
+          host: smtpConfig.host,
+          port: parseInt(smtpConfig.port),
+          secure: parseInt(smtpConfig.port) === 465,
+          auth: {
+            user: smtpConfig.username,
+            pass: smtpConfig.password,
+          },
+        });
+
+        await transporter.verify();
+        results.smtp.success = true;
+        results.smtp.message = 'SMTP connection successful';
+        console.log('[Email Test] SMTP connection verified');
+      } catch (error: any) {
+        results.smtp.success = false;
+        results.smtp.message = `SMTP Error: ${error.message}`;
+        console.error('[Email Test] SMTP error:', error);
+      }
+    } else {
+      results.smtp.message = 'SMTP settings incomplete';
+    }
+
+    if (imapConfig && imapConfig.host && imapConfig.username && imapConfig.password) {
+      try {
+        console.log('[Email Test] Testing IMAP connection...');
+        const Imap = require('imap');
+        
+        const imap = new Imap({
+          user: imapConfig.username,
+          password: imapConfig.password,
+          host: imapConfig.host,
+          port: parseInt(imapConfig.port),
+          tls: parseInt(imapConfig.port) === 993,
+          tlsOptions: { rejectUnauthorized: false },
+        });
+
+        await new Promise((resolve, reject) => {
+          imap.once('ready', () => {
+            imap.end();
+            resolve(true);
+          });
+          imap.once('error', (err: any) => {
+            reject(err);
+          });
+          imap.connect();
+        });
+
+        results.imap.success = true;
+        results.imap.message = 'IMAP connection successful';
+        console.log('[Email Test] IMAP connection verified');
+      } catch (error: any) {
+        results.imap.success = false;
+        results.imap.message = `IMAP Error: ${error.message}`;
+        console.error('[Email Test] IMAP error:', error);
+      }
+    } else {
+      results.imap.message = 'IMAP settings incomplete';
+    }
+
+    return c.json({ success: true, results });
+  } catch (error: any) {
+    console.error('[Email Test] Unexpected error:', error);
+    return c.json({ success: false, error: error?.message || 'Connection test failed' }, 500);
+  }
+});
+
 app.post("/api/send-email", async (c) => {
   try {
     console.log('[Email] Starting send email request...');
