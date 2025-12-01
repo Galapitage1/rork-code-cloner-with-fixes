@@ -114,10 +114,14 @@ export default function ProductsScreen() {
       // CRITICAL: Read ALL products from storage including deleted ones to prevent conflicts
       console.log('[processExcelFile] Reading ALL products from storage (including deleted) to check for conflicts');
       const allProductsData = await AsyncStorage.getItem('@stock_app_products');
-      const allProducts: Product[] = allProductsData ? JSON.parse(allProductsData) : products;
+      const allProducts: Product[] = allProductsData ? JSON.parse(allProductsData) : [];
       console.log('[processExcelFile] Found', allProducts.length, 'total products in storage (active + deleted)');
       
-      const { products: parsedProducts, errors } = parseExcelFile(base64, products);
+      // Filter active products for Excel parser
+      const activeProducts = allProducts.filter(p => !p.deleted);
+      console.log('[processExcelFile] Found', activeProducts.length, 'active products');
+      
+      const { products: parsedProducts, errors } = parseExcelFile(base64, activeProducts);
 
       if (errors.length > 0) {
         Alert.alert('Import Warnings', errors.join('\n'));
@@ -135,7 +139,19 @@ export default function ProductsScreen() {
       const updatedProducts: { name: string; unit: string; changes: string[] }[] = [];
       const skippedDeleted: string[] = [];
 
+      // Keep track of which products we've processed to avoid duplicates in this import
+      const processedKeys = new Set<string>();
+      
       for (const parsedProduct of parsedProducts) {
+        const productKey = `${parsedProduct.name.toLowerCase().trim()}_${parsedProduct.unit.toLowerCase().trim()}`;
+        
+        // Skip if we already processed this product in this import
+        if (processedKeys.has(productKey)) {
+          console.log('[processExcelFile] Skipping duplicate in Excel file:', parsedProduct.name);
+          continue;
+        }
+        processedKeys.add(productKey);
+        
         // Check in ALL products (including deleted ones) to prevent conflicts
         const existing = allProducts.find(
           p => p.name.toLowerCase().trim() === parsedProduct.name.toLowerCase().trim() &&
@@ -144,18 +160,23 @@ export default function ProductsScreen() {
 
         if (existing && existing.deleted) {
           // Product was previously deleted - reactivate it with new data
-          console.log('[processExcelFile] Found deleted product:', existing.name, '- reactivating with new data');
+          console.log('[processExcelFile] Found deleted product:', existing.name, '- reactivating with new data from Excel');
           const reactivated: Product = {
             ...existing,
             ...parsedProduct,
+            id: existing.id, // Keep the original ID
             deleted: false,
             updatedAt: Date.now(),
           };
           
+          // Update in the allProducts array
           const updatedAllProducts = allProducts.map(p =>
             p.id === existing.id ? reactivated : p
           );
           await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedAllProducts));
+          
+          // Update local allProducts array for next iterations
+          allProducts.splice(allProducts.findIndex(p => p.id === existing.id), 1, reactivated);
           reactivatedCount++;
         } else if (existing) {
           const changes: string[] = [];
@@ -175,12 +196,29 @@ export default function ProductsScreen() {
               showInStock: parsedProduct.showInStock,
               salesBasedRawCalc: parsedProduct.salesBasedRawCalc,
             };
-            await updateProduct(existing.id, updates);
+            
+            // Update in allProducts array directly
+            const updatedProduct = { ...existing, ...updates, updatedAt: Date.now() };
+            const updatedAllProducts = allProducts.map(p => p.id === existing.id ? updatedProduct : p);
+            await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedAllProducts));
+            
+            // Update local allProducts array for next iterations
+            allProducts.splice(allProducts.findIndex(p => p.id === existing.id), 1, updatedProduct);
+            
             updatedProducts.push({ name: parsedProduct.name, unit: parsedProduct.unit, changes });
             updatedCount++;
           }
         } else {
-          await addProduct(parsedProduct);
+          // Brand new product - add it
+          const newProduct: Product = {
+            ...parsedProduct,
+            id: parsedProduct.id || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            deleted: false,
+            updatedAt: Date.now(),
+          };
+          
+          allProducts.push(newProduct);
+          await AsyncStorage.setItem('@stock_app_products', JSON.stringify(allProducts));
           newCount++;
         }
       }
