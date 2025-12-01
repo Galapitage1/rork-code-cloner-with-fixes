@@ -139,6 +139,7 @@ export default function SalesUploadScreen() {
         const productPair = getProductPair(rawProduct);
         
         if (productPair) {
+          console.log(`\n=== DEDUCTING RAW MATERIAL WITH CONVERSION: ${rawRow.rawName} ===`);
           const invStock = inventoryStocks.find(s => s.productId === productPair.wholeProductId);
           if (!invStock) {
             console.log(`SalesUpload: No inventory found for raw product ${rawRow.rawName}`);
@@ -160,6 +161,10 @@ export default function SalesUploadScreen() {
             slicesDeducted = Math.round(totalSlices % conversionFactor);
           }
 
+          console.log(`  Consuming: ${rawRow.consumed} ${rawRow.rawUnit} = ${wholeDeducted}W + ${slicesDeducted}S`);
+          console.log(`  DEDUCTING FROM INVENTORY (for Inventory Section)`);
+          console.log(`  RECORDING AS SALES DEDUCTION (for Live Inventory Sold column)`);
+
           try {
             await deductInventoryFromSales(
               outletName,
@@ -168,22 +173,26 @@ export default function SalesUploadScreen() {
               wholeDeducted,
               slicesDeducted
             );
-            console.log(`SalesUpload: Deducted ${wholeDeducted} whole + ${slicesDeducted} slices of raw ${rawRow.rawName}`);
+            console.log(`  ✓ Deducted from Inventory + Recorded sales deduction`);
+            console.log(`  ✓ This will show as -${wholeDeducted}W -${slicesDeducted}S in Live Inventory Sold row`);
           } catch (error) {
             console.error(`SalesUpload: Failed to deduct inventory for raw ${rawRow.rawName}:`, error);
           }
+          console.log(`=== END DEDUCTING RAW MATERIAL WITH CONVERSION ===\n`);
         } else {
-          console.log(`SalesUpload: No product pair found for raw ${rawRow.rawName}, checking Production Stock (Other Units)`);
+          console.log(`\n=== DEDUCTING RAW MATERIAL (Other Units): ${rawRow.rawName} ===`);
+          console.log(`  No product pair found - this is a Production Stock (Other Units) product`);
           
           const existingDeduction = salesDeductions.find(
             d => d.outletName === outletName && d.productId === rawProduct.id && d.salesDate === salesDate
           );
           
           if (existingDeduction) {
-            console.log(`SalesUpload: Sales already processed for raw ${rawRow.rawName} at ${outletName} on ${salesDate}`);
+            console.log(`  Sales already processed for raw ${rawRow.rawName} at ${outletName} on ${salesDate}`);
             continue;
           }
 
+          console.log(`  STEP 1: Deducting ${rawRow.consumed} ${rawRow.rawUnit} from Production Stock checks`);
           const productionOutletNames = outlets.filter(o => o.outletType === 'production').map(o => o.name);
           const allProductionStockChecks = stockChecks.filter(c => productionOutletNames.includes(c.outlet || ''));
           
@@ -204,10 +213,11 @@ export default function SalesUploadScreen() {
             }
           }
           
-          console.log(`SalesUpload: Total available qty for raw ${rawRow.rawName} in Production Stock: ${totalAvailableQty}`);
+          console.log(`  Total available qty in Production Stock: ${totalAvailableQty} ${rawRow.rawUnit}`);
           
           if (totalAvailableQty < rawRow.consumed) {
-            console.log(`SalesUpload: Insufficient stock in Production Stock for raw ${rawRow.rawName}. Available: ${totalAvailableQty}, Required: ${rawRow.consumed}`);
+            console.log(`  ⚠️ Insufficient stock! Available: ${totalAvailableQty}, Required: ${rawRow.consumed}`);
+            console.log(`  Skipping deduction for this product`);
             continue;
           }
 
@@ -222,25 +232,33 @@ export default function SalesUploadScreen() {
             const count = check.counts[countIndex];
             const receivedStock = count.receivedStock || 0;
             const wastage = count.wastage || 0;
+            const currentQuantity = count.quantity || 0;
             const netStock = receivedStock - wastage;
             
             if (netStock <= 0) continue;
             
             const deductAmount = Math.min(netStock, remainingToDeduct);
             const updatedReceivedStock = Math.max(0, receivedStock - deductAmount);
+            const updatedQuantity = Math.max(0, currentQuantity - deductAmount);
+            
+            console.log(`  Deducting ${deductAmount} from check ${check.id} (outlet: ${check.outlet})`);
+            console.log(`    Before: receivedStock=${receivedStock}, quantity=${currentQuantity}`);
+            console.log(`    After: receivedStock=${updatedReceivedStock}, quantity=${updatedQuantity}`);
             
             const updatedCounts = [...check.counts];
             updatedCounts[countIndex] = {
               ...count,
               receivedStock: updatedReceivedStock,
+              quantity: updatedQuantity,
             };
             
             await updateStockCheck(check.id, updatedCounts);
             remainingToDeduct -= deductAmount;
             
-            console.log(`SalesUpload: Deducted ${deductAmount} of raw ${rawRow.rawName} from production stock check ${check.id}`);
+            console.log(`  ✓ Deducted ${deductAmount} from production stock check (remaining: ${remainingToDeduct})`);
           }
 
+          console.log(`  STEP 2: Recording sales deduction for Live Inventory`);
           try {
             await deductInventoryFromSales(
               outletName,
@@ -249,10 +267,12 @@ export default function SalesUploadScreen() {
               rawRow.consumed,
               0
             );
-            console.log(`SalesUpload: Successfully deducted ${rawRow.consumed} ${rawRow.rawUnit} of raw ${rawRow.rawName} from Production Stock`);
+            console.log(`  ✓ Recorded sales deduction - will show as -${rawRow.consumed} in Live Inventory Sold column`);
+            console.log(`  ✓ Inventory Section updated: -${rawRow.consumed} ${rawRow.rawUnit}`);
           } catch (error) {
-            console.error(`SalesUpload: Failed to record sales deduction for raw ${rawRow.rawName}:`, error);
+            console.error(`  ❌ Failed to record sales deduction:`, error);
           }
+          console.log(`=== END DEDUCTING RAW MATERIAL (Other Units) ===\n`);
         }
       }
     } catch (error) {
