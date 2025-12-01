@@ -1265,19 +1265,26 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           if (invIndex === -1) {
             const product = products.find(p => p.id === count.productId);
             console.log('handleReplaceAllInventory: Creating NEW inventory entry for sales outlet -', product?.name, '(no conversion, not in inventory)');
-            console.log('handleReplaceAllInventory: Initializing with 0 for production AND all sales outlets');
+            console.log('handleReplaceAllInventory: Initializing with 0 for production AND all sales outlets INCLUDING current outlet:', outlet.name);
             
             // CRITICAL: Initialize with all sales outlets to ensure they exist in the inventory structure
+            // Make sure the current outlet is also included in case it's not in salesOutlets
+            const allOutletsForInit = [...salesOutlets];
+            if (!allOutletsForInit.find(o => o.name === outlet.name)) {
+              console.log('handleReplaceAllInventory: Current outlet', outlet.name, 'not in salesOutlets, adding it');
+              allOutletsForInit.push(outlet);
+            }
+            
             const newInv: InventoryStock = {
               id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               productId: count.productId,
               productionWhole: 0, // Initialize with 0 for production
               productionSlices: 0,
-              outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+              outletStocks: allOutletsForInit.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
               updatedAt: Date.now(),
             };
             updatedInventoryStocks.push(newInv);
-            console.log('handleReplaceAllInventory: ✓ Created inventory entry with 0 for production and', salesOutlets.length, 'sales outlets for', product?.name);
+            console.log('handleReplaceAllInventory: ✓ Created inventory entry with 0 for production and', allOutletsForInit.length, 'outlets for', product?.name);
           }
         }
       });
@@ -1302,10 +1309,11 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           if (invIndex >= 0) {
             // Update existing inventory entry
             const existingInv = updatedInventoryStocks[invIndex];
-            const outletStockIndex = existingInv.outletStocks.findIndex(os => os.outletName === outlet.name);
+            let outletStockIndex = existingInv.outletStocks.findIndex(os => os.outletName === outlet.name);
             const updatedOutletStocks = [...existingInv.outletStocks];
             
             console.log('Replace All: Found existing inventory, outlet stock index:', outletStockIndex, 'outlet stocks count:', existingInv.outletStocks.length);
+            console.log('Replace All: Outlet stocks:', existingInv.outletStocks.map(os => os.outletName));
             
             if (outletStockIndex >= 0) {
               const oldWhole = updatedOutletStocks[outletStockIndex].whole;
@@ -1320,13 +1328,17 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
             } else {
               console.log('Replace All: Creating new outlet stock entry for', product?.name, 'at', outlet.name);
               console.log('  Setting Opening=0, Received=' + qty + ' (no conversion)');
-              console.log('  WARNING: Outlet stock entry was missing but should have been created in initialization step!');
+              console.log('  CRITICAL FIX: Outlet stock entry was missing, creating it now');
               
               updatedOutletStocks.push({
                 outletName: outlet.name,
                 whole: qty,
                 slices: 0,
               });
+              
+              // Update outletStockIndex since we just added the entry
+              outletStockIndex = updatedOutletStocks.length - 1;
+              console.log('Replace All: ✓ Created outlet stock entry at index', outletStockIndex);
             }
             
             updatedInventoryStocks[invIndex] = {
@@ -1334,7 +1346,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
               outletStocks: updatedOutletStocks,
               updatedAt: Date.now(),
             };
-            console.log('Replace All: ✓ Updated existing inventory stock for', product?.name);
+            console.log('Replace All: ✓ Updated inventory stock for', product?.name, 'with', updatedOutletStocks.length, 'outlet stocks');
           } else {
             // CRITICAL FIX: Inventory entry doesn't exist - create it now
             console.log('Replace All: ⚠️ WARNING - No inventory entry exists (should have been created in initialization step)');
