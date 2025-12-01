@@ -624,11 +624,23 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           console.log('With current stock values from this stock check');
           console.log('Number of products in stock check:', stockCheck.counts.length);
           
-          // Read fresh inventory from AsyncStorage to ensure we have the latest data
-          console.log('Reading fresh inventory data from storage before replacement...');
+          // CRITICAL: Read COMPLETELY FRESH inventory from AsyncStorage
+          // This prevents using stale state data from React
+          console.log('Reading COMPLETELY FRESH inventory data from AsyncStorage before replacement...');
           const freshInventoryData = await AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS);
-          const freshInventory = freshInventoryData ? JSON.parse(freshInventoryData) : inventoryStocks;
-          console.log('Fresh inventory stocks count:', freshInventory.length);
+          let freshInventory: InventoryStock[] = [];
+          if (freshInventoryData) {
+            try {
+              freshInventory = JSON.parse(freshInventoryData).filter((i: any) => !i?.deleted);
+              console.log('Fresh inventory stocks count from AsyncStorage:', freshInventory.length);
+            } catch (parseError) {
+              console.error('Failed to parse fresh inventory data:', parseError);
+              freshInventory = [...inventoryStocks];
+            }
+          } else {
+            console.log('No fresh inventory data in AsyncStorage, using current state as fallback');
+            freshInventory = [...inventoryStocks];
+          }
           
           await handleReplaceAllInventory(stockCheck, outlet, freshInventory);
           
@@ -1691,7 +1703,24 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           const outlet = outlets.find(o => o.name === (newOutlet || originalCheck.outlet));
           if (outlet) {
             console.log('Calling handleReplaceAllInventory for outlet:', outlet.name);
-            await handleReplaceAllInventory(updatedCheck, outlet, inventoryStocks);
+            
+            // CRITICAL: Read COMPLETELY FRESH inventory from AsyncStorage
+            console.log('Reading COMPLETELY FRESH inventory data from AsyncStorage...');
+            const freshInventoryData = await AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS);
+            let freshInventory: InventoryStock[] = [];
+            if (freshInventoryData) {
+              try {
+                freshInventory = JSON.parse(freshInventoryData).filter((i: any) => !i?.deleted);
+                console.log('Fresh inventory stocks count from AsyncStorage:', freshInventory.length);
+              } catch (parseError) {
+                console.error('Failed to parse fresh inventory data:', parseError);
+                freshInventory = [...inventoryStocks];
+              }
+            } else {
+              freshInventory = [...inventoryStocks];
+            }
+            
+            await handleReplaceAllInventory(updatedCheck, outlet, freshInventory);
             console.log('=== UPDATE: REPLACE ALL INVENTORY COMPLETE ===\n');
           }
         }
