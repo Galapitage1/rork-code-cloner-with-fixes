@@ -3,7 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
 const STORAGE_SIZE_LIMIT_MB = 6;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
-const RETENTION_DAYS = 7;
+const RETENTION_DAYS = 3;
+const CLEANUP_INTERVAL_DAYS = 3;
 
 export async function getStorageSize(): Promise<number> {
   try {
@@ -28,16 +29,22 @@ export async function shouldCleanupToday(): Promise<boolean> {
   try {
     const lastCleanup = await AsyncStorage.getItem(LAST_CLEANUP_KEY);
     if (!lastCleanup) {
+      console.log('[STORAGE CLEANUP] No previous cleanup found, running cleanup now');
       return true;
     }
     
-    const lastCleanupDate = new Date(parseInt(lastCleanup));
-    const today = new Date();
+    const lastCleanupTime = parseInt(lastCleanup);
+    const now = Date.now();
+    const daysSinceLastCleanup = (now - lastCleanupTime) / (24 * 60 * 60 * 1000);
     
-    lastCleanupDate.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
+    console.log(`[STORAGE CLEANUP] Days since last cleanup: ${daysSinceLastCleanup.toFixed(2)}`);
     
-    return lastCleanupDate.getTime() !== today.getTime();
+    if (daysSinceLastCleanup >= CLEANUP_INTERVAL_DAYS) {
+      console.log(`[STORAGE CLEANUP] ${CLEANUP_INTERVAL_DAYS} days passed, running cleanup now`);
+      return true;
+    }
+    
+    return false;
   } catch (error) {
     console.error('shouldCleanupToday: Error checking cleanup date', error);
     return true;
@@ -55,6 +62,15 @@ export async function cleanupOldData(): Promise<void> {
     const retentionDaysAgo = currentDate - (RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const retentionDaysAgoStr = new Date(retentionDaysAgo).toISOString().split('T')[0];
     
+    console.log(`[STORAGE CLEANUP] Retention cutoff: Keep data newer than ${retentionDaysAgoStr}`);
+    console.log(`[STORAGE CLEANUP] This will delete data older than ${RETENTION_DAYS} days`);
+    
+    const beforeSize = await getStorageSize();
+    const beforeSizeMB = (beforeSize / (1024 * 1024)).toFixed(2);
+    console.log(`[STORAGE CLEANUP] Storage before cleanup: ${beforeSizeMB}MB`);
+    
+    let totalItemsCleaned = 0;
+    
     const stockChecksKey = '@stock_app_stock_checks';
     if (allKeys.includes(stockChecksKey)) {
       try {
@@ -71,6 +87,7 @@ export async function cleanupOldData(): Promise<void> {
             if (filtered.length !== stockChecks.length) {
               await AsyncStorage.setItem(stockChecksKey, JSON.stringify(filtered));
               console.log(`[STORAGE CLEANUP] ✓ Cleaned ${stockChecks.length - filtered.length} old stock checks (older than ${RETENTION_DAYS} days)`);
+              totalItemsCleaned += stockChecks.length - filtered.length;
             }
           }
         }
@@ -93,7 +110,57 @@ export async function cleanupOldData(): Promise<void> {
       'customers',
     ];
     
-    let totalItemsCleaned = 0;
+    const requestsKey = '@stock_app_requests';
+    if (allKeys.includes(requestsKey)) {
+      try {
+        const requestsData = await AsyncStorage.getItem(requestsKey);
+        if (requestsData) {
+          const requests = JSON.parse(requestsData);
+          if (Array.isArray(requests)) {
+            const filtered = requests.filter((req: any) => {
+              if (req.deleted) return false;
+              if (!req.requestedAt && !req.date) return true;
+              const itemDate = req.requestedAt || new Date(req.date).getTime();
+              return itemDate >= retentionDaysAgo;
+            });
+            
+            if (filtered.length !== requests.length) {
+              await AsyncStorage.setItem(requestsKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${requests.length - filtered.length} old requests (older than ${RETENTION_DAYS} days)`);
+              totalItemsCleaned += requests.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning requests:', error);
+      }
+    }
+    
+    const activityLogsKey = '@stock_app_activity_logs';
+    if (allKeys.includes(activityLogsKey)) {
+      try {
+        const logsData = await AsyncStorage.getItem(activityLogsKey);
+        if (logsData) {
+          const logs = JSON.parse(logsData);
+          if (Array.isArray(logs)) {
+            const filtered = logs.filter((log: any) => {
+              if (log.deleted) return false;
+              if (!log.createdAt && !log.date) return true;
+              const itemDate = log.createdAt || new Date(log.date).getTime();
+              return itemDate >= retentionDaysAgo;
+            });
+            
+            if (filtered.length !== logs.length) {
+              await AsyncStorage.setItem(activityLogsKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${logs.length - filtered.length} old activity logs (older than ${RETENTION_DAYS} days)`);
+              totalItemsCleaned += logs.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning activity logs:', error);
+      }
+    }
     
     for (const key of allKeys) {
       if (preservedKeys.includes(key) ||
@@ -152,7 +219,14 @@ export async function cleanupOldData(): Promise<void> {
     
     const finalSize = await getStorageSize();
     const finalSizeMB = (finalSize / (1024 * 1024)).toFixed(2);
-    console.log(`[STORAGE CLEANUP] ✓ Complete. Cleaned ${totalItemsCleaned} items. Storage: ${finalSizeMB}MB/${STORAGE_SIZE_LIMIT_MB}MB`);
+    const savedMB = ((beforeSize - finalSize) / (1024 * 1024)).toFixed(2);
+    console.log(`[STORAGE CLEANUP] ✓ Complete!`);
+    console.log(`[STORAGE CLEANUP]   - Cleaned ${totalItemsCleaned} items`);
+    console.log(`[STORAGE CLEANUP]   - Storage before: ${beforeSizeMB}MB`);
+    console.log(`[STORAGE CLEANUP]   - Storage after: ${finalSizeMB}MB`);
+    console.log(`[STORAGE CLEANUP]   - Space freed: ${savedMB}MB`);
+    console.log(`[STORAGE CLEANUP]   - Next cleanup: in ${CLEANUP_INTERVAL_DAYS} days`);
+    console.log(`[STORAGE CLEANUP]   - Keeping data from: ${retentionDaysAgoStr} onwards`);
     
   } catch (error) {
     console.error('[STORAGE CLEANUP] ✗ Error during cleanup:', error);
