@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Platform, ActivityIndicator } from 'react-native';
 import { useState, useMemo } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { Package, Edit2, Download, Trash2, X, Save, Upload } from 'lucide-react-native';
+import { Package, Edit2, Download, Trash2, X, Save, Upload, Plus } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { VoiceSearchInput } from '@/components/VoiceSearchInput';
 import { useStock } from '@/contexts/StockContext';
@@ -59,6 +59,9 @@ export default function InventoryScreen() {
   });
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isSavingOtherUnits, setIsSavingOtherUnits] = useState<boolean>(false);
+  const [showAddProductModal, setShowAddProductModal] = useState<boolean>(false);
+  const [addProductModalType, setAddProductModalType] = useState<'conversion' | 'other'>('conversion');
+  const [selectedProductToAdd, setSelectedProductToAdd] = useState<string>('');
   const [showImportProgress, setShowImportProgress] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{
     currentRow: number;
@@ -481,6 +484,126 @@ export default function InventoryScreen() {
     });
 
     setShowEditOtherUnitsModal(true);
+  };
+
+  const handleOpenAddProductModal = (type: 'conversion' | 'other') => {
+    if (!isSuperAdmin) {
+      Alert.alert('Permission Denied', 'Only super admins can add products to inventory.');
+      return;
+    }
+    setAddProductModalType(type);
+    setSelectedProductToAdd('');
+    setShowAddProductModal(true);
+  };
+
+  const handleAddProduct = async () => {
+    if (!selectedProductToAdd) {
+      Alert.alert('Error', 'Please select a product.');
+      return;
+    }
+
+    try {
+      const product = products.find(p => p.id === selectedProductToAdd);
+      if (!product) {
+        Alert.alert('Error', 'Product not found.');
+        return;
+      }
+
+      if (addProductModalType === 'conversion') {
+        const productPair = getProductPair(product);
+        if (!productPair) {
+          Alert.alert('Error', 'This product does not have a conversion pair. Please add it to "Other Units" section.');
+          return;
+        }
+
+        const wholeProductId = productPair.whole?.id;
+        if (!wholeProductId) {
+          Alert.alert('Error', 'Invalid product pair.');
+          return;
+        }
+
+        const existingInv = inventoryStocks.find(inv => inv.productId === wholeProductId);
+        if (existingInv) {
+          Alert.alert('Error', `${productPair.whole?.name} is already in inventory.`);
+          return;
+        }
+
+        const newInv: InventoryStock = {
+          id: `inv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          productId: wholeProductId,
+          productionWhole: 0,
+          productionSlices: 0,
+          prodsReqWhole: 0,
+          prodsReqSlices: 0,
+          outletStocks: salesOutlets.map(o => ({ outletName: o.name, whole: 0, slices: 0 })),
+          updatedAt: Date.now(),
+        };
+
+        await addInventoryStock(newInv);
+        Alert.alert('Success', `${productPair.whole?.name} has been added to inventory.`);
+      } else {
+        const productPair = getProductPair(product);
+        if (productPair) {
+          Alert.alert('Error', 'This product has conversion units. Please add it to the "Products with conversion units" section.');
+          return;
+        }
+
+        const firstProductionOutlet = productionOutlets[0];
+        if (!firstProductionOutlet) {
+          Alert.alert('Error', 'No production outlet found. Please create a production outlet first.');
+          return;
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        const existingCheck = stockChecks.find(
+          check => check.outlet === firstProductionOutlet.name && check.date === today
+        );
+
+        if (existingCheck) {
+          const productAlreadyExists = existingCheck.counts.find(c => c.productId === product.id);
+          if (productAlreadyExists) {
+            Alert.alert('Error', `${product.name} is already in inventory (Other Units).`);
+            return;
+          }
+
+          const updatedCounts = [
+            ...existingCheck.counts,
+            {
+              productId: product.id,
+              quantity: 0,
+              receivedStock: 0,
+              wastage: 0,
+            }
+          ];
+          await updateStockCheck(existingCheck.id, updatedCounts, undefined, false);
+        } else {
+          const newStockCheck: StockCheck = {
+            id: `check-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            date: today,
+            timestamp: Date.now(),
+            outlet: firstProductionOutlet.name,
+            counts: [
+              {
+                productId: product.id,
+                quantity: 0,
+                receivedStock: 0,
+                wastage: 0,
+              }
+            ],
+            updatedAt: Date.now(),
+          };
+          await saveStockCheck(newStockCheck, true);
+        }
+
+        Alert.alert('Success', `${product.name} has been added to inventory (Other Units).`);
+      }
+
+      setShowAddProductModal(false);
+      setSelectedProductToAdd('');
+    } catch (error) {
+      console.error('Failed to add product to inventory:', error);
+      Alert.alert('Error', 'Failed to add product to inventory.');
+    }
   };
 
   const handleSaveOtherUnitsEdit = async () => {
@@ -1332,6 +1455,17 @@ export default function InventoryScreen() {
         </View>
 
         <View style={styles.tableHeaderWrapper}>
+          <View style={styles.tableHeaderTitleRow}>
+            <Text style={styles.tableHeaderTitle}>Products with Conversion Units</Text>
+            {isSuperAdmin && (
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={() => handleOpenAddProductModal('conversion')}
+              >
+                <Plus size={20} color={Colors.light.tint} />
+              </TouchableOpacity>
+            )}
+          </View>
           <ScrollView 
             horizontal 
             showsHorizontalScrollIndicator={false}
@@ -1451,8 +1585,20 @@ export default function InventoryScreen() {
               <>
                 <View style={styles.sectionDivider} />
                 <View style={[styles.sectionHeaderContainer, styles.stickyOtherUnitsHeader]}>
-                  <Text style={styles.sectionHeaderText}>Inventory Stocks (Other Units)</Text>
-                  <Text style={styles.sectionHeaderSubtext}>Products without unit conversions from production outlets</Text>
+                  <View style={styles.sectionHeaderRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sectionHeaderText}>Inventory Stocks (Other Units)</Text>
+                      <Text style={styles.sectionHeaderSubtext}>Products without unit conversions from production outlets</Text>
+                    </View>
+                    {isSuperAdmin && (
+                      <TouchableOpacity
+                        style={styles.addButton}
+                        onPress={() => handleOpenAddProductModal('other')}
+                      >
+                        <Plus size={20} color={Colors.light.tint} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
 
                 <View style={[styles.tableHeader, styles.stickyOtherUnitsTableHeader]}>
@@ -1889,6 +2035,97 @@ export default function InventoryScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={showAddProductModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddProductModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                Add Product to Inventory
+              </Text>
+              <TouchableOpacity onPress={() => setShowAddProductModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              <Text style={styles.inputLabel}>Select Product</Text>
+              <View style={styles.pickerContainer}>
+                <ScrollView style={styles.pickerScrollView} nestedScrollEnabled>
+                  {(() => {
+                    const availableProducts = addProductModalType === 'conversion'
+                      ? productsWithConversions.filter(p => {
+                          const productPair = getProductPair(p);
+                          if (!productPair) return false;
+                          const wholeProductId = productPair.whole?.id;
+                          return !inventoryStocks.find(inv => inv.productId === wholeProductId);
+                        })
+                      : productsWithoutConversions.filter(p => {
+                          return !nonConversionStocks.has(p.id);
+                        });
+
+                    if (availableProducts.length === 0) {
+                      return (
+                        <Text style={styles.noProductsText}>
+                          No products available to add.
+                          {addProductModalType === 'conversion'
+                            ? ' All products with conversions are already in inventory.'
+                            : ' All products without conversions are already in inventory.'}
+                        </Text>
+                      );
+                    }
+
+                    return availableProducts.map((product) => {
+                      const productPair = getProductPair(product);
+                      const displayName = productPair?.whole?.name || product.name;
+                      const isSelected = selectedProductToAdd === (productPair?.whole?.id || product.id);
+
+                      return (
+                        <TouchableOpacity
+                          key={product.id}
+                          style={[styles.pickerItem, isSelected && styles.pickerItemSelected]}
+                          onPress={() => setSelectedProductToAdd(productPair?.whole?.id || product.id)}
+                        >
+                          <Text style={[styles.pickerItemText, isSelected && styles.pickerItemTextSelected]}>
+                            {displayName}
+                          </Text>
+                          {product.unit && (
+                            <Text style={[styles.pickerItemSubtext, isSelected && styles.pickerItemSubtextSelected]}>
+                              {product.unit}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    });
+                  })()}
+                </ScrollView>
+              </View>
+            </View>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={() => setShowAddProductModal(false)}
+              >
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, !selectedProductToAdd && styles.saveButtonDisabled]}
+                onPress={handleAddProduct}
+                disabled={!selectedProductToAdd}
+              >
+                <Plus size={20} color={Colors.light.card} />
+                <Text style={styles.buttonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -2280,5 +2517,75 @@ const styles = StyleSheet.create({
     position: 'sticky' as any,
     top: 60,
     zIndex: 19,
+  },
+  tableHeaderTitleRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: Colors.light.card,
+  },
+  tableHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  addButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.light.card,
+    borderWidth: 2,
+    borderColor: Colors.light.tint,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+  },
+  pickerContainer: {
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    maxHeight: 300,
+    marginTop: 8,
+  },
+  pickerScrollView: {
+    maxHeight: 300,
+  },
+  pickerItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  pickerItemSelected: {
+    backgroundColor: Colors.light.tint,
+  },
+  pickerItemText: {
+    fontSize: 16,
+    color: Colors.light.text,
+    fontWeight: '500' as const,
+  },
+  pickerItemTextSelected: {
+    color: Colors.light.card,
+    fontWeight: '700' as const,
+  },
+  pickerItemSubtext: {
+    fontSize: 13,
+    color: Colors.light.muted,
+    marginTop: 4,
+  },
+  pickerItemSubtextSelected: {
+    color: Colors.light.card,
+  },
+  noProductsText: {
+    padding: 16,
+    fontSize: 14,
+    color: Colors.light.muted,
+    textAlign: 'center' as const,
   },
 });
