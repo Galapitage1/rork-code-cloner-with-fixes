@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext, startTransition } from 'react';
 import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory } from '@/types';
 import { syncData } from '@/utils/syncData';
 
@@ -3337,20 +3337,53 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      // CRITICAL: Always update state immediately to show synced data
-      // React 18's automatic batching will batch all these updates together
-      console.log('StockContext syncAll: Updating React state with merged data...');
-      setProducts(activeProducts);
-      setStockChecks(activeStockChecks);
-      setRequests(activeRequests);
-      setOutlets(activeOutlets);
-      setProductConversions(activeConversions);
-      setInventoryStocks(activeInventory);
-      setSalesDeductions(activeSalesDeductions);
-      setReconcileHistory(activeReconcileHistory);
-      setCurrentStockCounts(newStockMap);
-      setLastSyncTime(Date.now());
-      console.log('StockContext syncAll: ✓ React state updated with all merged data');
+      // CRITICAL: Only update state if data has actually changed (deep equality check)
+      // Use startTransition for background syncs to prevent UI disruption
+      console.log('StockContext syncAll: Checking for data changes before updating state...');
+      
+      const hasProductsChanged = JSON.stringify(activeProducts) !== JSON.stringify(products);
+      const hasStockChecksChanged = JSON.stringify(activeStockChecks) !== JSON.stringify(stockChecks);
+      const hasRequestsChanged = JSON.stringify(activeRequests) !== JSON.stringify(requests);
+      const hasOutletsChanged = JSON.stringify(activeOutlets) !== JSON.stringify(outlets);
+      const hasConversionsChanged = JSON.stringify(activeConversions) !== JSON.stringify(productConversions);
+      const hasInventoryChanged = JSON.stringify(activeInventory) !== JSON.stringify(inventoryStocks);
+      const hasSalesChanged = JSON.stringify(activeSalesDeductions) !== JSON.stringify(salesDeductions);
+      const hasHistoryChanged = JSON.stringify(activeReconcileHistory) !== JSON.stringify(reconcileHistory);
+      
+      const totalChanges = [hasProductsChanged, hasStockChecksChanged, hasRequestsChanged, hasOutletsChanged, hasConversionsChanged, hasInventoryChanged, hasSalesChanged, hasHistoryChanged].filter(Boolean).length;
+      
+      if (totalChanges === 0) {
+        console.log('StockContext syncAll: No data changes detected, skipping state update (prevents re-render)');
+      } else {
+        console.log(`StockContext syncAll: ${totalChanges} data types changed, updating state...`);
+        
+        // Use startTransition for background syncs to prevent blocking UI updates
+        const updateState = () => {
+          if (hasProductsChanged) setProducts(activeProducts);
+          if (hasStockChecksChanged) setStockChecks(activeStockChecks);
+          if (hasRequestsChanged) setRequests(activeRequests);
+          if (hasOutletsChanged) setOutlets(activeOutlets);
+          if (hasConversionsChanged) setProductConversions(activeConversions);
+          if (hasInventoryChanged) setInventoryStocks(activeInventory);
+          if (hasSalesChanged) setSalesDeductions(activeSalesDeductions);
+          if (hasHistoryChanged) setReconcileHistory(activeReconcileHistory);
+          if (hasStockChecksChanged) setCurrentStockCounts(newStockMap);
+          setLastSyncTime(Date.now());
+        };
+        
+        if (silent) {
+          // For background syncs, use startTransition to deprioritize updates
+          // This prevents UI jank and scroll position resets
+          startTransition(() => {
+            updateState();
+          });
+          console.log('StockContext syncAll: ✓ State updates scheduled with startTransition (non-blocking)');
+        } else {
+          // For manual syncs, update immediately
+          updateState();
+          console.log('StockContext syncAll: ✓ State updated immediately (manual sync)');
+        }
+      }
       console.log('StockContext syncAll: Complete - synced all 8 data types including product conversions and reconcile history');
       console.log('StockContext syncAll: Final counts - products:', activeProducts.length, 'stockChecks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'salesDeductions:', activeSalesDeductions.length, 'reconcileHistory:', activeReconcileHistory.length);
     } catch (error) {
