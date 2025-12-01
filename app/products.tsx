@@ -111,6 +111,12 @@ export default function ProductsScreen() {
 
   const processExcelFile = async (base64: string) => {
     try {
+      // CRITICAL: Read ALL products from storage including deleted ones to prevent conflicts
+      console.log('[processExcelFile] Reading ALL products from storage (including deleted) to check for conflicts');
+      const allProductsData = await AsyncStorage.getItem('@stock_app_products');
+      const allProducts: Product[] = allProductsData ? JSON.parse(allProductsData) : products;
+      console.log('[processExcelFile] Found', allProducts.length, 'total products in storage (active + deleted)');
+      
       const { products: parsedProducts, errors } = parseExcelFile(base64, products);
 
       if (errors.length > 0) {
@@ -125,15 +131,33 @@ export default function ProductsScreen() {
 
       let newCount = 0;
       let updatedCount = 0;
+      let reactivatedCount = 0;
       const updatedProducts: { name: string; unit: string; changes: string[] }[] = [];
+      const skippedDeleted: string[] = [];
 
       for (const parsedProduct of parsedProducts) {
-        const existing = products.find(
+        // Check in ALL products (including deleted ones) to prevent conflicts
+        const existing = allProducts.find(
           p => p.name.toLowerCase().trim() === parsedProduct.name.toLowerCase().trim() &&
                p.unit.toLowerCase().trim() === parsedProduct.unit.toLowerCase().trim()
         );
 
-        if (existing) {
+        if (existing && existing.deleted) {
+          // Product was previously deleted - reactivate it with new data
+          console.log('[processExcelFile] Found deleted product:', existing.name, '- reactivating with new data');
+          const reactivated: Product = {
+            ...existing,
+            ...parsedProduct,
+            deleted: false,
+            updatedAt: Date.now(),
+          };
+          
+          const updatedAllProducts = allProducts.map(p =>
+            p.id === existing.id ? reactivated : p
+          );
+          await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedAllProducts));
+          reactivatedCount++;
+        } else if (existing) {
           const changes: string[] = [];
           if (existing.type !== parsedProduct.type) changes.push(`type: ${existing.type} → ${parsedProduct.type}`);
           if (existing.category !== parsedProduct.category) changes.push(`category: ${existing.category || 'none'} → ${parsedProduct.category || 'none'}`);
@@ -161,8 +185,27 @@ export default function ProductsScreen() {
         }
       }
 
+      // Trigger sync to reload products and update server
+      console.log('[processExcelFile] Triggering sync to reload products and update server');
+      await syncAll(false).catch(e => console.error('[processExcelFile] Sync failed:', e));
+      
       let message = '';
       if (newCount > 0) message += `✓ Added ${newCount} new product(s).\n`;
+      if (reactivatedCount > 0) message += `✓ Reactivated ${reactivatedCount} previously deleted product(s).\n`;
+      if (skippedDeleted.length > 0) {
+        message += `\n⚠️ Skipped ${skippedDeleted.length} product(s) that were previously deleted.\n`;
+        if (skippedDeleted.length <= 5) {
+          skippedDeleted.forEach(name => {
+            message += `  • ${name}\n`;
+          });
+        } else {
+          skippedDeleted.slice(0, 5).forEach(name => {
+            message += `  • ${name}\n`;
+          });
+          message += `  ...and ${skippedDeleted.length - 5} more\n`;
+        }
+        message += `\nTo re-import these products, first remove them from the Products page using "Remove Duplicates" button.`;
+      }
       if (updatedCount > 0) {
         message += `✓ Updated ${updatedCount} existing product(s).\n`;
         if (updatedProducts.length <= 5) {
@@ -178,12 +221,12 @@ export default function ProductsScreen() {
           message += `\n\n...and ${updatedProducts.length - 5} more`;
         }
       }
-      if (newCount === 0 && updatedCount === 0) {
+      if (newCount === 0 && updatedCount === 0 && reactivatedCount === 0 && skippedDeleted.length === 0) {
         message = 'No changes detected. All products are already up to date.';
       }
       
       Alert.alert(
-        newCount > 0 || updatedCount > 0 ? 'Import Complete' : 'No Changes',
+        newCount > 0 || updatedCount > 0 || reactivatedCount > 0 ? 'Import Complete' : skippedDeleted.length > 0 ? 'Import Issues' : 'No Changes',
         message
       );
     } catch (error) {
