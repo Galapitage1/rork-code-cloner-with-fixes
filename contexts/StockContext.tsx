@@ -3337,20 +3337,47 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      // CRITICAL: Always update state immediately to show synced data
-      // React 18's automatic batching will batch all these updates together
-      console.log('StockContext syncAll: Updating React state with merged data...');
-      setProducts(activeProducts);
-      setStockChecks(activeStockChecks);
-      setRequests(activeRequests);
-      setOutlets(activeOutlets);
-      setProductConversions(activeConversions);
-      setInventoryStocks(activeInventory);
-      setSalesDeductions(activeSalesDeductions);
-      setReconcileHistory(activeReconcileHistory);
-      setCurrentStockCounts(newStockMap);
-      setLastSyncTime(Date.now());
-      console.log('StockContext syncAll: ✓ React state updated with all merged data');
+      // CRITICAL: Only update state if data has actually changed (prevents unnecessary re-renders during silent sync)
+      // This keeps scroll position intact during background syncs
+      console.log('StockContext syncAll: Checking for changes to update React state...');
+      
+      const hasChanges = {
+        products: JSON.stringify(products.map(p => ({ id: p.id, updatedAt: p.updatedAt }))) !== JSON.stringify(activeProducts.map((p: any) => ({ id: p.id, updatedAt: p.updatedAt }))),
+        stockChecks: JSON.stringify(stockChecks.map(c => ({ id: c.id, updatedAt: c.updatedAt }))) !== JSON.stringify(activeStockChecks.map((c: any) => ({ id: c.id, updatedAt: c.updatedAt }))),
+        requests: JSON.stringify(requests.map(r => ({ id: r.id, updatedAt: r.updatedAt }))) !== JSON.stringify(activeRequests.map((r: any) => ({ id: r.id, updatedAt: r.updatedAt }))),
+        outlets: JSON.stringify(outlets.map(o => ({ id: o.id, updatedAt: o.updatedAt }))) !== JSON.stringify(activeOutlets.map((o: any) => ({ id: o.id, updatedAt: o.updatedAt }))),
+        conversions: JSON.stringify(productConversions.map(c => ({ id: c.id, updatedAt: c.updatedAt }))) !== JSON.stringify(activeConversions.map((c: any) => ({ id: c.id, updatedAt: c.updatedAt }))),
+        inventory: JSON.stringify(inventoryStocks.map(i => ({ id: i.productId, updatedAt: i.updatedAt }))) !== JSON.stringify(activeInventory.map((i: any) => ({ id: i.productId, updatedAt: i.updatedAt }))),
+        salesDeductions: JSON.stringify(salesDeductions.map(d => ({ id: d.id, updatedAt: d.updatedAt }))) !== JSON.stringify(activeSalesDeductions.map((d: any) => ({ id: d.id, updatedAt: d.updatedAt }))),
+        reconcileHistory: JSON.stringify(reconcileHistory.map(h => ({ id: h.id }))) !== JSON.stringify(activeReconcileHistory.map((h: any) => ({ id: h.id }))),
+      };
+      
+      const changedItems = Object.entries(hasChanges).filter(([_, changed]) => changed).map(([name]) => name);
+      
+      if (changedItems.length > 0 || !silent) {
+        console.log('StockContext syncAll: Changes detected in:', changedItems.join(', ') || 'none, but updating for manual sync');
+        console.log('StockContext syncAll: Updating React state with merged data...');
+        
+        if (hasChanges.products || !silent) setProducts(activeProducts);
+        if (hasChanges.stockChecks || !silent) setStockChecks(activeStockChecks);
+        if (hasChanges.requests || !silent) setRequests(activeRequests);
+        if (hasChanges.outlets || !silent) setOutlets(activeOutlets);
+        if (hasChanges.conversions || !silent) setProductConversions(activeConversions);
+        if (hasChanges.inventory || !silent) setInventoryStocks(activeInventory);
+        if (hasChanges.salesDeductions || !silent) setSalesDeductions(activeSalesDeductions);
+        if (hasChanges.reconcileHistory || !silent) setReconcileHistory(activeReconcileHistory);
+        
+        // Only update stock counts map if there are changes to stock checks
+        if (hasChanges.stockChecks || !silent) {
+          setCurrentStockCounts(newStockMap);
+        }
+        
+        setLastSyncTime(Date.now());
+        console.log('StockContext syncAll: ✓ React state updated with changed data');
+      } else {
+        console.log('StockContext syncAll: No changes detected during silent sync - preserving UI state and scroll position');
+        setLastSyncTime(Date.now()); // Still update sync time to show sync happened
+      }
       console.log('StockContext syncAll: Complete - synced all 8 data types including product conversions and reconcile history');
       console.log('StockContext syncAll: Final counts - products:', activeProducts.length, 'stockChecks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'salesDeductions:', activeSalesDeductions.length, 'reconcileHistory:', activeReconcileHistory.length);
     } catch (error) {
