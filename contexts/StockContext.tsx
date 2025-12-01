@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext, startTransition } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext, startTransition, useLayoutEffect } from 'react';
 import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory } from '@/types';
 import { syncData } from '@/utils/syncData';
+import { InteractionManager } from 'react-native';
 
 const STORAGE_KEYS = {
   PRODUCTS: '@stock_app_products',
@@ -3337,27 +3338,30 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      // CRITICAL: Only update state if data has actually changed (deep equality check)
-      // Use startTransition for background syncs to prevent UI disruption
+      // CRITICAL: Only update state if data has actually changed (shallow length check)
+      // Use InteractionManager for background syncs to prevent UI disruption
       console.log('StockContext syncAll: Checking for data changes before updating state...');
       
-      const hasProductsChanged = JSON.stringify(activeProducts) !== JSON.stringify(products);
-      const hasStockChecksChanged = JSON.stringify(activeStockChecks) !== JSON.stringify(stockChecks);
-      const hasRequestsChanged = JSON.stringify(activeRequests) !== JSON.stringify(requests);
-      const hasOutletsChanged = JSON.stringify(activeOutlets) !== JSON.stringify(outlets);
-      const hasConversionsChanged = JSON.stringify(activeConversions) !== JSON.stringify(productConversions);
-      const hasInventoryChanged = JSON.stringify(activeInventory) !== JSON.stringify(inventoryStocks);
-      const hasSalesChanged = JSON.stringify(activeSalesDeductions) !== JSON.stringify(salesDeductions);
-      const hasHistoryChanged = JSON.stringify(activeReconcileHistory) !== JSON.stringify(reconcileHistory);
+      // Fast shallow comparison - just check lengths and timestamps
+      const hasProductsChanged = activeProducts.length !== products.length || (activeProducts[0]?.updatedAt !== products[0]?.updatedAt);
+      const hasStockChecksChanged = activeStockChecks.length !== stockChecks.length || (activeStockChecks[0]?.updatedAt !== stockChecks[0]?.updatedAt);
+      const hasRequestsChanged = activeRequests.length !== requests.length || (activeRequests[0]?.updatedAt !== requests[0]?.updatedAt);
+      const hasOutletsChanged = activeOutlets.length !== outlets.length || (activeOutlets[0]?.updatedAt !== outlets[0]?.updatedAt);
+      const hasConversionsChanged = activeConversions.length !== productConversions.length || (activeConversions[0]?.updatedAt !== productConversions[0]?.updatedAt);
+      const hasInventoryChanged = activeInventory.length !== inventoryStocks.length || (activeInventory[0]?.updatedAt !== inventoryStocks[0]?.updatedAt);
+      const hasSalesChanged = activeSalesDeductions.length !== salesDeductions.length || (activeSalesDeductions[0]?.updatedAt !== salesDeductions[0]?.updatedAt);
+      const hasHistoryChanged = activeReconcileHistory.length !== reconcileHistory.length || (activeReconcileHistory[0]?.updatedAt !== reconcileHistory[0]?.updatedAt);
       
       const totalChanges = [hasProductsChanged, hasStockChecksChanged, hasRequestsChanged, hasOutletsChanged, hasConversionsChanged, hasInventoryChanged, hasSalesChanged, hasHistoryChanged].filter(Boolean).length;
       
       if (totalChanges === 0) {
         console.log('StockContext syncAll: No data changes detected, skipping state update (prevents re-render)');
+        setLastSyncTime(Date.now());
       } else {
         console.log(`StockContext syncAll: ${totalChanges} data types changed, updating state...`);
         
-        // Use startTransition for background syncs to prevent blocking UI updates
+        // Use InteractionManager and requestAnimationFrame for background syncs
+        // This schedules updates after all interactions are complete
         const updateState = () => {
           if (hasProductsChanged) setProducts(activeProducts);
           if (hasStockChecksChanged) setStockChecks(activeStockChecks);
@@ -3372,12 +3376,15 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         };
         
         if (silent) {
-          // For background syncs, use startTransition to deprioritize updates
-          // This prevents UI jank and scroll position resets
-          startTransition(() => {
-            updateState();
+          // For background syncs, schedule after all interactions complete
+          InteractionManager.runAfterInteractions(() => {
+            requestAnimationFrame(() => {
+              startTransition(() => {
+                updateState();
+              });
+            });
           });
-          console.log('StockContext syncAll: ✓ State updates scheduled with startTransition (non-blocking)');
+          console.log('StockContext syncAll: ✓ State updates scheduled after interactions (non-blocking)');
         } else {
           // For manual syncs, update immediately
           updateState();
@@ -3427,8 +3434,11 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       
       syncInterval = setInterval(() => {
         if (!syncInProgressRef.current) {
-          console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
-          syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
+          // Use InteractionManager to ensure sync doesn't interrupt user interactions
+          InteractionManager.runAfterInteractions(() => {
+            console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
+            syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
+          });
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }
