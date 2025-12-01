@@ -2066,6 +2066,7 @@ export default function InventoryScreen() {
                           return !inventoryStocks.find(inv => inv.productId === wholeProductId);
                         })
                       : productsWithoutConversions.filter(p => {
+                          // Include all products without conversions (both menu and raw)
                           return !nonConversionStocks.has(p.id);
                         });
 
