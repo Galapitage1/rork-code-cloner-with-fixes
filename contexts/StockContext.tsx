@@ -906,6 +906,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     console.log('handleReplaceAllInventory: Outlet:', outlet.name, 'Type:', outlet.outletType);
     console.log('handleReplaceAllInventory: Stock check counts:', stockCheck.counts.length);
     console.log('handleReplaceAllInventory: This will REPLACE ALL inventory for this outlet');
+    console.log('handleReplaceAllInventory: Logic: Set Opening=0, Add value to Received');
     console.log('handleReplaceAllInventory: Including setting products to 0 if not in stock check');
     console.log('handleReplaceAllInventory: Will also CREATE inventory entries for products that don\'t exist yet');
     
@@ -924,6 +925,7 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       stockCheckQuantities.set(count.productId, currentStock);
       const product = products.find(p => p.id === count.productId);
       console.log('Stock check entry:', product?.name, 'Current Stock (from quantity):', currentStock);
+      console.log('  This will set Opening=0, Received=' + currentStock + ' in inventory');
     });
     
     if (outlet.outletType === 'production') {
@@ -981,11 +983,14 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           }
           
           // Update the inventory stock - ALWAYS update to match stock check (even if 0)
+          // CRITICAL: When Replace All Inventory is used, set Opening=0 and add value to Received
           const invIndex = updatedInventoryStocks.findIndex(inv => inv.productId === wholeProductId);
           if (invIndex >= 0) {
             const existingInv = updatedInventoryStocks[invIndex];
             const wholeProduct = products.find(p => p.id === wholeProductId);
-            console.log('Replace All: REPLACING', wholeProduct?.name, 'production stock - whole:', newWhole, 'slices:', newSlices, '(was whole:', existingInv.productionWhole, 'slices:', existingInv.productionSlices, ')');
+            console.log('Replace All: REPLACING', wholeProduct?.name, 'production stock');
+            console.log('  Setting Opening=0, Received (whole=' + newWhole + ', slices=' + newSlices + ')');
+            console.log('  Was: whole=' + existingInv.productionWhole + ', slices=' + existingInv.productionSlices);
             
             updatedInventoryStocks[invIndex] = {
               ...existingInv,
@@ -1062,7 +1067,9 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           if (invIndex >= 0) {
             // Update existing
             const existingInv = updatedInventoryStocks[invIndex];
-            console.log('Replace All: REPLACING production stock for', product?.name, '- new qty:', currentStock, '(was:', existingInv.productionWhole, ')');
+            console.log('Replace All: REPLACING production stock for', product?.name);
+            console.log('  Setting Opening=0, Received=' + currentStock + ' (no conversion)');
+            console.log('  Was: productionWhole=' + existingInv.productionWhole);
             
             updatedInventoryStocks[invIndex] = {
               ...existingInv,
@@ -1072,7 +1079,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
             };
           } else {
             // Create new inventory entry
-            console.log('Replace All: Creating new inventory for', product?.name, '- qty:', currentStock);
+            console.log('Replace All: Creating new inventory for', product?.name);
+            console.log('  Setting Opening=0, Received=' + currentStock + ' (no conversion)');
             
             const salesOutlets = outlets.filter(o => o.outletType === 'sales');
             const newInv: InventoryStock = {
@@ -1285,7 +1293,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
             
             if (outletStockIndex >= 0) {
               const oldWhole = updatedOutletStocks[outletStockIndex].whole;
-              console.log('Replace All: REPLACING outlet stock for', product?.name, 'at', outlet.name, '- new qty:', qty, '(was:', oldWhole, ')');
+              console.log('Replace All: REPLACING outlet stock for', product?.name, 'at', outlet.name);
+              console.log('  Setting Opening=0, Received=' + qty + ' (no conversion, was: ' + oldWhole + ')');
               
               updatedOutletStocks[outletStockIndex] = {
                 ...updatedOutletStocks[outletStockIndex],
@@ -1293,7 +1302,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
                 slices: 0,
               };
             } else {
-              console.log('Replace All: Creating new outlet stock entry for', product?.name, 'at', outlet.name, '- qty:', qty);
+              console.log('Replace All: Creating new outlet stock entry for', product?.name, 'at', outlet.name);
+              console.log('  Setting Opening=0, Received=' + qty + ' (no conversion)');
               
               updatedOutletStocks.push({
                 outletName: outlet.name,
