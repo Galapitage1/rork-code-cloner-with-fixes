@@ -105,7 +105,7 @@ export default function InventoryScreen() {
       const hasConversion = productConversions.some(
         c => c.fromProductId === p.id || c.toProductId === p.id
       );
-      return !hasConversion;
+      return !hasConversion && (p.type === 'menu' || p.type === 'raw');
     });
   }, [products, productConversions]);
 
