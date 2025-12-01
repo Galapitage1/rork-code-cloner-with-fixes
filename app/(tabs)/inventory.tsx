@@ -106,8 +106,9 @@ export default function InventoryScreen() {
         c => c.fromProductId === p.id || c.toProductId === p.id
       );
       const isMenuOrRaw = p.type === 'menu' || p.type === 'raw';
-      console.log(`Product: ${p.name}, type: ${p.type}, hasConversion: ${hasConversion}, isMenuOrRaw: ${isMenuOrRaw}`);
-      return !hasConversion && isMenuOrRaw;
+      const hasSalesBasedCalc = p.salesBasedRawCalc === true;
+      console.log(`Product: ${p.name}, type: ${p.type}, hasConversion: ${hasConversion}, isMenuOrRaw: ${isMenuOrRaw}, salesBasedRawCalc: ${hasSalesBasedCalc}`);
+      return !hasConversion && isMenuOrRaw && !hasSalesBasedCalc;
     });
   }, [products, productConversions]);
 
