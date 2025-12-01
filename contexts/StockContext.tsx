@@ -3338,30 +3338,51 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      // CRITICAL: Only update state if data has actually changed (shallow length check)
-      // Use InteractionManager for background syncs to prevent UI disruption
+      // CRITICAL: Only update state if data has actually changed - use DEEP comparison to prevent unnecessary re-renders
+      // This is essential for 60-second background syncs to not disrupt UI scrolling/interaction
       console.log('StockContext syncAll: Checking for data changes before updating state...');
       
-      // Fast shallow comparison - just check lengths and timestamps
-      const hasProductsChanged = activeProducts.length !== products.length || (activeProducts[0]?.updatedAt !== products[0]?.updatedAt);
-      const hasStockChecksChanged = activeStockChecks.length !== stockChecks.length || (activeStockChecks[0]?.updatedAt !== stockChecks[0]?.updatedAt);
-      const hasRequestsChanged = activeRequests.length !== requests.length || (activeRequests[0]?.updatedAt !== requests[0]?.updatedAt);
-      const hasOutletsChanged = activeOutlets.length !== outlets.length || (activeOutlets[0]?.updatedAt !== outlets[0]?.updatedAt);
-      const hasConversionsChanged = activeConversions.length !== productConversions.length || (activeConversions[0]?.updatedAt !== productConversions[0]?.updatedAt);
-      const hasInventoryChanged = activeInventory.length !== inventoryStocks.length || (activeInventory[0]?.updatedAt !== inventoryStocks[0]?.updatedAt);
-      const hasSalesChanged = activeSalesDeductions.length !== salesDeductions.length || (activeSalesDeductions[0]?.updatedAt !== salesDeductions[0]?.updatedAt);
-      const hasHistoryChanged = activeReconcileHistory.length !== reconcileHistory.length || (activeReconcileHistory[0]?.updatedAt !== reconcileHistory[0]?.updatedAt);
+      // Deep comparison: compare all IDs and updatedAt timestamps
+      const deepCompareArrays = <T extends { id: string; updatedAt?: number }>(arr1: T[], arr2: any[]): boolean => {
+        if (arr1.length !== arr2.length) return true;
+        const ids1 = new Set(arr1.map(item => `${item.id}:${item.updatedAt || 0}`));
+        const ids2 = new Set(arr2.map((item: any) => `${item.id}:${item.updatedAt || 0}`));
+        if (ids1.size !== ids2.size) return true;
+        for (const id of ids1) {
+          if (!ids2.has(id)) return true;
+        }
+        return false;
+      };
+      
+      const hasProductsChanged = deepCompareArrays(products, activeProducts);
+      const hasStockChecksChanged = deepCompareArrays(stockChecks, activeStockChecks);
+      const hasRequestsChanged = deepCompareArrays(requests, activeRequests);
+      const hasOutletsChanged = deepCompareArrays(outlets, activeOutlets);
+      const hasConversionsChanged = deepCompareArrays(productConversions, activeConversions);
+      const hasInventoryChanged = deepCompareArrays(inventoryStocks, activeInventory);
+      const hasSalesChanged = deepCompareArrays(salesDeductions, activeSalesDeductions);
+      const hasHistoryChanged = deepCompareArrays(reconcileHistory, activeReconcileHistory);
       
       const totalChanges = [hasProductsChanged, hasStockChecksChanged, hasRequestsChanged, hasOutletsChanged, hasConversionsChanged, hasInventoryChanged, hasSalesChanged, hasHistoryChanged].filter(Boolean).length;
       
       if (totalChanges === 0) {
-        console.log('StockContext syncAll: No data changes detected, skipping state update (prevents re-render)');
+        console.log('StockContext syncAll: ✓ No data changes detected (deep check), skipping state update entirely (prevents re-render & scroll jump)');
         setLastSyncTime(Date.now());
       } else {
         console.log(`StockContext syncAll: ${totalChanges} data types changed, updating state...`);
+        console.log('  Changes:', {
+          products: hasProductsChanged,
+          stockChecks: hasStockChecksChanged,
+          requests: hasRequestsChanged,
+          outlets: hasOutletsChanged,
+          conversions: hasConversionsChanged,
+          inventory: hasInventoryChanged,
+          sales: hasSalesChanged,
+          history: hasHistoryChanged
+        });
         
-        // Use InteractionManager and requestAnimationFrame for background syncs
-        // This schedules updates after all interactions are complete
+        // CRITICAL: For background syncs, batch ALL updates in a single React render cycle
+        // This prevents multiple re-renders and scroll jumping
         const updateState = () => {
           if (hasProductsChanged) setProducts(activeProducts);
           if (hasStockChecksChanged) setStockChecks(activeStockChecks);
@@ -3373,18 +3394,16 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           if (hasHistoryChanged) setReconcileHistory(activeReconcileHistory);
           if (hasStockChecksChanged) setCurrentStockCounts(newStockMap);
           setLastSyncTime(Date.now());
+          console.log('StockContext syncAll: ✓ State batch update complete');
         };
         
         if (silent) {
-          // For background syncs, schedule after all interactions complete
-          InteractionManager.runAfterInteractions(() => {
-            requestAnimationFrame(() => {
-              startTransition(() => {
-                updateState();
-              });
-            });
+          // For background syncs, use startTransition to mark as low-priority
+          // This prevents interrupting user interactions (scrolling, typing, etc.)
+          console.log('StockContext syncAll: Scheduling low-priority state update (won\'t interrupt scrolling)');
+          startTransition(() => {
+            updateState();
           });
-          console.log('StockContext syncAll: ✓ State updates scheduled after interactions (non-blocking)');
         } else {
           // For manual syncs, update immediately
           updateState();
