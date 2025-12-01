@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { User, UserRole } from '@/types';
 import { syncData } from '@/utils/syncData';
 import { performDailyCleanup } from '@/utils/storageCleanup';
-import { InteractionManager } from 'react-native';
 
 const STORAGE_KEYS = {
   CURRENT_USER: '@stock_app_current_user',
@@ -355,11 +354,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
-        // Use InteractionManager to ensure sync doesn't interrupt user interactions
-        InteractionManager.runAfterInteractions(() => {
-          console.log('[AuthContext] Running silent 60-second sync...');
-          syncUsers(undefined, true).catch(() => {});
-        });
+        console.log('[AuthContext] Running silent 60-second sync...');
+        syncUsers(undefined, true).catch(() => {});
       }, 60000);
     }
     return () => {

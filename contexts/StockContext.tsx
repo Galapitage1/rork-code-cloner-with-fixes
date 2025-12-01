@@ -1,8 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext, startTransition, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
 import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory } from '@/types';
 import { syncData } from '@/utils/syncData';
-import { InteractionManager } from 'react-native';
 
 const STORAGE_KEYS = {
   PRODUCTS: '@stock_app_products',
@@ -3338,78 +3337,20 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
         }
       }
       
-      // CRITICAL: Only update state if data has actually changed - use DEEP comparison to prevent unnecessary re-renders
-      // This is essential for 60-second background syncs to not disrupt UI scrolling/interaction
-      console.log('StockContext syncAll: Checking for data changes before updating state...');
-      
-      // Deep comparison: compare all IDs and updatedAt timestamps
-      const deepCompareArrays = <T extends { id: string; updatedAt?: number }>(arr1: T[], arr2: any[]): boolean => {
-        if (arr1.length !== arr2.length) return true;
-        const ids1 = new Set(arr1.map(item => `${item.id}:${item.updatedAt || 0}`));
-        const ids2 = new Set(arr2.map((item: any) => `${item.id}:${item.updatedAt || 0}`));
-        if (ids1.size !== ids2.size) return true;
-        for (const id of ids1) {
-          if (!ids2.has(id)) return true;
-        }
-        return false;
-      };
-      
-      const hasProductsChanged = deepCompareArrays(products, activeProducts);
-      const hasStockChecksChanged = deepCompareArrays(stockChecks, activeStockChecks);
-      const hasRequestsChanged = deepCompareArrays(requests, activeRequests);
-      const hasOutletsChanged = deepCompareArrays(outlets, activeOutlets);
-      const hasConversionsChanged = deepCompareArrays(productConversions, activeConversions);
-      const hasInventoryChanged = deepCompareArrays(inventoryStocks, activeInventory);
-      const hasSalesChanged = deepCompareArrays(salesDeductions, activeSalesDeductions);
-      const hasHistoryChanged = deepCompareArrays(reconcileHistory, activeReconcileHistory);
-      
-      const totalChanges = [hasProductsChanged, hasStockChecksChanged, hasRequestsChanged, hasOutletsChanged, hasConversionsChanged, hasInventoryChanged, hasSalesChanged, hasHistoryChanged].filter(Boolean).length;
-      
-      if (totalChanges === 0) {
-        console.log('StockContext syncAll: ✓ No data changes detected (deep check), skipping state update entirely (prevents re-render & scroll jump)');
-        setLastSyncTime(Date.now());
-      } else {
-        console.log(`StockContext syncAll: ${totalChanges} data types changed, updating state...`);
-        console.log('  Changes:', {
-          products: hasProductsChanged,
-          stockChecks: hasStockChecksChanged,
-          requests: hasRequestsChanged,
-          outlets: hasOutletsChanged,
-          conversions: hasConversionsChanged,
-          inventory: hasInventoryChanged,
-          sales: hasSalesChanged,
-          history: hasHistoryChanged
-        });
-        
-        // CRITICAL: For background syncs, batch ALL updates in a single React render cycle
-        // This prevents multiple re-renders and scroll jumping
-        const updateState = () => {
-          if (hasProductsChanged) setProducts(activeProducts);
-          if (hasStockChecksChanged) setStockChecks(activeStockChecks);
-          if (hasRequestsChanged) setRequests(activeRequests);
-          if (hasOutletsChanged) setOutlets(activeOutlets);
-          if (hasConversionsChanged) setProductConversions(activeConversions);
-          if (hasInventoryChanged) setInventoryStocks(activeInventory);
-          if (hasSalesChanged) setSalesDeductions(activeSalesDeductions);
-          if (hasHistoryChanged) setReconcileHistory(activeReconcileHistory);
-          if (hasStockChecksChanged) setCurrentStockCounts(newStockMap);
-          setLastSyncTime(Date.now());
-          console.log('StockContext syncAll: ✓ State batch update complete');
-        };
-        
-        if (silent) {
-          // For background syncs, use startTransition to mark as low-priority
-          // This prevents interrupting user interactions (scrolling, typing, etc.)
-          console.log('StockContext syncAll: Scheduling low-priority state update (won\'t interrupt scrolling)');
-          startTransition(() => {
-            updateState();
-          });
-        } else {
-          // For manual syncs, update immediately
-          updateState();
-          console.log('StockContext syncAll: ✓ State updated immediately (manual sync)');
-        }
-      }
+      // CRITICAL: Always update state immediately to show synced data
+      // React 18's automatic batching will batch all these updates together
+      console.log('StockContext syncAll: Updating React state with merged data...');
+      setProducts(activeProducts);
+      setStockChecks(activeStockChecks);
+      setRequests(activeRequests);
+      setOutlets(activeOutlets);
+      setProductConversions(activeConversions);
+      setInventoryStocks(activeInventory);
+      setSalesDeductions(activeSalesDeductions);
+      setReconcileHistory(activeReconcileHistory);
+      setCurrentStockCounts(newStockMap);
+      setLastSyncTime(Date.now());
+      console.log('StockContext syncAll: ✓ React state updated with all merged data');
       console.log('StockContext syncAll: Complete - synced all 8 data types including product conversions and reconcile history');
       console.log('StockContext syncAll: Final counts - products:', activeProducts.length, 'stockChecks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'salesDeductions:', activeSalesDeductions.length, 'reconcileHistory:', activeReconcileHistory.length);
     } catch (error) {
@@ -3453,11 +3394,8 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
       
       syncInterval = setInterval(() => {
         if (!syncInProgressRef.current) {
-          // Use InteractionManager to ensure sync doesn't interrupt user interactions
-          InteractionManager.runAfterInteractions(() => {
-            console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
-            syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
-          });
+          console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
+          syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }

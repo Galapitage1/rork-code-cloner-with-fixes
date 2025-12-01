@@ -62,19 +62,10 @@ export async function exportStockCheckToExcel(
       throw new Error('No stock counts to export');
     }
 
-    const productMap = new Map(products.filter(p => !p.deleted).map(p => [p.id, p]));
+    const productMap = new Map(products.map(p => [p.id, p]));
     console.log('Product map created with', productMap.size, 'products');
     
-    const reportData = stockCheck.counts
-      .filter(count => {
-        const product = productMap.get(count.productId);
-        if (!product) {
-          console.log('Excluding deleted product from export:', count.productId);
-          return false;
-        }
-        return true;
-      })
-      .map(count => {
+    const reportData = stockCheck.counts.map(count => {
       const product = productMap.get(count.productId);
       const sellingPrice = product?.sellingPrice || 0;
       const totalValue = sellingPrice * count.quantity;
@@ -220,19 +211,10 @@ export async function exportRequestsToExcel(
       throw new Error('No requests to export');
     }
 
-    const productMap = new Map(products.filter(p => !p.deleted).map(p => [p.id, p]));
+    const productMap = new Map(products.map(p => [p.id, p]));
     console.log('Product map created with', productMap.size, 'products');
     
-    const requestData = requests
-      .filter(request => {
-        const product = productMap.get(request.productId);
-        if (!product) {
-          console.log('Excluding deleted product from export:', request.productId);
-          return false;
-        }
-        return true;
-      })
-      .map(request => {
+    const requestData = requests.map(request => {
       const product = productMap.get(request.productId);
       const sellingPrice = product?.sellingPrice || 0;
       const isApproved = request.status === 'approved';
@@ -384,7 +366,7 @@ export async function exportProductionToExcel(
       throw new Error('No production requests to export');
     }
 
-    const productMap = new Map(products.filter(p => !p.deleted).map(p => [p.id, p]));
+    const productMap = new Map(products.map(p => [p.id, p]));
     console.log('Product map created with', productMap.size, 'products');
     
     const reportData: any[] = [];
@@ -392,10 +374,6 @@ export async function exportProductionToExcel(
     requests.forEach(request => {
       request.items.forEach((item: any) => {
         const product = productMap.get(item.productId);
-        if (!product) {
-          console.log('Excluding deleted product from export:', item.productId);
-          return;
-        }
         const totalCost = calculateProductCostHelper(item.productId, item.quantity, products, recipes, storeProducts, 'PRODUCTION');
         
         reportData.push({

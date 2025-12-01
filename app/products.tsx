@@ -111,22 +111,6 @@ export default function ProductsScreen() {
 
   const processExcelFile = async (base64: string) => {
     try {
-      console.log('[processExcelFile] Starting product import...');
-      
-      // STEP 1: Load all products from storage (including deleted ones)
-      console.log('[processExcelFile] STEP 1: Loading all products from storage...');
-      const storedProducts = await AsyncStorage.getItem('@stock_app_products');
-      let allStoredProducts: Product[] = [];
-      if (storedProducts) {
-        try {
-          allStoredProducts = JSON.parse(storedProducts);
-          console.log('[processExcelFile] Loaded', allStoredProducts.length, 'total products (including deleted)');
-          console.log('[processExcelFile] Deleted products:', allStoredProducts.filter(p => p.deleted).length);
-        } catch (error) {
-          console.error('[processExcelFile] Failed to parse stored products:', error);
-        }
-      }
-      
       const { products: parsedProducts, errors } = parseExcelFile(base64, products);
 
       if (errors.length > 0) {
@@ -139,45 +123,6 @@ export default function ProductsScreen() {
         return;
       }
 
-      // STEP 2: Check for duplicate products (including deleted ones)
-      console.log('[processExcelFile] STEP 2: Checking for duplicates...');
-      const productsToImportKeys = new Set(
-        parsedProducts.map(p => `${p.name.toLowerCase().trim()}_${p.unit.toLowerCase().trim()}`)
-      );
-      
-      const deletedDuplicates = allStoredProducts.filter(stored => {
-        const key = `${stored.name.toLowerCase().trim()}_${stored.unit.toLowerCase().trim()}`;
-        return stored.deleted && productsToImportKeys.has(key);
-      });
-      
-      if (deletedDuplicates.length > 0) {
-        console.log('[processExcelFile] Found', deletedDuplicates.length, 'deleted products that match import:');
-        deletedDuplicates.forEach(p => {
-          console.log('[processExcelFile]   - Deleted:', p.name, `(${p.unit})`, 'ID:', p.id);
-        });
-        
-        // STEP 3: Remove deleted duplicates completely from storage and server
-        console.log('[processExcelFile] STEP 3: Permanently removing deleted duplicates...');
-        const cleanedProducts = allStoredProducts.filter(stored => {
-          const key = `${stored.name.toLowerCase().trim()}_${stored.unit.toLowerCase().trim()}`;
-          const isDeletedDuplicate = stored.deleted && productsToImportKeys.has(key);
-          if (isDeletedDuplicate) {
-            console.log('[processExcelFile]   Removing:', stored.name, `(${stored.unit})`);
-          }
-          return !isDeletedDuplicate;
-        });
-        
-        console.log('[processExcelFile] Products after cleanup:', cleanedProducts.length);
-        await AsyncStorage.setItem('@stock_app_products', JSON.stringify(cleanedProducts));
-        
-        // Trigger immediate sync to server to remove deleted duplicates
-        console.log('[processExcelFile] Syncing cleaned products to server...');
-        await syncAll(true);
-        console.log('[processExcelFile] ✓ Deleted duplicates removed from server');
-      }
-
-      // STEP 4: Process imports (add new or update existing active products)
-      console.log('[processExcelFile] STEP 4: Processing product imports...');
       let newCount = 0;
       let updatedCount = 0;
       const updatedProducts: { name: string; unit: string; changes: string[] }[] = [];
@@ -211,24 +156,12 @@ export default function ProductsScreen() {
             updatedCount++;
           }
         } else {
-          console.log('[processExcelFile] Adding new product:', parsedProduct.name, `(${parsedProduct.unit})`);
           await addProduct(parsedProduct);
           newCount++;
         }
       }
 
-      // STEP 5: Show results
-      console.log('[processExcelFile] STEP 5: Import complete');
-      console.log('[processExcelFile] New products:', newCount);
-      console.log('[processExcelFile] Updated products:', updatedCount);
-      if (deletedDuplicates.length > 0) {
-        console.log('[processExcelFile] Deleted duplicates removed:', deletedDuplicates.length);
-      }
-      
       let message = '';
-      if (deletedDuplicates.length > 0) {
-        message += `✓ Removed ${deletedDuplicates.length} deleted duplicate(s) from server.\n\n`;
-      }
       if (newCount > 0) message += `✓ Added ${newCount} new product(s).\n`;
       if (updatedCount > 0) {
         message += `✓ Updated ${updatedCount} existing product(s).\n`;
@@ -245,12 +178,12 @@ export default function ProductsScreen() {
           message += `\n\n...and ${updatedProducts.length - 5} more`;
         }
       }
-      if (newCount === 0 && updatedCount === 0 && deletedDuplicates.length === 0) {
+      if (newCount === 0 && updatedCount === 0) {
         message = 'No changes detected. All products are already up to date.';
       }
       
       Alert.alert(
-        newCount > 0 || updatedCount > 0 || deletedDuplicates.length > 0 ? 'Import Complete' : 'No Changes',
+        newCount > 0 || updatedCount > 0 ? 'Import Complete' : 'No Changes',
         message
       );
     } catch (error) {

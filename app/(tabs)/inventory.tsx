@@ -105,10 +105,7 @@ export default function InventoryScreen() {
       const hasConversion = productConversions.some(
         c => c.fromProductId === p.id || c.toProductId === p.id
       );
-      const isMenuOrRaw = p.type === 'menu' || p.type === 'raw';
-      const hasSalesBasedCalc = p.salesBasedRawCalc === true;
-      console.log(`Product: ${p.name}, type: ${p.type}, hasConversion: ${hasConversion}, isMenuOrRaw: ${isMenuOrRaw}, salesBasedRawCalc: ${hasSalesBasedCalc}`);
-      return !hasConversion && isMenuOrRaw && !hasSalesBasedCalc;
+      return !hasConversion;
     });
   }, [products, productConversions]);
 
