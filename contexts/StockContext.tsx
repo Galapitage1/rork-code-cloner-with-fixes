@@ -1520,13 +1520,30 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
     status: ProductRequest['status']
   ) => {
     try {
+      console.log('updateRequestStatus: Starting for request', requestId, 'new status:', status);
       const updatedRequests = requests.map(r =>
         r.id === requestId ? { ...r, status, updatedAt: Date.now() } : r
       );
+      
+      console.log('updateRequestStatus: Saving to AsyncStorage...');
       await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
       setRequests(updatedRequests);
+      console.log('updateRequestStatus: ✓ Saved to AsyncStorage');
 
-      console.log('updateRequestStatus: Saved locally, will sync on next interval');
+      // CRITICAL: Immediately sync OUT to server to prevent 60-second sync from reverting
+      console.log('updateRequestStatus: Syncing OUT to server immediately...');
+      if (currentUser?.id) {
+        try {
+          const synced = await syncData('requests', updatedRequests, currentUser.id);
+          console.log('updateRequestStatus: ✓ Successfully synced to server');
+          await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(synced));
+          setRequests((synced as any[]).filter(r => !r?.deleted));
+        } catch (syncError) {
+          console.error('updateRequestStatus: Sync failed, but local save succeeded:', syncError);
+        }
+      }
+
+      console.log('updateRequestStatus: Complete');
     } catch (error) {
       console.error('Failed to update request status:', error);
       throw error;
