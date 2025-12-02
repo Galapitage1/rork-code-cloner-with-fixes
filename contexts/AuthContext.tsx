@@ -243,6 +243,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       return;
     }
     if (syncInProgressRef.current) {
+      console.log('[AuthContext] Sync already in progress, skipping...');
       return;
     }
     try {
@@ -252,15 +253,30 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       }
       const dataToSync = usersToSync || users;
       const synced = await syncData('users', dataToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' });
-      await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(synced));
-      setUsers((synced as any[]).filter(u => !u?.deleted));
-      if (currentUser && synced.find((u: User) => u.id === currentUser.id)) {
-        const updatedCurrentUser = synced.find((u: User) => u.id === currentUser.id);
-        if (updatedCurrentUser) {
-          await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedCurrentUser));
-          setCurrentUser(updatedCurrentUser);
+      
+      const activeUsers = (synced as any[]).filter(u => !u?.deleted);
+      
+      const hasChanges = JSON.stringify(users) !== JSON.stringify(activeUsers);
+      
+      if (hasChanges) {
+        console.log(silent ? '[AuthContext] Silent sync: Updates detected, applying changes' : '[AuthContext] Sync: Updates detected, applying changes');
+        await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(synced));
+        setUsers(activeUsers);
+        
+        if (currentUser && synced.find((u: User) => u.id === currentUser.id)) {
+          const updatedCurrentUser = synced.find((u: User) => u.id === currentUser.id);
+          if (updatedCurrentUser) {
+            const currentUserChanged = JSON.stringify(currentUser) !== JSON.stringify(updatedCurrentUser);
+            if (currentUserChanged) {
+              await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedCurrentUser));
+              setCurrentUser(updatedCurrentUser);
+            }
+          }
         }
+      } else {
+        console.log(silent ? '[AuthContext] Silent sync: No changes detected' : '[AuthContext] Sync: No changes detected');
       }
+      
       setLastSyncTime(Date.now());
     } catch (error) {
       console.error('Sync users failed:', error);
@@ -367,7 +383,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         console.log('[AuthContext] Running silent 60-second sync...');
-        syncUsers(undefined, true).catch(() => {});
+        syncUsers(undefined, true).catch((error) => {
+          console.log('[AuthContext] Silent sync failed (this is normal):', error?.message || 'Unknown error');
+        });
       }, 60000);
     }
     return () => {
