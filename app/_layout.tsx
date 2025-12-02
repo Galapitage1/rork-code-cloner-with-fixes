@@ -128,10 +128,10 @@ function UserSync({ children }: { children: React.ReactNode }) {
 }
 
 function AppProviders({ children }: { children: React.ReactNode }) {
-  const { currentUser } = useAuth();
+  const { currentUser, enableReceivedAutoLoad } = useAuth();
   
   return (
-    <StockProvider currentUser={currentUser}>
+    <StockProvider currentUser={currentUser} enableReceivedAutoLoad={enableReceivedAutoLoad}>
       <CustomerProvider currentUser={currentUser}>
         <OrderProvider currentUser={currentUser}>
           <ProductUsageProvider>

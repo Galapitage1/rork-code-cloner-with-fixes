@@ -86,7 +86,7 @@ export function useStock() {
   return context;
 }
 
-export function StockProvider({ children, currentUser }: { children: ReactNode; currentUser: { id: string; username?: string; role?: 'superadmin' | 'admin' | 'user' } | null }) {
+export function StockProvider({ children, currentUser, enableReceivedAutoLoad = true }: { children: ReactNode; currentUser: { id: string; username?: string; role?: 'superadmin' | 'admin' | 'user' } | null; enableReceivedAutoLoad?: boolean }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [stockChecks, setStockChecks] = useState<StockCheck[]>([]);
   const [requests, setRequests] = useState<ProductRequest[]>([]);
@@ -816,16 +816,18 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           await saveInventoryStocks(updatedInventoryStocks);
           console.log('Inventory stocks saved successfully - stock amounts overwritten from production stock check');
           
-          // STEP 8: Add to next day's Prods.req column for live inventory
-          console.log('\n=== ADDING TO NEXT DAY PRODS.REQ ===');
-          const stockCheckDateObj = new Date(stockCheck.date);
-          const nextDay = new Date(stockCheckDateObj);
-          nextDay.setDate(nextDay.getDate() + 1);
-          const nextDayStr = nextDay.toISOString().split('T')[0];
-          console.log('Production stock check date:', stockCheck.date);
-          console.log('Next day date for Prods.req:', nextDayStr);
-          
-          for (const count of stockCheck.counts) {
+          // STEP 8: Add to next day's Prods.req column for live inventory (ONLY if Enable Received Auto Load is ON)
+          if (enableReceivedAutoLoad) {
+            console.log('\n=== ADDING TO NEXT DAY PRODS.REQ ===');
+            console.log('Enable Received Auto Load:', enableReceivedAutoLoad, '(setting is ON - will add to Prods.Req)');
+            const stockCheckDateObj = new Date(stockCheck.date);
+            const nextDay = new Date(stockCheckDateObj);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextDayStr = nextDay.toISOString().split('T')[0];
+            console.log('Production stock check date:', stockCheck.date);
+            console.log('Next day date for Prods.req:', nextDayStr);
+            
+            for (const count of stockCheck.counts) {
             const productPair = getProductPairForInventory(count.productId);
             if (!productPair) {
               console.log('Skipping non-conversion product:', count.productId, 'for Prods.req');
@@ -886,10 +888,16 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
               console.log('WARNING: Inventory stock not found for product', wholeProductId, 'when adding to Prods.req');
             }
           }
-          
-          console.log('Saving updated inventory stocks with Prods.req...');
-          await saveInventoryStocks(updatedInventoryStocks);
-          console.log('=== FINISHED ADDING TO NEXT DAY PRODS.REQ ===\n');
+            
+            console.log('Saving updated inventory stocks with Prods.req...');
+            await saveInventoryStocks(updatedInventoryStocks);
+            console.log('=== FINISHED ADDING TO NEXT DAY PRODS.REQ ===\n');
+          } else {
+            console.log('\n=== SKIPPING PRODS.REQ UPDATE ===');
+            console.log('Enable Received Auto Load:', enableReceivedAutoLoad, '(setting is OFF - NOT adding to Prods.Req)');
+            console.log('Stock check completed for production outlet but Prods.Req column will NOT be updated');
+            console.log('=== PRODS.REQ UPDATE SKIPPED ===\n');
+          }
         } else if (outlet) {
           console.log('Stock check for NON-PRODUCTION outlet:', outlet.name, 'type:', outlet.outletType);
           console.log('Inventory will NOT be updated - sales outlet stocks are updated when requests are approved');
