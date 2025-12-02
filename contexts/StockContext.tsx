@@ -2280,6 +2280,46 @@ export function StockProvider({ children, currentUser }: { children: ReactNode; 
           console.log('deductInventoryFromApproval: Deducted', deductAmount, 'from', check.outlet, '- remaining to deduct:', remainingToDeduct);
         }
         
+        // REQUIREMENT 1: Deduct from Kitchen/Production column in Inventory Stocks
+        if (fromOutlet.outletType === 'production' || !isSalesToSalesTransfer) {
+          console.log('\n=== DEDUCTING FROM KITCHEN/PRODUCTION INVENTORY COLUMN ===');
+          console.log('deductInventoryFromApproval: Product has no conversion (Other Units)');
+          console.log('deductInventoryFromApproval: Deducting', request.quantity, 'from Kitchen/Production inventory');
+          
+          // Find inventory stock entry for this product
+          const invStockIndex = inventoryStocks.findIndex(inv => inv.productId === request.productId);
+          
+          if (invStockIndex >= 0) {
+            const currentInvStock = inventoryStocks[invStockIndex];
+            const currentProductionWhole = currentInvStock.productionWhole || 0;
+            
+            console.log('deductInventoryFromApproval: Current Kitchen/Production inventory:', currentProductionWhole);
+            
+            // Deduct from production column
+            const newProductionWhole = Math.max(0, currentProductionWhole - request.quantity);
+            console.log('deductInventoryFromApproval: New Kitchen/Production inventory:', newProductionWhole);
+            
+            const updatedInvStock = {
+              ...currentInvStock,
+              productionWhole: newProductionWhole,
+              updatedAt: Date.now(),
+            };
+            
+            const updatedInventoryStocks = [
+              ...inventoryStocks.slice(0, invStockIndex),
+              updatedInvStock,
+              ...inventoryStocks.slice(invStockIndex + 1)
+            ];
+            
+            await saveInventoryStocks(updatedInventoryStocks);
+            console.log('deductInventoryFromApproval: ✓ Deducted from Kitchen/Production inventory');
+          } else {
+            console.log('deductInventoryFromApproval: WARNING - No inventory entry found for product', request.productId);
+          }
+          
+          console.log('=== DEDUCTION FROM KITCHEN/PRODUCTION INVENTORY COMPLETE ===\n');
+        }
+        
         console.log('deductInventoryFromApproval: Moving', request.quantity, 'to outlet', request.toOutlet);
         
         const requestDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
