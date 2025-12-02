@@ -1291,14 +1291,14 @@ const styles = StyleSheet.create({
   usersGrid: {
     flexDirection: 'row' as const,
     flexWrap: 'wrap' as const,
-    gap: 6,
+    gap: 4,
     justifyContent: 'center' as const,
   },
   userButtonWrapper: {
     width: '48%',
     minWidth: 140,
     maxWidth: 180,
-    aspectRatio: 0.85,
+    aspectRatio: 0.9,
     position: 'relative' as const,
   },
   userButton: {
@@ -1324,7 +1324,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.red,
   },
   buttonInner: {
-    padding: 6,
+    padding: 4,
     backgroundColor: 'transparent',
     borderBottomWidth: 4,
     borderBottomColor: COLORS.darkYellow,
@@ -1334,17 +1334,17 @@ const styles = StyleSheet.create({
     fontWeight: '700' as const,
     color: COLORS.black,
     textAlign: 'center' as const,
-    marginBottom: 4,
-    minHeight: 28,
+    marginBottom: 2,
+    minHeight: 26,
   },
   lastSeenContainer: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
-    gap: 3,
+    gap: 2,
     backgroundColor: COLORS.white,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
     borderRadius: 6,
   },
   lastSeenLabel: {
