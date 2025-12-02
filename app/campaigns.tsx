@@ -599,6 +599,8 @@ export default function CampaignsScreen() {
       }
 
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      console.log('[WhatsApp Test] Using API URL:', apiUrl);
+      
       const response = await fetch(`${apiUrl}/api/test-whatsapp-connection`, {
         method: 'POST',
         headers: {
@@ -620,7 +622,18 @@ export default function CampaignsScreen() {
       Alert.alert('Connection Test Successful', result.message || 'WhatsApp API is configured correctly');
     } catch (error) {
       console.error('[WhatsApp Test] Error:', error);
-      Alert.alert('Connection Test Failed', (error as Error).message);
+      const errorMsg = (error as Error).message;
+      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      
+      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network request failed')) {
+        Alert.alert(
+          'Backend Connection Error',
+          `Cannot connect to backend server.\n\nMake sure:\n1. Backend is running\n2. API URL is correct: ${currentApiUrl}\n\nCurrent error: ${errorMsg}`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Connection Test Failed', errorMsg);
+      }
     } finally {
       setTestingWhatsApp(false);
     }
