@@ -78,6 +78,7 @@ export default function CampaignsScreen() {
   const [whatsappBusinessId, setWhatsappBusinessId] = useState<string>('895897253021976');
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
+  const [showSMSSettings, setShowSMSSettings] = useState(false);
 
   const loadCampaignSettings = async () => {
     try {
@@ -286,34 +287,54 @@ export default function CampaignsScreen() {
   };
 
   const testSMSConnection = async () => {
+    if (!smsApiUrl || !smsApiKey) {
+      Alert.alert('Configuration Missing', 'Please configure SMS API URL and API Key before testing.');
+      return;
+    }
+
     try {
       setTestingSMS(true);
-      const response = await fetch(smsApiUrl, {
+      console.log('[SMS Test] Starting connection test...');
+
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-sms-connection.php` : `${apiUrl}/api/test-sms-connection`;
+      console.log('[SMS Test] Using API URL:', apiUrl);
+      console.log('[SMS Test] Full endpoint:', phpEndpoint);
+
+      const response = await fetch(phpEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${smsApiKey}`,
         },
         body: JSON.stringify({
-          user_id: '11217',
-          api_key: smsApiKey,
-          sender_id: 'NotifyDEMO',
-          to: '94777123456',
-          message: 'Test message from Campaign Manager',
+          smsApiUrl,
+          smsApiKey,
         }),
       });
 
-      const data = await response.json();
-      console.log('SMS Test Response:', data);
+      const result = await response.json();
+      console.log('[SMS Test] Response:', result);
 
-      if (response.ok) {
-        Alert.alert('Success', 'SMS API connection is working! Response: ' + JSON.stringify(data));
-      } else {
-        Alert.alert('API Response', `Status: ${response.status}\n${JSON.stringify(data, null, 2)}`);
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Connection test failed');
       }
+
+      Alert.alert('Connection Test Successful', result.message || 'SMS API is configured correctly');
     } catch (error) {
-      console.error('SMS test error:', error);
-      Alert.alert('Error', 'Failed to test SMS connection: ' + (error as Error).message);
+      console.error('[SMS Test] Error:', error);
+      const errorMsg = (error as Error).message;
+      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const phpEndpoint = currentApiUrl.includes('tracker.tecclk.com') ? `${currentApiUrl}/Tracker/api/test-sms-connection.php` : `${currentApiUrl}/api/test-sms-connection`;
+      
+      if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network request failed')) {
+        Alert.alert(
+          'Backend Connection Error',
+          `Cannot connect to: ${phpEndpoint}\n\nError: ${errorMsg}\n\nMake sure the backend is deployed and accessible.`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Connection Test Failed', `${errorMsg}\n\nAPI: ${currentApiUrl}`);
+      }
     } finally {
       setTestingSMS(false);
     }
@@ -511,6 +532,15 @@ export default function CampaignsScreen() {
       return;
     }
 
+    if (!smsApiUrl || !smsApiKey) {
+      Alert.alert(
+        'SMS Not Configured',
+        'Please configure SMS API settings before sending messages.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     console.log('[SMS CAMPAIGN] Opening confirm dialog...');
     setConfirmState({
       title: 'Send SMS Campaign',
@@ -519,57 +549,35 @@ export default function CampaignsScreen() {
         console.log('[SMS CAMPAIGN] User confirmed, starting send...');
         try {
           setIsSending(true);
-          let successCount = 0;
-          let failCount = 0;
-          const errors: string[] = [];
 
-          for (const customer of selectedCustomers) {
-            if (!customer.phone) continue;
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+          const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
+          
+          const response = await fetch(phpEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: message,
+              recipients: selectedCustomers.map(c => ({
+                name: c.name,
+                phone: c.phone,
+              })),
+              transaction_id: Date.now(),
+            }),
+          });
 
-            try {
-              let phone = customer.phone.trim();
-              if (phone.startsWith('0')) {
-                phone = '94' + phone.substring(1);
-              } else if (!phone.startsWith('94')) {
-                phone = '94' + phone;
-              }
+          const result = await response.json();
+          console.log('[SMS CAMPAIGN] Backend response:', result);
 
-              const response = await fetch(smsApiUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${smsApiKey}`,
-                },
-                body: JSON.stringify({
-                  user_id: '11217',
-                  api_key: smsApiKey,
-                  sender_id: 'NotifyDEMO',
-                  to: phone,
-                  message: message,
-                }),
-              });
-
-              const data = await response.json();
-              console.log(`SMS to ${customer.name} (${phone}):`, data);
-
-              if (response.ok) {
-                successCount++;
-              } else {
-                failCount++;
-                errors.push(`${customer.name}: ${data.message || 'Failed'}`);
-              }
-
-              await new Promise(resolve => setTimeout(resolve, 500));
-
-            } catch (error) {
-              failCount++;
-              errors.push(`${customer.name}: ${(error as Error).message}`);
-              console.error(`Failed to send SMS to ${customer.name}:`, error);
-            }
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Failed to send SMS messages');
           }
 
-          const resultMessage = `Sent: ${successCount}\nFailed: ${failCount}${
-            errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
+          const { results } = result;
+          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
+            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
           }`;
 
           Alert.alert(
@@ -577,6 +585,11 @@ export default function CampaignsScreen() {
             resultMessage,
             [{ text: 'OK' }]
           );
+
+          if (results.success > 0) {
+            setMessage('');
+            setSelectedCustomerIds(new Set());
+          }
 
         } catch (error) {
           console.error('[SMS CAMPAIGN] Error:', error);
@@ -1058,34 +1071,86 @@ export default function CampaignsScreen() {
         )}
 
         {campaignType === 'sms' && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SMS Settings</Text>
-            
+          <>
             <TouchableOpacity
-              style={styles.smsTestButton}
-              onPress={testSMSConnection}
-              disabled={testingSMS}
+              style={styles.settingsToggle}
+              onPress={() => setShowSMSSettings(!showSMSSettings)}
             >
-              {testingSMS ? (
-                <ActivityIndicator size="small" color={Colors.light.tint} />
+              <View style={styles.settingsToggleLeft}>
+                <Settings size={20} color={Colors.light.tint} />
+                <Text style={styles.settingsToggleText}>SMS Configuration</Text>
+              </View>
+              {showSMSSettings ? (
+                <ChevronUp size={20} color={Colors.light.tint} />
               ) : (
-                <Text style={styles.smsTestButtonText}>Test SMS Connection</Text>
+                <ChevronDown size={20} color={Colors.light.tint} />
               )}
             </TouchableOpacity>
 
-            <Text style={styles.label}>Message * (Max 160 characters)</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={message}
-              onChangeText={setMessage}
-              placeholder="Your SMS message..."
-              multiline
-              numberOfLines={4}
-              maxLength={160}
-              textAlignVertical="top"
-            />
-            <Text style={styles.charCount}>{message.length}/160 characters</Text>
-          </View>
+            {showSMSSettings && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>SMS Service Configuration</Text>
+                
+                <Text style={styles.label}>SMS API URL *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smsApiUrl}
+                  onChangeText={setSmsApiUrl}
+                  placeholder="https://app.notify.lk/api/v1/send"
+                  autoCapitalize="none"
+                  keyboardType="url"
+                />
+
+                <Text style={styles.label}>SMS API Key *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={smsApiKey}
+                  onChangeText={setSmsApiKey}
+                  placeholder="Your SMS service API key"
+                  autoCapitalize="none"
+                  multiline
+                />
+
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.testButton]}
+                    onPress={testSMSConnection}
+                    disabled={testingSMS}
+                  >
+                    {testingSMS ? (
+                      <ActivityIndicator size="small" color={Colors.light.tint} />
+                    ) : (
+                      <Text style={styles.testButtonText}>Test Connection</Text>
+                    )}
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton]}
+                    onPress={saveCampaignSettings}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>SMS Message</Text>
+              
+              <Text style={styles.label}>Message * (Max 160 characters)</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={message}
+                onChangeText={setMessage}
+                placeholder="Your SMS message..."
+                multiline
+                numberOfLines={4}
+                maxLength={160}
+                textAlignVertical="top"
+              />
+              <Text style={styles.charCount}>{message.length}/160 characters</Text>
+            </View>
+          </>
         )}
 
         {campaignType === 'whatsapp' && (
