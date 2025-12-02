@@ -241,7 +241,8 @@ export default function CampaignsScreen() {
       }
 
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
-      const response = await fetch(`${apiUrl}/api/test-email-connection`, {
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-email-connection.php` : `${apiUrl}/api/test-email-connection`;
+      const response = await fetch(phpEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -432,7 +433,8 @@ export default function CampaignsScreen() {
 
           console.log('[EMAIL CAMPAIGN] Sending to backend...');
           const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
-          const response = await fetch(`${apiUrl}/api/send-email`, {
+          const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
+          const response = await fetch(phpEndpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -599,11 +601,12 @@ export default function CampaignsScreen() {
       }
 
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-whatsapp-connection.php` : `${apiUrl}/api/test-whatsapp-connection`;
       console.log('[WhatsApp Test] Using API URL:', apiUrl);
-      console.log('[WhatsApp Test] Full endpoint:', `${apiUrl}/api/test-whatsapp-connection`);
+      console.log('[WhatsApp Test] Full endpoint:', phpEndpoint);
       console.log('[WhatsApp Test] Phone Number ID:', whatsappPhoneNumberId);
       
-      const response = await fetch(`${apiUrl}/api/test-whatsapp-connection`, {
+      const response = await fetch(phpEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -628,10 +631,11 @@ export default function CampaignsScreen() {
       const errorMsg = (error as Error).message;
       const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
       
+      const phpEndpoint = currentApiUrl.includes('tracker.tecclk.com') ? `${currentApiUrl}/Tracker/api/test-whatsapp-connection.php` : `${currentApiUrl}/api/test-whatsapp-connection`;
       if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network request failed')) {
         Alert.alert(
           'Backend Connection Error',
-          `Cannot connect to: ${currentApiUrl}/api/test-whatsapp-connection\n\nError: ${errorMsg}\n\nIf you're in production, make sure the backend is deployed. If local, use: http://localhost:8081`,
+          `Cannot connect to: ${phpEndpoint}\n\nError: ${errorMsg}\n\nMake sure the backend is deployed and accessible.`,
           [{ text: 'OK' }]
         );
       } else {
@@ -668,7 +672,8 @@ export default function CampaignsScreen() {
           setIsSending(true);
 
           const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
-          const response = await fetch(`${apiUrl}/api/send-whatsapp`, {
+          const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
+          const response = await fetch(phpEndpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
