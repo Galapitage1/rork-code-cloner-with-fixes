@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 
-import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings } from 'lucide-react-native';
+import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import Colors from '@/constants/colors';
@@ -21,7 +21,7 @@ import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
-type CampaignType = 'email' | 'sms';
+type CampaignType = 'email' | 'sms' | 'whatsapp';
 type EmailFormat = 'text' | 'html';
 
 interface Attachment {
@@ -72,6 +72,12 @@ export default function CampaignsScreen() {
   const [imapPassword, setImapPassword] = useState<string>('');
   const [smsApiUrl, setSmsApiUrl] = useState<string>('https://app.notify.lk/api/v1/send');
   const [smsApiKey, setSmsApiKey] = useState<string>('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
+  
+  const [whatsappAccessToken, setWhatsappAccessToken] = useState<string>('EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
+  const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState<string>('1790691781257415');
+  const [whatsappBusinessId, setWhatsappBusinessId] = useState<string>('895897253021976');
+  const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
+  const [testingWhatsApp, setTestingWhatsApp] = useState(false);
 
   const loadCampaignSettings = async () => {
     try {
@@ -88,6 +94,9 @@ export default function CampaignsScreen() {
         setImapPassword(parsed.imapPassword || '');
         setSmsApiUrl(parsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
         setSmsApiKey(parsed.smsApiKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
+        setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
+        setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
+        setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
       }
     } catch (error) {
       console.error('Failed to load campaign settings:', error);
@@ -109,6 +118,9 @@ export default function CampaignsScreen() {
         imapPassword,
         smsApiUrl,
         smsApiKey,
+        whatsappAccessToken,
+        whatsappPhoneNumberId,
+        whatsappBusinessId,
         updatedAt: Date.now(),
       };
       
@@ -148,9 +160,10 @@ export default function CampaignsScreen() {
   const eligibleCustomers = useMemo(() => {
     if (campaignType === 'email') {
       return filteredCustomers.filter(c => c.email && c.email.trim() !== '');
-    } else {
+    } else if (campaignType === 'sms' || campaignType === 'whatsapp') {
       return filteredCustomers.filter(c => c.phone && c.phone.trim() !== '');
     }
+    return filteredCustomers;
   }, [filteredCustomers, campaignType]);
 
   const selectedCustomers = useMemo(() => {
@@ -334,6 +347,20 @@ export default function CampaignsScreen() {
   const validateSMSCampaign = (): string | null => {
     if (!message.trim()) {
       return 'Please enter SMS message';
+    }
+    if (selectedCustomers.length === 0) {
+      return 'Please select at least one customer';
+    }
+    const noPhoneCustomers = selectedCustomers.filter(c => !c.phone);
+    if (noPhoneCustomers.length > 0) {
+      return `${noPhoneCustomers.length} selected customer(s) don't have phone numbers`;
+    }
+    return null;
+  };
+
+  const validateWhatsAppCampaign = (): string | null => {
+    if (!message.trim()) {
+      return 'Please enter WhatsApp message';
     }
     if (selectedCustomers.length === 0) {
       return 'Please select at least one customer';
@@ -561,11 +588,127 @@ export default function CampaignsScreen() {
     console.log('[SMS CAMPAIGN] Confirm dialog should be visible');
   };
 
+  const testWhatsAppConnection = async () => {
+    try {
+      setTestingWhatsApp(true);
+      console.log('[WhatsApp Test] Starting connection test...');
+
+      if (!whatsappAccessToken || !whatsappPhoneNumberId) {
+        Alert.alert('Configuration Missing', 'Please configure WhatsApp settings before testing.');
+        return;
+      }
+
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+      const response = await fetch(`${apiUrl}/api/test-whatsapp-connection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          accessToken: whatsappAccessToken,
+          phoneNumberId: whatsappPhoneNumberId,
+        }),
+      });
+
+      const result = await response.json();
+      console.log('[WhatsApp Test] Response:', result);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Connection test failed');
+      }
+
+      Alert.alert('Connection Test Successful', result.message || 'WhatsApp API is configured correctly');
+    } catch (error) {
+      console.error('[WhatsApp Test] Error:', error);
+      Alert.alert('Connection Test Failed', (error as Error).message);
+    } finally {
+      setTestingWhatsApp(false);
+    }
+  };
+
+  const sendWhatsAppCampaign = async () => {
+    const validationError = validateWhatsAppCampaign();
+    if (validationError) {
+      Alert.alert('Validation Error', validationError);
+      return;
+    }
+
+    if (!whatsappAccessToken || !whatsappPhoneNumberId) {
+      Alert.alert(
+        'WhatsApp Not Configured',
+        'Please configure WhatsApp Business API settings before sending messages.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    console.log('[WhatsApp CAMPAIGN] Opening confirm dialog...');
+    setConfirmState({
+      title: 'Send WhatsApp Campaign',
+      message: `Send WhatsApp message to ${selectedCustomers.length} customer(s)?`,
+      onConfirm: async () => {
+        console.log('[WhatsApp CAMPAIGN] User confirmed, starting send...');
+        try {
+          setIsSending(true);
+
+          const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+          const response = await fetch(`${apiUrl}/api/send-whatsapp`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              accessToken: whatsappAccessToken,
+              phoneNumberId: whatsappPhoneNumberId,
+              message: message,
+              recipients: selectedCustomers.map(c => ({
+                name: c.name,
+                phone: c.phone,
+              })),
+            }),
+          });
+
+          const result = await response.json();
+          console.log('[WhatsApp CAMPAIGN] Backend response:', result);
+
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Failed to send WhatsApp messages');
+          }
+
+          const { results } = result;
+          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
+            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+          }`;
+
+          Alert.alert(
+            'WhatsApp Campaign Complete',
+            resultMessage,
+            [{ text: 'OK' }]
+          );
+
+          if (results.success > 0) {
+            setMessage('');
+            setSelectedCustomerIds(new Set());
+          }
+
+        } catch (error) {
+          console.error('[WhatsApp CAMPAIGN] Error:', error);
+          Alert.alert('Error', 'Failed to send WhatsApp campaign: ' + (error as Error).message);
+        } finally {
+          setIsSending(false);
+        }
+      },
+    });
+    setConfirmVisible(true);
+  };
+
   const handleSendCampaign = () => {
     if (campaignType === 'email') {
       sendEmailCampaign();
-    } else {
+    } else if (campaignType === 'sms') {
       sendSMSCampaign();
+    } else if (campaignType === 'whatsapp') {
+      sendWhatsAppCampaign();
     }
   };
 
@@ -626,6 +769,27 @@ export default function CampaignsScreen() {
               ]}
             >
               SMS Campaign
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.typeButton,
+              campaignType === 'whatsapp' && styles.typeButtonActive,
+            ]}
+            onPress={() => setCampaignType('whatsapp')}
+          >
+            <Phone
+              size={20}
+              color={campaignType === 'whatsapp' ? Colors.light.tint : Colors.light.tabIconDefault}
+            />
+            <Text
+              style={[
+                styles.typeButtonText,
+                campaignType === 'whatsapp' && styles.typeButtonTextActive,
+              ]}
+            >
+              WhatsApp
             </Text>
           </TouchableOpacity>
         </View>
@@ -903,6 +1067,96 @@ export default function CampaignsScreen() {
           </View>
         )}
 
+        {campaignType === 'whatsapp' && (
+          <>
+            <TouchableOpacity
+              style={styles.settingsToggle}
+              onPress={() => setShowWhatsAppSettings(!showWhatsAppSettings)}
+            >
+              <View style={styles.settingsToggleLeft}>
+                <Settings size={20} color={Colors.light.tint} />
+                <Text style={styles.settingsToggleText}>WhatsApp Business API</Text>
+              </View>
+              {showWhatsAppSettings ? (
+                <ChevronUp size={20} color={Colors.light.tint} />
+              ) : (
+                <ChevronDown size={20} color={Colors.light.tint} />
+              )}
+            </TouchableOpacity>
+
+            {showWhatsAppSettings && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>WhatsApp Business Configuration</Text>
+                
+                <Text style={styles.label}>Access Token *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={whatsappAccessToken}
+                  onChangeText={setWhatsappAccessToken}
+                  placeholder="Your WhatsApp Business API access token"
+                  autoCapitalize="none"
+                  multiline
+                />
+
+                <Text style={styles.label}>Phone Number ID *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={whatsappPhoneNumberId}
+                  onChangeText={setWhatsappPhoneNumberId}
+                  placeholder="e.g., 1790691781257415"
+                  keyboardType="number-pad"
+                />
+
+                <Text style={styles.label}>Business Account ID</Text>
+                <TextInput
+                  style={styles.input}
+                  value={whatsappBusinessId}
+                  onChangeText={setWhatsappBusinessId}
+                  placeholder="e.g., 895897253021976 (Optional)"
+                  keyboardType="number-pad"
+                />
+
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.testButton]}
+                    onPress={testWhatsAppConnection}
+                    disabled={testingWhatsApp}
+                  >
+                    {testingWhatsApp ? (
+                      <ActivityIndicator size="small" color={Colors.light.tint} />
+                    ) : (
+                      <Text style={styles.testButtonText}>Test Connection</Text>
+                    )}
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton]}
+                    onPress={saveCampaignSettings}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>WhatsApp Message</Text>
+              
+              <Text style={styles.label}>Message *</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={message}
+                onChangeText={setMessage}
+                placeholder="Your WhatsApp message..."
+                multiline
+                numberOfLines={6}
+                textAlignVertical="top"
+              />
+              <Text style={styles.charCount}>{message.length} characters</Text>
+            </View>
+          </>
+        )}
+
         <View style={styles.section}>
           <View style={styles.customerHeader}>
             <Text style={styles.sectionTitle}>
@@ -1034,6 +1288,7 @@ const styles = StyleSheet.create({
   },
   typeSelector: {
     flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
     gap: 12,
     marginBottom: 20,
   },

@@ -241,6 +241,126 @@ app.notFound((c) => {
   return c.json({ error: 'Not Found', path: c.req.url }, 404);
 });
 
+app.post("/api/test-whatsapp-connection", async (c) => {
+  try {
+    console.log('[WhatsApp Test] Starting connection test...');
+    const body = await c.req.json();
+    const { accessToken, phoneNumberId } = body;
+
+    if (!accessToken || !phoneNumberId) {
+      return c.json({ success: false, error: 'Missing access token or phone number ID' }, 400);
+    }
+
+    const response = await fetch(
+      `https://graph.facebook.com/v21.0/${phoneNumberId}`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    const data = await response.json();
+    console.log('[WhatsApp Test] Response:', data);
+
+    if (!response.ok) {
+      throw new Error(data.error?.message || 'Failed to verify WhatsApp configuration');
+    }
+
+    return c.json({
+      success: true,
+      message: `WhatsApp Business API connected successfully. Phone: ${data.display_phone_number || phoneNumberId}`,
+    });
+  } catch (error: any) {
+    console.error('[WhatsApp Test] Error:', error);
+    return c.json({ success: false, error: error?.message || 'WhatsApp connection test failed' }, 500);
+  }
+});
+
+app.post("/api/send-whatsapp", async (c) => {
+  try {
+    console.log('[WhatsApp] Starting send whatsapp request...');
+    const body = await c.req.json();
+    const { accessToken, phoneNumberId, message, recipients } = body;
+
+    if (!accessToken || !phoneNumberId || !message || !recipients) {
+      return c.json({ success: false, error: 'Missing required fields' }, 400);
+    }
+
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [] as string[],
+    };
+
+    for (const recipient of recipients) {
+      try {
+        if (!recipient.phone) {
+          results.failed++;
+          results.errors.push(`${recipient.name}: No phone number`);
+          continue;
+        }
+
+        let phone = recipient.phone.trim();
+        
+        phone = phone.replace(/[^0-9+]/g, '');
+        
+        if (phone.startsWith('0')) {
+          phone = '94' + phone.substring(1);
+        } else if (phone.startsWith('+')) {
+          phone = phone.substring(1);
+        } else if (!phone.startsWith('94')) {
+          phone = '94' + phone;
+        }
+
+        console.log(`[WhatsApp] Sending to ${recipient.name} (${phone})...`);
+
+        const response = await fetch(
+          `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: phone,
+              type: 'text',
+              text: {
+                preview_url: false,
+                body: message,
+              },
+            }),
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+          throw new Error(data.error?.message || 'Failed to send message');
+        }
+
+        results.success++;
+        console.log(`[WhatsApp] Sent to ${recipient.name}:`, data);
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error: any) {
+        results.failed++;
+        results.errors.push(`${recipient.name}: ${error.message}`);
+        console.error(`[WhatsApp] Failed to send to ${recipient.name}:`, error);
+      }
+    }
+
+    return c.json({ success: true, results });
+  } catch (error: any) {
+    console.error('[WhatsApp] Unexpected error:', error);
+    return c.json({ success: false, error: error?.message || 'WhatsApp send failed' }, 500);
+  }
+});
+
 app.onError((err, c) => {
   console.error('[Hono] Server Error:', err);
   return c.json({ error: 'Internal Server Error', message: err.message }, 500);
