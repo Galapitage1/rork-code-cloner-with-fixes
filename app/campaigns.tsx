@@ -240,7 +240,7 @@ export default function CampaignsScreen() {
         return;
       }
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
       const response = await fetch(`${apiUrl}/api/test-email-connection`, {
         method: 'POST',
         headers: {
@@ -431,7 +431,7 @@ export default function CampaignsScreen() {
           );
 
           console.log('[EMAIL CAMPAIGN] Sending to backend...');
-          const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
           const response = await fetch(`${apiUrl}/api/send-email`, {
             method: 'POST',
             headers: {
@@ -598,7 +598,7 @@ export default function CampaignsScreen() {
         return;
       }
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
       const response = await fetch(`${apiUrl}/api/test-whatsapp-connection`, {
         method: 'POST',
         headers: {
@@ -651,7 +651,7 @@ export default function CampaignsScreen() {
         try {
           setIsSending(true);
 
-          const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8081';
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
           const response = await fetch(`${apiUrl}/api/send-whatsapp`, {
             method: 'POST',
             headers: {
