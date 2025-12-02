@@ -17,7 +17,7 @@ import { ButtonViewMode } from '@/components/ButtonViewMode';
 export default function StockCheckScreen() {
   const { products, outlets, saveStockCheck, stockChecks, isLoading, inventoryStocks, productConversions, requests, viewMode, reconcileHistory } = useStock();
   const { getSortedProducts, trackUsage } = useProductUsage();
-  const { currentUser, isSuperAdmin } = useAuth();
+  const { currentUser, isSuperAdmin, enableReceivedAutoLoad } = useAuth();
   const { logActivity } = useActivityLog();
   
   const getProductPairForInventory = useCallback((productId: string) => {
@@ -490,7 +490,8 @@ export default function StockCheckScreen() {
 
     // Auto-fill received stocks from Prods.Req for production outlets
     // THIS IS CRITICAL: We load received from inventoryStocks.prodsReqWhole / productionRequest fields
-    if (outlet.outletType === 'production') {
+    // RESPECT the "Enable Received Auto Load" setting
+    if (outlet.outletType === 'production' && enableReceivedAutoLoad) {
       console.log('\n=== AUTO-FILLING RECEIVED STOCKS FROM PRODS.REQ (INVENTORY) ===');
       console.log('Production outlet:', selectedOutlet, 'outlet type:', outlet.outletType);
       console.log('Selected date:', selectedDate);
@@ -587,8 +588,13 @@ export default function StockCheckScreen() {
       console.log('Received stocks map size:', newReceivedStocks.size);
       console.log('===================================================\n');
     } else {
-      console.log('Outlet is NOT production type - skipping Prods.Req auto-fill');
-      console.log('Outlet type:', outlet?.outletType);
+      if (outlet.outletType === 'production' && !enableReceivedAutoLoad) {
+        console.log('Outlet is production type BUT "Enable Received Auto Load" is DISABLED - skipping Prods.Req auto-fill');
+        console.log('enableReceivedAutoLoad setting:', enableReceivedAutoLoad);
+      } else {
+        console.log('Outlet is NOT production type - skipping Prods.Req auto-fill');
+        console.log('Outlet type:', outlet?.outletType);
+      }
     }
 
     console.log('\n=== SETTING STATE ===');
@@ -634,7 +640,7 @@ export default function StockCheckScreen() {
     
     console.log('Auto-filled', newAutoFilled.size, 'products from inventory for outlet:', selectedOutlet);
     console.log('===== STOCK CHECK AUTO-FILL useEffect COMPLETE =====\n');
-  }, [selectedDate, selectedOutlet, inventoryStocks, stockChecks, products, outlets, productConversions, getProductPairForInventory, hasUserInput, requests]);
+  }, [selectedDate, selectedOutlet, inventoryStocks, stockChecks, products, outlets, productConversions, getProductPairForInventory, hasUserInput, requests, enableReceivedAutoLoad]);
 
 
 

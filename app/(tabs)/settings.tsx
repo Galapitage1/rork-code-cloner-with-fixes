@@ -35,7 +35,7 @@ const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 export default function SettingsScreen() {
   const { products, outlets, productConversions, addProduct, updateProduct, deleteProduct, addOutlet, updateOutlet, deleteOutlet, addProductConversion, updateProductConversion, deleteProductConversion, clearAllProducts, clearAllOutlets, deleteUserStockChecks, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, isSyncPaused, toggleSyncPause, viewMode, setViewMode } = useStock();
 
-  const { currentUser, users, logout, addUser, updateUser, deleteUser, isSyncing: isUserSyncing, lastSyncTime: userLastSync, syncUsers, clearAllUsers, isSuperAdmin, showPageTabs, toggleShowPageTabs, currency, updateCurrency } = useAuth();
+  const { currentUser, users, logout, addUser, updateUser, deleteUser, isSyncing: isUserSyncing, lastSyncTime: userLastSync, syncUsers, clearAllUsers, isSuperAdmin, showPageTabs, toggleShowPageTabs, currency, updateCurrency, enableReceivedAutoLoad, toggleEnableReceivedAutoLoad } = useAuth();
   const { isSyncing: isCustomerSyncing, lastSyncTime: customerLastSync, syncCustomers } = useCustomers();
   const { isSyncing: isRecipeSyncing, lastSyncTime: recipeLastSync, syncRecipes } = useRecipes();
   const { isSyncing: isOrderSyncing, lastSyncTime: orderLastSync, syncOrders } = useOrders();
@@ -1262,6 +1262,23 @@ export default function SettingsScreen() {
           <Text style={[styles.buttonText, styles.secondaryButtonText]}>Products</Text>
         </TouchableOpacity>
 
+        <View style={styles.syncInfoCard}>
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleInfo}>
+              <Text style={styles.toggleTitle}>Enable Received Auto Load</Text>
+              <Text style={styles.toggleDescription}>
+                When enabled, production outlets will automatically load received quantities from inventory when loading stock checks or changing outlets/dates.
+              </Text>
+            </View>
+            <Switch
+              value={enableReceivedAutoLoad}
+              onValueChange={toggleEnableReceivedAutoLoad}
+              trackColor={{ false: Colors.light.muted, true: Colors.light.tint }}
+              thumbColor={Colors.light.card}
+            />
+          </View>
+        </View>
+
         <TouchableOpacity
           style={[styles.button, styles.secondaryButton]}
           onPress={() => {
@@ -1536,5 +1553,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.muted,
     marginTop: 4,
+  },
+  toggleRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    gap: 12,
+  },
+  toggleInfo: {
+    flex: 1,
+  },
+  toggleTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 4,
+  },
+  toggleDescription: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    lineHeight: 16,
   },
 });

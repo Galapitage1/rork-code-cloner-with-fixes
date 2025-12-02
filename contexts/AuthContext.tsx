@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
   USERS: '@stock_app_users',
   SHOW_PAGE_TABS: '@stock_app_show_page_tabs',
   CURRENCY: '@stock_app_currency',
+  ENABLE_RECEIVED_AUTO_LOAD: '@stock_app_enable_received_auto_load',
 };
 
 export const [AuthProvider, useAuth] = createContextHook(() => {
@@ -23,6 +24,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [hasLoadedInitialData, setHasLoadedInitialData] = useState<boolean>(false);
   const [showPageTabs, setShowPageTabs] = useState<boolean>(false);
   const [currency, setCurrency] = useState<string>('SLR');
+  const [enableReceivedAutoLoad, setEnableReceivedAutoLoad] = useState<boolean>(true);
 
   useEffect(() => {
     const loadData = async () => {
@@ -31,11 +33,12 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         
         performDailyCleanup().catch(e => console.log('[AUTH] Daily cleanup error:', e));
         
-        const [currentUserData, usersData, showPageTabsData, currencyData] = await Promise.all([
+        const [currentUserData, usersData, showPageTabsData, currencyData, enableReceivedAutoLoadData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.CURRENT_USER),
           AsyncStorage.getItem(STORAGE_KEYS.USERS),
           AsyncStorage.getItem(STORAGE_KEYS.SHOW_PAGE_TABS),
           AsyncStorage.getItem(STORAGE_KEYS.CURRENCY),
+          AsyncStorage.getItem(STORAGE_KEYS.ENABLE_RECEIVED_AUTO_LOAD),
         ]);
 
         if (showPageTabsData) {
@@ -53,6 +56,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
             setCurrency(parsed);
           } catch {
             setCurrency('SLR');
+          }
+        }
+
+        if (enableReceivedAutoLoadData) {
+          try {
+            const parsed = JSON.parse(enableReceivedAutoLoadData);
+            setEnableReceivedAutoLoad(parsed);
+          } catch {
+            setEnableReceivedAutoLoad(true);
           }
         }
 
@@ -459,6 +471,16 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     }
   }, []);
 
+  const toggleEnableReceivedAutoLoad = useCallback(async (value: boolean) => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.ENABLE_RECEIVED_AUTO_LOAD, JSON.stringify(value));
+      setEnableReceivedAutoLoad(value);
+    } catch (error) {
+      console.error('Failed to update enable received auto load setting:', error);
+      throw error;
+    }
+  }, []);
+
   return useMemo(() => ({
     currentUser,
     users,
@@ -483,6 +505,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     toggleShowPageTabs,
     currency,
     updateCurrency,
+    enableReceivedAutoLoad,
+    toggleEnableReceivedAutoLoad,
   }), [
     currentUser,
     users,
@@ -505,5 +529,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     toggleShowPageTabs,
     currency,
     updateCurrency,
+    enableReceivedAutoLoad,
+    toggleEnableReceivedAutoLoad,
   ]);
 });
