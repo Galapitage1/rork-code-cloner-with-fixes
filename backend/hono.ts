@@ -251,6 +251,8 @@ app.post("/api/test-whatsapp-connection", async (c) => {
       return c.json({ success: false, error: 'Missing access token or phone number ID' }, 400);
     }
 
+    console.log('[WhatsApp Test] Testing with phoneNumberId:', phoneNumberId);
+    
     const response = await fetch(
       `https://graph.facebook.com/v21.0/${phoneNumberId}`,
       {
@@ -262,15 +264,19 @@ app.post("/api/test-whatsapp-connection", async (c) => {
     );
 
     const data = await response.json();
-    console.log('[WhatsApp Test] Response:', data);
+    console.log('[WhatsApp Test] API Response Status:', response.status);
+    console.log('[WhatsApp Test] API Response Data:', JSON.stringify(data, null, 2));
 
     if (!response.ok) {
-      throw new Error(data.error?.message || 'Failed to verify WhatsApp configuration');
+      const errorMsg = data.error?.message || data.error?.error_user_msg || 'Failed to verify WhatsApp configuration';
+      console.error('[WhatsApp Test] API Error:', errorMsg);
+      throw new Error(errorMsg);
     }
 
     return c.json({
       success: true,
       message: `WhatsApp Business API connected successfully. Phone: ${data.display_phone_number || phoneNumberId}`,
+      data,
     });
   } catch (error: any) {
     console.error('[WhatsApp Test] Error:', error);
