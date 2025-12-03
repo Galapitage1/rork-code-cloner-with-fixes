@@ -1299,10 +1299,11 @@ const styles = StyleSheet.create({
     width: '50%',
     minWidth: 140,
     maxWidth: 180,
-    aspectRatio: 0.9,
+    minHeight: 80,
     position: 'relative' as const,
   },
   userButton: {
+    flex: 1,
     backgroundColor: COLORS.darkYellow,
     borderRadius: 12,
     overflow: 'hidden',
