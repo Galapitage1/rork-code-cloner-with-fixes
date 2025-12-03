@@ -1291,8 +1291,8 @@ const styles = StyleSheet.create({
   usersGrid: {
     flexDirection: 'row' as const,
     flexWrap: 'wrap' as const,
-    columnGap: 0,
-    rowGap: 0,
+    columnGap: 1,
+    rowGap: 1,
     justifyContent: 'center' as const,
   },
   userButtonWrapper: {
