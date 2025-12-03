@@ -3,6 +3,10 @@ export interface SyncOptions {
   dataType: string;
 }
 
+export interface DeltaSyncOptions extends SyncOptions {
+  since?: number;
+}
+
 let syncFailureCount = 0;
 const MAX_FAILURES_BEFORE_PAUSE = 5;
 let isPaused = false;
@@ -230,6 +234,108 @@ export async function getFromServer<T>(
     console.error(`[DirectSync] Failed to fetch ${options.dataType}: ${errorMsg}`);
     recordFailure();
     return [];
+  }
+}
+
+export async function getDeltaFromServer<T extends { updatedAt?: number }>(
+  options: DeltaSyncOptions
+): Promise<T[]> {
+  if (!shouldAttemptSync()) {
+    return [];
+  }
+
+  const isHealthy = await checkBackendHealth();
+  if (!isHealthy) {
+    return [];
+  }
+  
+  try {
+    const baseUrl = getBaseUrl();
+    const since = options.since || 0;
+    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}&since=${since}`;
+    
+    console.log(`[DirectSync] Fetching delta for ${options.dataType} since ${new Date(since).toISOString()}`);
+    
+    const response = await fetchWithRetry(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!Array.isArray(result)) {
+      throw new Error('Invalid response format');
+    }
+    
+    const filtered = result.filter((item: T) => (item.updatedAt || 0) > since);
+    console.log(`[DirectSync] Delta fetch: ${filtered.length} items changed out of ${result.length} total`);
+    
+    recordSuccess();
+    return filtered as T[];
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    console.error(`[DirectSync] Failed to fetch delta ${options.dataType}: ${errorMsg}`);
+    recordFailure();
+    return [];
+  }
+}
+
+export async function saveDeltaToServer<T extends { id: string; updatedAt?: number }>(
+  data: T[],
+  options: SyncOptions
+): Promise<T[]> {
+  if (data.length === 0) {
+    console.log(`[DirectSync] No delta changes to save for ${options.dataType}`);
+    return data;
+  }
+  
+  if (!shouldAttemptSync()) {
+    return data;
+  }
+
+  const isHealthy = await checkBackendHealth();
+  if (!isHealthy) {
+    return data;
+  }
+  
+  try {
+    const baseUrl = getBaseUrl();
+    const url = `${baseUrl}/Tracker/api/sync.php?endpoint=${encodeURIComponent(options.dataType)}&delta=true`;
+    
+    console.log(`[DirectSync] Saving delta for ${options.dataType}: ${data.length} changed items`);
+    
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!Array.isArray(result)) {
+      throw new Error('Invalid response format');
+    }
+    
+    console.log(`[DirectSync] Delta save successful for ${options.dataType}`);
+    recordSuccess();
+    return result as T[];
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    console.error(`[DirectSync] Failed to save delta ${options.dataType}: ${errorMsg}`);
+    recordFailure();
+    return data;
   }
 }
 

@@ -1,5 +1,24 @@
-import { saveToServer, getFromServer, mergeData } from './directSync';
+import { saveToServer, getFromServer, mergeData, getDeltaFromServer, saveDeltaToServer } from './directSync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+async function getLastSyncTimestamp(dataType: string, userId: string): Promise<number> {
+  try {
+    const key = `@last_sync_${dataType}_${userId}`;
+    const stored = await AsyncStorage.getItem(key);
+    return stored ? parseInt(stored, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function setLastSyncTimestamp(dataType: string, userId: string, timestamp: number): Promise<void> {
+  try {
+    const key = `@last_sync_${dataType}_${userId}`;
+    await AsyncStorage.setItem(key, timestamp.toString());
+  } catch (error) {
+    console.error(`[syncData] ${dataType}: Failed to save lastSync timestamp:`, error);
+  }
+}
 
 export async function syncData<T extends { id: string; updatedAt?: number; deleted?: boolean }>(
   dataType: string,
@@ -12,7 +31,16 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
   }
 
   try {
-    console.log(`[syncData] ${dataType}: Starting sync - local items:`, localData.length);
+    console.log(`[syncData] ${dataType}: Starting INCREMENTAL sync - local items:`, localData.length);
+    
+    const lastSyncTime = await getLastSyncTimestamp(dataType, userId);
+    const isFirstSync = lastSyncTime === 0;
+    
+    if (isFirstSync) {
+      console.log(`[syncData] ${dataType}: 🆕 FIRST SYNC - Using full sync`);
+    } else {
+      console.log(`[syncData] ${dataType}: ♻️ INCREMENTAL SYNC - Last sync:`, new Date(lastSyncTime).toISOString());
+    }
     
     // CRITICAL: Load permanent settings lock
     let protectedIds: string[] = [];
@@ -40,44 +68,56 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
     const localActive = localData.filter(item => !item.deleted).length;
     console.log(`[syncData] ${dataType}: Local state - active:`, localActive, 'deleted:', localDeleted);
     
-    // CRITICAL: Always sync OUT first to push local changes (including deletions) to server
-    console.log(`[syncData] ${dataType}: STEP 1 - Syncing OUT all local data (including deletions) to server...`);
-    const savedToServer = await saveToServer(localData, {
-      userId,
-      dataType,
-    });
-    console.log(`[syncData] ${dataType}: ✓ Synced OUT to server, got back:`, savedToServer.length, 'items');
+    // INCREMENTAL: Only sync items changed since lastSyncTime
+    const changedItems = isFirstSync 
+      ? localData 
+      : localData.filter(item => (item.updatedAt || 0) > lastSyncTime);
     
-    // STEP 2: Fetch from server to get other devices' updates
-    console.log(`[syncData] ${dataType}: STEP 2 - Fetching from server to get other devices' updates...`);
-    const remoteData = await getFromServer<T>({
-      userId,
-      dataType,
-    });
-    console.log(`[syncData] ${dataType}: ✓ Fetched from server:`, remoteData.length, 'items');
+    console.log(`[syncData] ${dataType}: 📤 Uploading ${changedItems.length} changed items (out of ${localData.length} total)`);
     
-    // STEP 3: Merge with timestamp-based conflict resolution
-    // This ensures newer timestamps always win (whether local or remote)
-    console.log(`[syncData] ${dataType}: STEP 3 - Merging with timestamp-based conflict resolution...`);
-    const merged = mergeData(savedToServer, remoteData, { protectedIds });
-    const deletedInMerge = merged.filter(item => item.deleted).length;
-    const activeInMerge = merged.length - deletedInMerge;
-    console.log(`[syncData] ${dataType}: ✓ Merge complete:`, merged.length, 'total items (active:', activeInMerge, ', deleted:', deletedInMerge, ')');
-    console.log(`[syncData] ${dataType}: ⚠️ IMPORTANT: Deleted items are included to prevent resurrection by other devices`);
+    if (changedItems.length > 0) {
+      console.log(`[syncData] ${dataType}: STEP 1 - Syncing OUT changed items to server...`);
+      if (isFirstSync) {
+        await saveToServer(changedItems, { userId, dataType });
+      } else {
+        await saveDeltaToServer(changedItems, { userId, dataType });
+      }
+      console.log(`[syncData] ${dataType}: ✓ Synced OUT ${changedItems.length} changed items`);
+    } else {
+      console.log(`[syncData] ${dataType}: ⏩ No local changes to upload`);
+    }
     
-    // STEP 4: Save final merged result back to server (INCLUDING DELETED ITEMS)
-    // This ensures all devices converge to the same state and deletions are propagated
-    console.log(`[syncData] ${dataType}: STEP 4 - Saving merged result back to server (with deletions)...`);
-    const finalSaved = await saveToServer(merged, {
-      userId,
-      dataType,
-    });
-    const deletedInFinal = finalSaved.filter(item => item.deleted).length;
-    const activeInFinal = finalSaved.length - deletedInFinal;
-    console.log(`[syncData] ${dataType}: ✓ Sync complete -`, finalSaved.length, 'total items (active:', activeInFinal, ', deleted:', deletedInFinal, ')');
-    console.log(`[syncData] ${dataType}: ⚠️ NOTE: Caller should filter out deleted items when setting state`);
+    // STEP 2: Fetch ONLY changes from server since lastSyncTime
+    console.log(`[syncData] ${dataType}: STEP 2 - Fetching changes from server...`);
+    const remoteChanges = isFirstSync
+      ? await getFromServer<T>({ userId, dataType })
+      : await getDeltaFromServer<T>({ userId, dataType, since: lastSyncTime });
     
-    return finalSaved;
+    console.log(`[syncData] ${dataType}: ✓ Fetched ${remoteChanges.length} changed items from server`);
+    
+    // STEP 3: Merge remote changes with local data
+    if (remoteChanges.length > 0) {
+      console.log(`[syncData] ${dataType}: STEP 3 - Merging ${remoteChanges.length} remote changes...`);
+      const merged = mergeData(localData, remoteChanges, { protectedIds });
+      const deletedInMerge = merged.filter(item => item.deleted).length;
+      const activeInMerge = merged.length - deletedInMerge;
+      console.log(`[syncData] ${dataType}: ✓ Merge complete:`, merged.length, 'total items (active:', activeInMerge, ', deleted:', deletedInMerge, ')');
+      
+      // Update lastSync timestamp
+      const now = Date.now();
+      await setLastSyncTimestamp(dataType, userId, now);
+      console.log(`[syncData] ${dataType}: ✓ Updated lastSync timestamp to`, new Date(now).toISOString());
+      
+      return merged;
+    } else {
+      console.log(`[syncData] ${dataType}: ⏩ No remote changes, keeping local data`);
+      
+      // Still update lastSync timestamp
+      const now = Date.now();
+      await setLastSyncTimestamp(dataType, userId, now);
+      
+      return localData;
+    }
   } catch (error) {
     console.error(`[syncData] ${dataType}: Sync failed, returning local data:`, error);
     return localData;
