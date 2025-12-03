@@ -1,16 +1,37 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { LogIn } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useStores } from '@/contexts/StoresContext';
 import Colors from '@/constants/colors';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const { login, isLoading: authLoading, users } = useAuth();
+  const { login, isLoading: authLoading, users, syncUsers } = useAuth();
+  const { syncAll: syncStoresData } = useStores();
   const router = useRouter();
+
+  useEffect(() => {
+    const loadUsersAndOutlets = async () => {
+      if (!authLoading && users.length <= 2) {
+        console.log('[LoginScreen] First visit detected - loading users and outlets...');
+        try {
+          await Promise.all([
+            syncUsers(undefined, true),
+            syncStoresData(true),
+          ]);
+          console.log('[LoginScreen] Users and outlets loaded successfully');
+        } catch (error) {
+          console.error('[LoginScreen] Failed to load users and outlets:', error);
+        }
+      }
+    };
+
+    loadUsersAndOutlets();
+  }, [authLoading, users.length, syncUsers, syncStoresData]);
 
   const handleLogin = async () => {
     if (!username.trim()) {
@@ -30,6 +51,18 @@ export default function LoginScreen() {
       
       if (user) {
         console.log('handleLogin: User logged in successfully');
+        console.log('handleLogin: Triggering immediate full sync...');
+        
+        try {
+          await Promise.all([
+            syncUsers(undefined, true),
+            syncStoresData(true),
+          ]);
+          console.log('handleLogin: Full sync completed');
+        } catch (syncError) {
+          console.error('handleLogin: Full sync failed (non-critical):', syncError);
+        }
+        
         router.replace('/home');
       } else {
         Alert.alert('Error', 'User not found. Please contact your administrator.');
