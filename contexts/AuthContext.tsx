@@ -27,6 +27,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [enableReceivedAutoLoad, setEnableReceivedAutoLoad] = useState<boolean>(true);
 
   useEffect(() => {
+    let isMounted = true;
     const loadData = async () => {
       try {
         setIsLoading(true);
@@ -169,11 +170,16 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       } catch (error) {
         console.error('Failed to load auth data:', error);
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     };
 
     loadData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
 

@@ -87,8 +87,9 @@ export const [MoirProvider, useMoir] = createContextHook(() => {
   const [radiusMeters, setRadiusMeters] = useState<number>(500);
 
   const loadData = useCallback(async () => {
+    let isMounted = true;
     try {
-      setIsLoading(true);
+      if (isMounted) setIsLoading(true);
       const [usersData, recordsData, locationsData, currentUserData, trackingData, radiusData] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.MOIR_USERS),
         AsyncStorage.getItem(STORAGE_KEYS.MOIR_RECORDS),
@@ -98,45 +99,45 @@ export const [MoirProvider, useMoir] = createContextHook(() => {
         AsyncStorage.getItem(STORAGE_KEYS.MOIR_RADIUS_METERS),
       ]);
 
-      if (usersData) {
+      if (usersData && isMounted) {
         const parsed = JSON.parse(usersData);
         setUsers(Array.isArray(parsed) ? parsed.filter((u: MoirUser) => !u.deleted) : []);
       }
 
-      if (recordsData) {
+      if (recordsData && isMounted) {
         const parsed = JSON.parse(recordsData);
         setRecords(Array.isArray(parsed) ? parsed.filter((r: MoirRecord) => !r.deleted) : []);
       }
 
-      if (locationsData) {
+      if (locationsData && isMounted) {
         const parsed = JSON.parse(locationsData);
         setLocations(Array.isArray(parsed) ? parsed.filter((l: MoirLocation) => !l.deleted) : []);
       }
 
-      if (currentUserData) {
+      if (currentUserData && isMounted) {
         setCurrentUser(JSON.parse(currentUserData));
       }
 
-      if (trackingData) {
+      if (trackingData && isMounted) {
         setLocationTrackingEnabled(JSON.parse(trackingData));
       }
 
-      if (radiusData) {
+      if (radiusData && isMounted) {
         setRadiusMeters(JSON.parse(radiusData));
       }
 
       const { status } = await Location.getForegroundPermissionsAsync();
-      setLocationPermissionGranted(status === 'granted');
+      if (isMounted) setLocationPermissionGranted(status === 'granted');
     } catch (error) {
       console.error('Failed to load Moir data:', error);
     } finally {
-      setIsLoading(false);
+      if (isMounted) setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+  }, []);
 
   const syncAllData = useCallback(async (silent: boolean = false, forceData?: { users?: MoirUser[], records?: MoirRecord[], locations?: MoirLocation[] }) => {
     try {
