@@ -235,17 +235,26 @@ function LiveInventoryScreen() {
           const wholeCount = latestTodayCheck.counts.find(c => c.productId === pair.wholeId);
           const slicesCount = latestTodayCheck.counts.find(c => c.productId === pair.slicesId);
           
+          const wholeProductDetails = products.find(p => p.id === pair.wholeId);
+          const slicesProductDetails = products.find(p => p.id === pair.slicesId);
+          
+          console.log(`[WASTAGE CHECK] Product pair: ${wholeProductDetails?.name} (whole ID: ${pair.wholeId}) / ${slicesProductDetails?.name} (slice ID: ${pair.slicesId})`);
+          console.log(`[WASTAGE CHECK] Date: ${date}, Outlet: ${selectedOutlet}`);
+          
           // Wastage entered for the "Whole" product goes to wastageWhole column
           if (wholeCount && wholeCount.wastage) {
             wastageWhole = wholeCount.wastage;
-            console.log(`Wastage for WHOLE product (${wholeProduct.name}): ${wastageWhole}`);
+            console.log(`[WASTAGE] ✓ Wastage for WHOLE product ${wholeProductDetails?.name} (${wholeProductDetails?.unit}): ${wastageWhole} → wastageWhole column`);
+          } else {
+            console.log(`[WASTAGE] No wastage found for whole product ${wholeProductDetails?.name}`);
           }
           
           // Wastage entered for the "Slice" product goes to wastageSlices column
           if (slicesCount && slicesCount.wastage) {
             wastageSlices = slicesCount.wastage;
-            const slicesProduct = products.find(p => p.id === pair.slicesId);
-            console.log(`Wastage for SLICES product (${slicesProduct?.name}): ${wastageSlices}`);
+            console.log(`[WASTAGE] ✓ Wastage for SLICES product ${slicesProductDetails?.name} (${slicesProductDetails?.unit}): ${wastageSlices} → wastageSlices column`);
+          } else {
+            console.log(`[WASTAGE] No wastage found for slices product ${slicesProductDetails?.name}`);
           }
         }
 
