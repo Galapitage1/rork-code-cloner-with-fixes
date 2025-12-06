@@ -50,12 +50,14 @@ export async function exportStockCheckToExcel(
   stockCheck: StockCheck,
   products: Product[],
   recipes?: Recipe[],
-  storeProducts?: any[]
+  storeProducts?: any[],
+  productConversions?: any[]
 ): Promise<void> {
   console.log('=== EXPORT START ===');
   console.log('Platform:', Platform.OS);
   console.log('Stock check:', { outlet: stockCheck.outlet, date: stockCheck.date, countsLength: stockCheck.counts.length });
   console.log('Recipes provided:', recipes ? recipes.length : 'NONE');
+  console.log('Product conversions provided:', productConversions ? productConversions.length : 'NONE');
   
   try {
     if (!stockCheck.counts || stockCheck.counts.length === 0) {
@@ -71,6 +73,34 @@ export async function exportStockCheckToExcel(
       const totalValue = sellingPrice * count.quantity;
       const totalCost = calculateProductCostHelper(count.productId, count.quantity, products, recipes, storeProducts, 'STOCK CHECK');
       
+      // Format wastage with unit conversion if applicable
+      let wastageDisplay = '';
+      if (count.wastage !== undefined && count.wastage > 0) {
+        wastageDisplay = String(count.wastage);
+        
+        // Check if this product has a conversion
+        if (productConversions && productConversions.length > 0) {
+          const conversion = productConversions.find(
+            (c: any) => c.fromProductId === count.productId || c.toProductId === count.productId
+          );
+          
+          if (conversion) {
+            // If this is the "from" product (e.g., whole cake)
+            if (conversion.fromProductId === count.productId) {
+              const toProduct = productMap.get(conversion.toProductId);
+              const convertedAmount = count.wastage * conversion.conversionFactor;
+              wastageDisplay = `${count.wastage} ${product?.unit || ''} (${convertedAmount} ${toProduct?.unit || ''})`;
+            } 
+            // If this is the "to" product (e.g., slices)
+            else if (conversion.toProductId === count.productId) {
+              const fromProduct = productMap.get(conversion.fromProductId);
+              const convertedAmount = count.wastage / conversion.conversionFactor;
+              wastageDisplay = `${count.wastage} ${product?.unit || ''} (${convertedAmount.toFixed(2)} ${fromProduct?.unit || ''})`;
+            }
+          }
+        }
+      }
+      
       return {
         'Product Name': product?.name || 'Unknown',
         'Type': product?.type || '',
@@ -78,6 +108,7 @@ export async function exportStockCheckToExcel(
         'Unit': product?.unit || '',
         'Opening Stock': count.openingStock !== undefined ? count.openingStock : '',
         'Received Stock': count.receivedStock !== undefined ? count.receivedStock : '',
+        'Wastage': wastageDisplay,
         'Current Stock': count.quantity,
         'Selling Price': sellingPrice || '',
         'Product Value': totalValue || '',
@@ -198,7 +229,8 @@ export async function exportRequestsToExcel(
   requests: ProductRequest[],
   products: Product[],
   recipes?: Recipe[],
-  storeProducts?: any[]
+  storeProducts?: any[],
+  productConversions?: any[]
 ): Promise<void> {
   console.log('=== REQUEST EXPORT START ===');
   console.log('Platform:', Platform.OS);

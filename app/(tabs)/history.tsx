@@ -11,7 +11,7 @@ import { StockCheck, StockCount, ProductRequest } from '@/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 export default function HistoryScreen() {
-  const { stockChecks, products, requests, outlets, isLoading, deleteRequest, updateRequest, updateStockCheck, deleteAllStockChecks, deleteStockCheck, deleteAllRequests, saveStockCheck } = useStock();
+  const { stockChecks, products, requests, outlets, isLoading, deleteRequest, updateRequest, updateStockCheck, deleteAllStockChecks, deleteStockCheck, deleteAllRequests, saveStockCheck, productConversions } = useStock();
   const { isAdmin, isSuperAdmin, currentUser } = useAuth();
   const { recipes } = useRecipes();
   const { storeProducts } = useStores();
@@ -109,7 +109,7 @@ export default function HistoryScreen() {
   const handleDownload = async (check: typeof stockChecks[0]) => {
     try {
       setDownloadingId(check.id);
-      await exportStockCheckToExcel(check, products, recipes, storeProducts);
+      await exportStockCheckToExcel(check, products, recipes, storeProducts, productConversions);
     } catch (error) {
       console.error('Download error:', error);
     } finally {
@@ -127,7 +127,7 @@ export default function HistoryScreen() {
       });
       
       for (const [toOutlet, outletRequests] of groupedByOutlet.entries()) {
-        await exportRequestsToExcel(toOutlet, outletRequests, products, recipes, storeProducts);
+        await exportRequestsToExcel(toOutlet, outletRequests, products, recipes, storeProducts, productConversions);
       }
     } catch (error) {
       console.error('Download error:', error);

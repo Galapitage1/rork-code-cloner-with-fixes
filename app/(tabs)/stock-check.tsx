@@ -746,18 +746,6 @@ export default function StockCheckScreen() {
         }
       }
       
-      let exportSuccess = false;
-      try {
-        console.log('Starting export...');
-        await exportStockCheckToExcel(stockCheck, products);
-        console.log('Export completed successfully');
-        exportSuccess = true;
-      } catch (exportError) {
-        console.error('Export error:', exportError);
-        const errorMessage = exportError instanceof Error ? exportError.message : 'Unknown error';
-        console.log('Export failed:', errorMessage);
-      }
-
       // Reset all form state AFTER successful save AND inventory update
       console.log('performSave: Resetting form state...');
       setCounts(new Map());
@@ -776,11 +764,7 @@ export default function StockCheckScreen() {
       
       setIsSaving(false);
 
-      if (exportSuccess) {
-        Alert.alert('Success', 'Stock check saved and report exported successfully!');
-      } else {
-        Alert.alert('Partial Success', 'Stock check saved but failed to export report. You can view it in the History tab.');
-      }
+      Alert.alert('Success', 'Stock check saved successfully! You can export it from the History tab.');
     } catch (error) {
       console.error('Save error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
