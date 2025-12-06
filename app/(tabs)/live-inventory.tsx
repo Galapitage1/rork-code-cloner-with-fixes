@@ -761,10 +761,20 @@ function LiveInventoryScreen() {
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
 
   useEffect(() => {
-    if (selectedOutlet) {
+    let isMounted = true;
+    
+    if (selectedOutlet && isMounted) {
       console.log('[LIVE INVENTORY] Outlet selected/changed:', selectedOutlet, '- triggering silent sync to load latest sales data');
-      syncAll(true).catch(e => console.log('[LIVE INVENTORY] Silent sync error:', e));
+      syncAll(true).catch(e => {
+        if (isMounted) {
+          console.log('[LIVE INVENTORY] Silent sync error:', e);
+        }
+      });
     }
+    
+    return () => {
+      isMounted = false;
+    };
   }, [selectedOutlet, syncAll]);
 
   const handleExportDiscrepancies = async () => {
