@@ -220,6 +220,9 @@ function LiveInventoryScreen() {
         }
 
         // STEP 3: Wastage from TODAY's LATEST USER STOCK CHECK
+        // IMPORTANT: Wastage should be shown under the correct unit conversion
+        // If wastage is entered for "Whole" product, it goes to wastageWhole
+        // If wastage is entered for "Slice" product, it goes to wastageSlices
         let wastageWhole = 0;
         let wastageSlices = 0;
 
@@ -232,8 +235,18 @@ function LiveInventoryScreen() {
           const wholeCount = latestTodayCheck.counts.find(c => c.productId === pair.wholeId);
           const slicesCount = latestTodayCheck.counts.find(c => c.productId === pair.slicesId);
           
-          if (wholeCount) wastageWhole = wholeCount.wastage || 0;
-          if (slicesCount) wastageSlices = slicesCount.wastage || 0;
+          // Wastage entered for the "Whole" product goes to wastageWhole column
+          if (wholeCount && wholeCount.wastage) {
+            wastageWhole = wholeCount.wastage;
+            console.log(`Wastage for WHOLE product (${wholeProduct.name}): ${wastageWhole}`);
+          }
+          
+          // Wastage entered for the "Slice" product goes to wastageSlices column
+          if (slicesCount && slicesCount.wastage) {
+            wastageSlices = slicesCount.wastage;
+            const slicesProduct = products.find(p => p.id === pair.slicesId);
+            console.log(`Wastage for SLICES product (${slicesProduct?.name}): ${wastageSlices}`);
+          }
         }
 
         // STEP 4: Sold/Transferred
