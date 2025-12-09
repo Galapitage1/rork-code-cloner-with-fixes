@@ -16,22 +16,22 @@ export default function LoginScreen() {
 
   useEffect(() => {
     const loadUsersAndOutlets = async () => {
-      if (!authLoading && users.length <= 2) {
-        console.log('[LoginScreen] First visit detected - loading users and outlets...');
+      if (!authLoading) {
+        console.log('[LoginScreen] Loading latest users and outlets from server...');
         try {
           await Promise.all([
             syncUsers(undefined, true),
             syncStoresData(true),
           ]);
-          console.log('[LoginScreen] Users and outlets loaded successfully');
+          console.log('[LoginScreen] Users and outlets synced successfully');
         } catch (error) {
-          console.error('[LoginScreen] Failed to load users and outlets:', error);
+          console.error('[LoginScreen] Failed to sync users and outlets:', error);
         }
       }
     };
 
     loadUsersAndOutlets();
-  }, [authLoading, users.length, syncUsers, syncStoresData]);
+  }, [authLoading, syncUsers, syncStoresData]);
 
   const handleLogin = async () => {
     if (!username.trim()) {
