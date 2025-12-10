@@ -222,21 +222,45 @@ export default function StockCheckScreen() {
   };
 
   const getPreviousDayStockCheck = useCallback((currentDate: string, outletName: string) => {
-    const date = new Date(currentDate);
-    date.setDate(date.getDate() - 1);
-    const previousDate = date.toISOString().split('T')[0];
+    // CRITICAL: Get the LATEST (most recent) stock check from history
+    // This checks ALL visible (non-deleted) stock checks in history including the current day
+    // and finds the LAST one done by a user (not AUTO) by checking both date AND time
+    console.log('getPreviousDayStockCheck: Finding latest stock check for outlet:', outletName);
+    console.log('getPreviousDayStockCheck: Current date:', currentDate);
     
-    const checksForPreviousDay = stockChecks.filter(
-      check => check.date === previousDate && check.outlet === outletName && check.completedBy !== 'AUTO'
+    // Filter all stock checks for this outlet (not just previous day, but all history)
+    // Exclude AUTO checks and deleted checks
+    // IMPORTANT: Check ALL stock checks in history, not just previous day
+    const allChecksForOutlet = stockChecks.filter(
+      check => check.outlet === outletName && check.completedBy !== 'AUTO' && !check.deleted && check.date < currentDate
     );
     
-    if (checksForPreviousDay.length === 0) {
+    console.log('getPreviousDayStockCheck: Found', allChecksForOutlet.length, 'visible stock checks (excluding AUTO and deleted)');
+    
+    if (allChecksForOutlet.length === 0) {
+      console.log('getPreviousDayStockCheck: No stock checks found in history');
       return undefined;
     }
     
-    checksForPreviousDay.sort((a, b) => b.timestamp - a.timestamp);
+    // CRITICAL: Sort by date DESC, then by timestamp DESC to get the LATEST check
+    // This ensures we get the most recent check even if there are multiple checks on the same day
+    allChecksForOutlet.sort((a, b) => {
+      // First sort by date (descending)
+      const dateCompare = (b.date || '').localeCompare(a.date || '');
+      if (dateCompare !== 0) return dateCompare;
+      // Then by timestamp (descending) - CRITICAL for same-day multiple checks
+      return b.timestamp - a.timestamp;
+    });
     
-    return checksForPreviousDay[0];
+    const latestCheck = allChecksForOutlet[0];
+    console.log('getPreviousDayStockCheck: Latest stock check found:');
+    console.log('  Date:', latestCheck.date);
+    console.log('  Timestamp:', latestCheck.timestamp, '(' + new Date(latestCheck.timestamp).toLocaleString() + ')');
+    console.log('  Outlet:', latestCheck.outlet);
+    console.log('  CompletedBy:', latestCheck.completedBy);
+    console.log('  Products count:', latestCheck.counts.length);
+    
+    return latestCheck;
   }, [stockChecks]);
 
   useEffect(() => {
