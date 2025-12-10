@@ -377,13 +377,14 @@ export default function StockCheckScreen() {
       
       // Get the latest (last) stock check for this outlet by date and timestamp
       // CRITICAL: Use the LAST stock check (most recent), not the first
+      // For a given day, there may be multiple checks, so we need to check time too
       const latestCheckForOutlet = stockChecks
-        .filter(check => check.outlet === outlet.name)
+        .filter(check => check.outlet === outlet.name && check.completedBy !== 'AUTO')
         .sort((a, b) => {
           // First sort by date (descending)
           const dateCompare = (b.date || '').localeCompare(a.date || '');
           if (dateCompare !== 0) return dateCompare;
-          // Then by timestamp (descending)
+          // Then by timestamp (descending) - this is the CRITICAL part for same-day checks
           return b.timestamp - a.timestamp;
         })[0];
       
