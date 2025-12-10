@@ -226,9 +226,17 @@ export default function StockCheckScreen() {
     date.setDate(date.getDate() - 1);
     const previousDate = date.toISOString().split('T')[0];
     
-    return stockChecks.find(
-      check => check.date === previousDate && check.outlet === outletName
+    const checksForPreviousDay = stockChecks.filter(
+      check => check.date === previousDate && check.outlet === outletName && check.completedBy !== 'AUTO'
     );
+    
+    if (checksForPreviousDay.length === 0) {
+      return undefined;
+    }
+    
+    checksForPreviousDay.sort((a, b) => b.timestamp - a.timestamp);
+    
+    return checksForPreviousDay[0];
   }, [stockChecks]);
 
   useEffect(() => {
