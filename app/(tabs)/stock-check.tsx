@@ -397,9 +397,11 @@ export default function StockCheckScreen() {
       console.log('=== LOADING FROM LATEST STOCK CHECK: NONE FOUND ===\n');
     }
 
-    // ALWAYS load from inventory regardless of previous day stock check
-    console.log('Loading from inventory system...');
+    // Load from inventory ONLY for production outlets
+    // For sales outlets, we already loaded from latest stock check above
+    console.log('Checking if need to load from inventory system...');
     if (outlet.outletType === 'production') {
+      console.log('Production outlet - loading from inventory system...');
       console.log('Loading production outlet inventory for selected outlet:', selectedOutlet);
       console.log('Outlet name:', outlet.name);
       console.log('Total inventoryStocks:', inventoryStocks.length);
@@ -526,6 +528,16 @@ export default function StockCheckScreen() {
         }
       });
     } else if (outlet.outletType === 'sales') {
+      console.log('===');
+      console.log('Sales outlet detected - SKIPPING inventory system load');
+      console.log('For sales outlets, we ONLY use the latest stock check closing stock');
+      console.log('This was already loaded above from getPreviousDayStockCheck');
+      console.log('The inventory system data is NOT used for sales outlets in stock check');
+      console.log('===');
+      
+      // SKIP the entire inventory load for sales outlets
+      // The code below is commented out to prevent loading from inventoryStocks
+      /*
       console.log('Loading sales outlet inventory for selected outlet:', selectedOutlet);
       console.log('Total inventoryStocks:', inventoryStocks.length);
       
@@ -584,6 +596,7 @@ export default function StockCheckScreen() {
           }
         }
       });
+      */
     }
 
     // Auto-fill received stocks from Prods.Req for production outlets
