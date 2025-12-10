@@ -367,10 +367,17 @@ export default function StockCheckScreen() {
       // Filter stock checks for THIS specific production outlet only
       console.log('Looking for stock checks from outlet:', outlet.name);
       
-      // Get the latest stock check for this outlet
+      // Get the latest (last) stock check for this outlet by date and timestamp
+      // CRITICAL: Use the LAST stock check (most recent), not the first
       const latestCheckForOutlet = stockChecks
         .filter(check => check.outlet === outlet.name)
-        .sort((a, b) => b.timestamp - a.timestamp)[0];
+        .sort((a, b) => {
+          // First sort by date (descending)
+          const dateCompare = (b.date || '').localeCompare(a.date || '');
+          if (dateCompare !== 0) return dateCompare;
+          // Then by timestamp (descending)
+          return b.timestamp - a.timestamp;
+        })[0];
       
       if (latestCheckForOutlet) {
         console.log('Found latest stock check from our outlet:', latestCheckForOutlet.outlet, 'date:', latestCheckForOutlet.date);
