@@ -1,6 +1,6 @@
 <?php
-error_reporting(0);
-ini_set('display_errors', '0');
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -40,7 +40,15 @@ if (!$smtpConfig || !$emailData || empty($recipients)) {
   respond(['success' => false, 'error' => 'Missing required fields'], 400);
 }
 
+if (!file_exists(__DIR__ . '/phpmailer/PHPMailerAutoload.php')) {
+  respond(['success' => false, 'error' => 'PHPMailer library not found. Please install PHPMailer in public/Tracker/api/phpmailer/ directory or use Composer to install it.'], 500);
+}
+
 require_once __DIR__ . '/phpmailer/PHPMailerAutoload.php';
+
+if (!class_exists('PHPMailer')) {
+  respond(['success' => false, 'error' => 'PHPMailer class not loaded properly'], 500);
+}
 
 $results = [
   'success' => 0,
