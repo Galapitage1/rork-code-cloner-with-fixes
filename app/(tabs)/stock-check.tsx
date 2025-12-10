@@ -228,14 +228,26 @@ export default function StockCheckScreen() {
     console.log('getPreviousDayStockCheck: Finding latest stock check for outlet:', outletName);
     console.log('getPreviousDayStockCheck: Current date:', currentDate);
     
-    // Filter all stock checks for this outlet (not just previous day, but all history)
+    // Filter all stock checks for this outlet from ALL history
+    // CRITICAL: Include current day checks BUT only those done BEFORE now (by timestamp)
     // Exclude AUTO checks and deleted checks
-    // IMPORTANT: Check ALL stock checks in history, not just previous day
+    // IMPORTANT: Check ALL stock checks in history, including current day
+    const currentTimestamp = Date.now();
     const allChecksForOutlet = stockChecks.filter(
-      check => check.outlet === outletName && check.completedBy !== 'AUTO' && !check.deleted && check.date < currentDate
+      check => {
+        // Must be same outlet
+        if (check.outlet !== outletName) return false;
+        // Must not be AUTO or deleted
+        if (check.completedBy === 'AUTO' || check.deleted) return false;
+        // Must be before current date OR (same date AND done before now)
+        if (check.date < currentDate) return true;
+        if (check.date === currentDate && check.timestamp < currentTimestamp) return true;
+        return false;
+      }
     );
     
     console.log('getPreviousDayStockCheck: Found', allChecksForOutlet.length, 'visible stock checks (excluding AUTO and deleted)');
+    console.log('getPreviousDayStockCheck: Including ALL checks from history up to current moment');
     
     if (allChecksForOutlet.length === 0) {
       console.log('getPreviousDayStockCheck: No stock checks found in history');
@@ -259,6 +271,7 @@ export default function StockCheckScreen() {
     console.log('  Outlet:', latestCheck.outlet);
     console.log('  CompletedBy:', latestCheck.completedBy);
     console.log('  Products count:', latestCheck.counts.length);
+    console.log('  This is the LATEST stock check by date and time (including today)');
     
     return latestCheck;
   }, [stockChecks]);
@@ -403,8 +416,13 @@ export default function StockCheckScreen() {
       // CRITICAL: Use the LAST stock check (most recent), not the first
       // For a given day, there may be multiple checks, so we need to check time too
       // This applies to ALL products including products WITH and WITHOUT unit conversions
+      // IMPORTANT: Look at ALL stock checks in history for this outlet (not deleted, not AUTO)
       const latestCheckForOutlet = stockChecks
-        .filter(check => check.outlet === outlet.name && check.completedBy !== 'AUTO')
+        .filter(check => {
+          return check.outlet === outlet.name && 
+                 check.completedBy !== 'AUTO' && 
+                 !check.deleted;
+        })
         .sort((a, b) => {
           // First sort by date (descending)
           const dateCompare = (b.date || '').localeCompare(a.date || '');
