@@ -241,7 +241,7 @@ export default function CampaignsScreen() {
         return;
       }
 
-      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-email-connection.php` : `${apiUrl}/api/test-email-connection`;
       const response = await fetch(phpEndpoint, {
         method: 'POST',
@@ -296,7 +296,7 @@ export default function CampaignsScreen() {
       setTestingSMS(true);
       console.log('[SMS Test] Starting connection test...');
 
-      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-sms-connection.php` : `${apiUrl}/api/test-sms-connection`;
       console.log('[SMS Test] Using API URL:', apiUrl);
       console.log('[SMS Test] Full endpoint:', phpEndpoint);
@@ -323,7 +323,7 @@ export default function CampaignsScreen() {
     } catch (error) {
       console.error('[SMS Test] Error:', error);
       const errorMsg = (error as Error).message;
-      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = currentApiUrl.includes('tracker.tecclk.com') ? `${currentApiUrl}/Tracker/api/test-sms-connection.php` : `${currentApiUrl}/api/test-sms-connection`;
       
       if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network request failed')) {
@@ -453,7 +453,7 @@ export default function CampaignsScreen() {
           );
 
           console.log('[EMAIL CAMPAIGN] Sending to backend...');
-          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
           const response = await fetch(phpEndpoint, {
             method: 'POST',
@@ -550,7 +550,7 @@ export default function CampaignsScreen() {
         try {
           setIsSending(true);
 
-          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
           
           const response = await fetch(phpEndpoint, {
@@ -613,7 +613,7 @@ export default function CampaignsScreen() {
         return;
       }
 
-      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-whatsapp-connection.php` : `${apiUrl}/api/test-whatsapp-connection`;
       console.log('[WhatsApp Test] Using API URL:', apiUrl);
       console.log('[WhatsApp Test] Full endpoint:', phpEndpoint);
@@ -642,7 +642,7 @@ export default function CampaignsScreen() {
       console.error('[WhatsApp Test] Error:', error);
       console.error('[WhatsApp Test] Error stack:', (error as Error).stack);
       const errorMsg = (error as Error).message;
-      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+      const currentApiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       
       const phpEndpoint = currentApiUrl.includes('tracker.tecclk.com') ? `${currentApiUrl}/Tracker/api/test-whatsapp-connection.php` : `${currentApiUrl}/api/test-whatsapp-connection`;
       if (errorMsg.includes('Failed to fetch') || errorMsg.includes('Network request failed')) {
@@ -684,7 +684,7 @@ export default function CampaignsScreen() {
         try {
           setIsSending(true);
 
-          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || 'http://localhost:8081';
+          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
           const response = await fetch(phpEndpoint, {
             method: 'POST',
