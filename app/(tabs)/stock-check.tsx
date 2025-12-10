@@ -378,6 +378,7 @@ export default function StockCheckScreen() {
       // Get the latest (last) stock check for this outlet by date and timestamp
       // CRITICAL: Use the LAST stock check (most recent), not the first
       // For a given day, there may be multiple checks, so we need to check time too
+      // This applies to ALL products including products WITH and WITHOUT unit conversions
       const latestCheckForOutlet = stockChecks
         .filter(check => check.outlet === outlet.name && check.completedBy !== 'AUTO')
         .sort((a, b) => {
@@ -389,7 +390,8 @@ export default function StockCheckScreen() {
         })[0];
       
       if (latestCheckForOutlet) {
-        console.log('Found latest stock check from our outlet:', latestCheckForOutlet.outlet, 'date:', latestCheckForOutlet.date);
+        console.log('Found latest stock check from our outlet:', latestCheckForOutlet.outlet, 'date:', latestCheckForOutlet.date, 'timestamp:', latestCheckForOutlet.timestamp);
+        console.log('This is the LATEST check by both date AND time (for same-day multiple checks)');
         
         latestCheckForOutlet.counts.forEach(count => {
           const product = products.find(p => p.id === count.productId);
@@ -400,10 +402,12 @@ export default function StockCheckScreen() {
           );
           
           // For products without conversions OR products with conversions in Kitchen
+          // CRITICAL: This applies to ALL products including Production Stock (Other Units)
           if (!hasConversion || !isStores) {
             // Use the current stock (quantity field) which is the net stock after all calculations
             const currentStock = count.quantity || 0;
-            console.log('Product:', product.name, 'current stock from quantity field:', currentStock);
+            console.log('Product:', product.name, 'current stock from LATEST check (quantity field):', currentStock);
+            console.log('Product type: ' + (hasConversion ? 'WITH conversion (in Kitchen)' : 'WITHOUT conversion (Production Stock Other Units)'));
             
             if (currentStock > 0) {
               productionStockByProduct.set(count.productId, currentStock);
