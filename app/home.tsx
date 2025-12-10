@@ -4,7 +4,8 @@ import { Stack, useRouter } from 'expo-router';
 import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, MapPin, Mail } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMoir } from '@/contexts/MoirContext';
-import { useRef } from 'react';
+import { useRef, useEffect, useState } from 'react';
+import { useStores } from '@/contexts/StoresContext';
 
 import Colors from '@/constants/colors';
 import { hasPermission } from '@/utils/permissions';
@@ -207,8 +208,10 @@ function NavigationCard({ card, onPress, unreadCount }: { card: NavCard; onPress
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { currentUser, logout, isSuperAdmin } = useAuth();
+  const { currentUser, logout, isSuperAdmin, syncUsers } = useAuth();
   const { syncAllData, users: moirUsers, isLoading: moirLoading } = useMoir();
+  const { syncAll: syncStoresData } = useStores();
+  const [hasInitialSynced, setHasInitialSynced] = useState(false);
 
   console.log('===== HomeScreen Debug =====');
   console.log('isSuperAdmin:', isSuperAdmin);
@@ -216,6 +219,26 @@ export default function HomeScreen() {
   console.log('currentUser?.username:', currentUser?.username);
   console.log('currentUser?.role:', currentUser?.role);
   console.log('===========================');
+
+  useEffect(() => {
+    async function syncOnHomeLoad() {
+      if (hasInitialSynced) return;
+      
+      console.log('[HomeScreen] First visit - syncing users and outlets...');
+      try {
+        await Promise.all([
+          syncUsers(undefined, true),
+          syncStoresData(true),
+        ]);
+        console.log('[HomeScreen] Users and outlets synced successfully');
+        setHasInitialSynced(true);
+      } catch (error) {
+        console.error('[HomeScreen] Failed to sync users and outlets:', error);
+      }
+    }
+
+    syncOnHomeLoad();
+  }, [hasInitialSynced, syncUsers, syncStoresData]);
 
   const handleNavigate = async (route: string) => {
     if (route === '/moir' && currentUser?.username?.toLowerCase() === 'temp') {

@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { LogIn } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStores } from '@/contexts/StoresContext';
+import { forceReloadAllData } from '@/utils/initialDataLoader';
 import Colors from '@/constants/colors';
 
 export default function LoginScreen() {
@@ -51,16 +52,13 @@ export default function LoginScreen() {
       
       if (user) {
         console.log('handleLogin: User logged in successfully');
-        console.log('handleLogin: Triggering immediate full sync...');
+        console.log('handleLogin: Triggering immediate full data reload from server...');
         
         try {
-          await Promise.all([
-            syncUsers(undefined, true),
-            syncStoresData(true),
-          ]);
-          console.log('handleLogin: Full sync completed');
+          await forceReloadAllData(user.id);
+          console.log('handleLogin: Full data reload completed - all latest data synced from server');
         } catch (syncError) {
-          console.error('handleLogin: Full sync failed (non-critical):', syncError);
+          console.error('handleLogin: Full data reload failed (non-critical):', syncError);
         }
         
         router.replace('/home');
