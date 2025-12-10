@@ -358,61 +358,22 @@ export default function StockCheckScreen() {
 
     console.log('Found outlet:', outlet.name, 'type:', outlet.outletType);
 
-    // FIRST: Check for LATEST stock check to get closing stock (current stock) as opening stock
-    console.log('\n=== LOADING FROM LATEST STOCK CHECK ===');
-    console.log('Checking for LATEST stock check to use as opening stock...');
-    console.log('Selected outlet:', selectedOutlet);
+    // LOAD FROM INVENTORY SYSTEM - For ALL outlets (sales and production)
+    // This loads the displayed inventory amount for opening stock
+    console.log('\n=== LOADING FROM INVENTORY SYSTEM ===');
+    console.log('Loading opening stock from inventory for outlet:', selectedOutlet);
     console.log('Selected date:', selectedDate);
-    
-    const previousDayCheck = getPreviousDayStockCheck(selectedDate, selectedOutlet);
-    if (previousDayCheck) {
-      console.log('✓ Found LATEST stock check from date:', previousDayCheck.date);
-      console.log('  Completed at:', new Date(previousDayCheck.timestamp).toLocaleString());
-      console.log('  Completed by:', previousDayCheck.completedBy);
-      console.log('  Will use CURRENT STOCK (count.quantity) from this check as opening stock');
-      console.log('  Products in latest check:', previousDayCheck.counts.length);
-      
-      let productsLoaded = 0;
-      previousDayCheck.counts.forEach(count => {
-        const closingStock = count.quantity || 0;
-        const product = products.find(p => p.id === count.productId);
-        
-        if (closingStock > 0) {
-          newOpeningStocks.set(count.productId, String(closingStock));
-          newAutoFilled.add(count.productId);
-          newCounts.set(count.productId, String(closingStock));
-          productsLoaded++;
-          console.log(`  ✓ Product: ${product?.name || count.productId} → Closing Stock: ${closingStock} (will be today's Opening Stock)`);
-        } else {
-          console.log(`  ⊘ Product: ${product?.name || count.productId} → Closing Stock: ${closingStock} (skipped, zero value)`);
-        }
-      });
-      
-      console.log(`\n✓✓✓ Loaded ${productsLoaded} products from LATEST stock check`);
-      console.log('These values will be used as Opening Stock for today');
-      console.log('=== LOADING FROM LATEST STOCK CHECK: COMPLETE ===\n');
-    } else {
-      console.log('⚠️ No previous stock check found for outlet:', selectedOutlet);
-      console.log('Will fall back to inventory system');
-      console.log('=== LOADING FROM LATEST STOCK CHECK: NONE FOUND ===\n');
-    }
 
-    // Load from inventory ONLY for production outlets
-    // For sales outlets, we already loaded from latest stock check above
-    console.log('Checking if need to load from inventory system...');
+    // Load from inventory for ALL outlets (sales AND production)
+    // For ALL products (with and without conversions)
+    console.log('Loading from inventory system for outlet:', selectedOutlet);
+    console.log('Outlet type:', outlet.outletType);
+    console.log('Total inventoryStocks:', inventoryStocks.length);
+    
     if (outlet.outletType === 'production') {
-      console.log('Production outlet - loading from inventory system...');
-      console.log('Loading production outlet inventory for selected outlet:', selectedOutlet);
-      console.log('Outlet name:', outlet.name);
-      console.log('Total inventoryStocks:', inventoryStocks.length);
+      console.log('Production outlet - loading from production inventory columns');
       
-      // Determine which column to read from based on outlet name
-      const isStores = outlet.name === 'HO' || outlet.location === 'HO';
-      const isKitchen = outlet.name === 'Baking Kitchen' || outlet.location === 'Baking Kitchen';
-      
-      console.log('Is Stores (HO):', isStores, 'Is Kitchen:', isKitchen);
-      
-      // For products with conversions, read from inventory
+      // For products WITH conversions, read from production columns
       inventoryStocks.forEach(invStock => {
         const product = products.find(p => p.id === invStock.productId);
         if (!product) return;
@@ -422,89 +383,32 @@ export default function StockCheckScreen() {
           const wholeProduct = products.find(p => p.id === productPair.wholeProductId);
           const slicesProduct = products.find(p => p.id === productPair.slicesProductId);
           
-          // Use the appropriate column based on outlet - always use productionWhole and productionSlices for production outlets
-          let wholeQty = invStock.productionWhole;
-          let slicesQty = invStock.productionSlices;
+          // Use production columns
+          let wholeQty = invStock.productionWhole || 0;
+          let slicesQty = invStock.productionSlices || 0;
           
-          console.log('Reading from production inventory for outlet', outlet.name, ':', wholeProduct?.name, 'whole:', wholeQty, 'slices:', slicesQty);
+          console.log('Product with conversion:', wholeProduct?.name, 'whole:', wholeQty, 'slices:', slicesQty);
           
           if (wholeProduct && wholeQty > 0) {
             newOpeningStocks.set(wholeProduct.id, String(wholeQty));
             newAutoFilled.add(wholeProduct.id);
             newCounts.set(wholeProduct.id, String(wholeQty));
-            console.log('Added whole:', wholeProduct.name, 'qty:', wholeQty);
+            console.log('✓ Loaded whole from inventory:', wholeProduct.name, 'qty:', wholeQty);
           }
           
           if (slicesProduct && slicesQty > 0) {
             newOpeningStocks.set(slicesProduct.id, String(slicesQty));
             newAutoFilled.add(slicesProduct.id);
             newCounts.set(slicesProduct.id, String(slicesQty));
-            console.log('Added slices:', slicesProduct.name, 'qty:', slicesQty);
+            console.log('✓ Loaded slices from inventory:', slicesProduct.name, 'qty:', slicesQty);
           }
         }
       });
       
-      console.log('Processing Production Stock (Other Units) for outlet:', selectedOutlet);
-      const productionStockByProduct = new Map<string, number>();
-      
-      // Filter stock checks for THIS specific production outlet only
-      console.log('Looking for stock checks from outlet:', outlet.name);
-      
-      // Get the latest (last) stock check for this outlet by date and timestamp
-      // CRITICAL: Use the LAST stock check (most recent), not the first
-      // For a given day, there may be multiple checks, so we need to check time too
-      // This applies to ALL products including products WITH and WITHOUT unit conversions
-      // IMPORTANT: Look at ALL stock checks in history for this outlet (not deleted, not AUTO)
-      const latestCheckForOutlet = stockChecks
-        .filter(check => {
-          return check.outlet === outlet.name && 
-                 check.completedBy !== 'AUTO' && 
-                 !check.deleted;
-        })
-        .sort((a, b) => {
-          // First sort by date (descending)
-          const dateCompare = (b.date || '').localeCompare(a.date || '');
-          if (dateCompare !== 0) return dateCompare;
-          // Then by timestamp (descending) - this is the CRITICAL part for same-day checks
-          return b.timestamp - a.timestamp;
-        })[0];
-      
-      if (latestCheckForOutlet) {
-        console.log('Found latest stock check from our outlet:', latestCheckForOutlet.outlet, 'date:', latestCheckForOutlet.date, 'timestamp:', latestCheckForOutlet.timestamp);
-        console.log('This is the LATEST check by both date AND time (for same-day multiple checks)');
-        
-        latestCheckForOutlet.counts.forEach(count => {
-          const product = products.find(p => p.id === count.productId);
-          if (!product) return;
-          
-          const hasConversion = productConversions.some(
-            c => c.fromProductId === product.id || c.toProductId === product.id
-          );
-          
-          // For products without conversions OR products with conversions in Kitchen
-          // CRITICAL: This applies to ALL products including Production Stock (Other Units)
-          if (!hasConversion || !isStores) {
-            // Use the current stock (quantity field) which is the net stock after all calculations
-            const currentStock = count.quantity || 0;
-            console.log('Product:', product.name, 'current stock from LATEST check (quantity field):', currentStock);
-            console.log('Product type: ' + (hasConversion ? 'WITH conversion (in Kitchen)' : 'WITHOUT conversion (Production Stock Other Units)'));
-            
-            if (currentStock > 0) {
-              productionStockByProduct.set(count.productId, currentStock);
-              console.log('Set current stock for', product.name, ':', currentStock, 'from outlet:', latestCheckForOutlet.outlet);
-            }
-          }
-        });
-      } else {
-        console.log('No stock checks found for outlet:', outlet.name);
-      }
-      
-      const approvedRequestsForOutlet = requests.filter(
-        req => req.status === 'approved' && req.toOutlet === selectedOutlet
-      );
-      
-      approvedRequestsForOutlet.forEach(req => {
-        const product = products.find(p => p.id === req.productId);
+      // For products WITHOUT conversions, read from production columns
+      console.log('Loading products WITHOUT conversions from production inventory');
+      inventoryStocks.forEach(invStock => {
+        const product = products.find(p => p.id === invStock.productId);
         if (!product) return;
         
         const hasConversion = productConversions.some(
@@ -512,72 +416,50 @@ export default function StockCheckScreen() {
         );
         
         if (!hasConversion) {
-          const currentQty = productionStockByProduct.get(req.productId) || 0;
-          productionStockByProduct.set(req.productId, currentQty + req.quantity);
-          console.log('Added from approved request:', product.name, 'qty:', req.quantity);
-        }
-      });
-      
-      productionStockByProduct.forEach((qty, productId) => {
-        if (qty > 0) {
-          newOpeningStocks.set(productId, String(qty));
-          newAutoFilled.add(productId);
-          newCounts.set(productId, String(qty));
-          const product = products.find(p => p.id === productId);
-          console.log('Added Production Stock (Other Units):', product?.name, 'qty:', qty);
+          const qty = invStock.productionWhole || 0;
+          console.log('Product without conversion:', product.name, 'qty:', qty);
+          
+          if (qty > 0) {
+            newOpeningStocks.set(invStock.productId, String(qty));
+            newAutoFilled.add(invStock.productId);
+            newCounts.set(invStock.productId, String(qty));
+            console.log('✓ Loaded from inventory (no conversion):', product.name, 'qty:', qty);
+          }
         }
       });
     } else if (outlet.outletType === 'sales') {
-      console.log('===');
-      console.log('Sales outlet detected - SKIPPING inventory system load');
-      console.log('For sales outlets, we ONLY use the latest stock check closing stock');
-      console.log('This was already loaded above from getPreviousDayStockCheck');
-      console.log('The inventory system data is NOT used for sales outlets in stock check');
-      console.log('===');
+      console.log('Sales outlet - loading from outlet-specific inventory columns');
       
-      // SKIP the entire inventory load for sales outlets
-      // The code below is commented out to prevent loading from inventoryStocks
-      /*
-      console.log('Loading sales outlet inventory for selected outlet:', selectedOutlet);
-      console.log('Total inventoryStocks:', inventoryStocks.length);
-      
+      // For products WITH conversions, read from outletStocks
       inventoryStocks.forEach(invStock => {
-        console.log('Checking inventory stock, outletStocks:', invStock.outletStocks.map(os => os.outletName).join(', '));
         const outletStock = invStock.outletStocks.find(os => os.outletName === selectedOutlet);
-        if (!outletStock) {
-          console.log('No match for outlet:', selectedOutlet);
-          return;
-        }
-        
-        console.log('Found outlet stock for:', selectedOutlet, 'whole:', outletStock.whole, 'slices:', outletStock.slices);
+        if (!outletStock) return;
         
         const productPair = getProductPairForInventory(invStock.productId);
         if (productPair) {
           const wholeProduct = products.find(p => p.id === productPair.wholeProductId);
           const slicesProduct = products.find(p => p.id === productPair.slicesProductId);
           
-          console.log('Processing product pair:', wholeProduct?.name);
+          console.log('Product with conversion:', wholeProduct?.name, 'whole:', outletStock.whole, 'slices:', outletStock.slices);
           
           if (wholeProduct && outletStock.whole > 0) {
             newOpeningStocks.set(wholeProduct.id, String(outletStock.whole));
             newAutoFilled.add(wholeProduct.id);
             newCounts.set(wholeProduct.id, String(outletStock.whole));
-            console.log('Added whole:', wholeProduct.name, 'qty:', outletStock.whole);
+            console.log('✓ Loaded whole from inventory:', wholeProduct.name, 'qty:', outletStock.whole);
           }
           
           if (slicesProduct && outletStock.slices > 0) {
             newOpeningStocks.set(slicesProduct.id, String(outletStock.slices));
             newAutoFilled.add(slicesProduct.id);
             newCounts.set(slicesProduct.id, String(outletStock.slices));
-            console.log('Added slices:', slicesProduct.name, 'qty:', outletStock.slices);
+            console.log('✓ Loaded slices from inventory:', slicesProduct.name, 'qty:', outletStock.slices);
           }
         }
       });
       
-      console.log('Processing Production Stock (Other Units) for sales outlet:', selectedOutlet);
-      console.log('Reading from inventoryStocks.outletStocks for products without conversions');
-      
-      // For products WITHOUT conversions, read from inventory outlet stocks (SAME place we write to)
+      // For products WITHOUT conversions, read from outletStocks
+      console.log('Loading products WITHOUT conversions from sales outlet inventory');
       inventoryStocks.forEach(invStock => {
         const product = products.find(p => p.id === invStock.productId);
         if (!product) return;
@@ -589,15 +471,19 @@ export default function StockCheckScreen() {
         if (!hasConversion) {
           const outletStock = invStock.outletStocks.find(os => os.outletName === selectedOutlet);
           if (outletStock && outletStock.whole > 0) {
+            console.log('Product without conversion:', product.name, 'qty:', outletStock.whole);
             newOpeningStocks.set(invStock.productId, String(outletStock.whole));
             newAutoFilled.add(invStock.productId);
             newCounts.set(invStock.productId, String(outletStock.whole));
-            console.log('Added Production Stock (Other Units) for sales outlet from inventory:', product.name, 'qty:', outletStock.whole);
+            console.log('✓ Loaded from inventory (no conversion):', product.name, 'qty:', outletStock.whole);
           }
         }
       });
-      */
     }
+    
+    console.log('=== INVENTORY LOADING COMPLETE ===');
+    console.log('Loaded', newOpeningStocks.size, 'products from inventory');
+    console.log('===================================\n');
 
     // Auto-fill received stocks from Prods.Req for production outlets
     // THIS IS CRITICAL: We load received from inventoryStocks.prodsReqWhole / productionRequest fields
