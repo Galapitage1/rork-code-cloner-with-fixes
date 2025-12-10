@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 
-import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone } from 'lucide-react-native';
+import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import Colors from '@/constants/colors';
@@ -79,6 +79,9 @@ export default function CampaignsScreen() {
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
   const [showSMSSettings, setShowSMSSettings] = useState(false);
+  const [showWhatsAppInbox, setShowWhatsAppInbox] = useState(false);
+  const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
 
   const loadCampaignSettings = async () => {
     try {
@@ -601,6 +604,34 @@ export default function CampaignsScreen() {
     });
     setConfirmVisible(true);
     console.log('[SMS CAMPAIGN] Confirm dialog should be visible');
+  };
+
+  const loadWhatsAppMessages = async () => {
+    try {
+      setLoadingMessages(true);
+      console.log('[WhatsApp Inbox] Loading messages...');
+
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/get-whatsapp-messages.php` : `${apiUrl}/api/get-whatsapp-messages`;
+      
+      const response = await fetch(phpEndpoint, {
+        method: 'GET',
+      });
+
+      const result = await response.json();
+      console.log('[WhatsApp Inbox] Response:', result);
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to load messages');
+      }
+
+      setWhatsappMessages(result.messages || []);
+    } catch (error) {
+      console.error('[WhatsApp Inbox] Error:', error);
+      Alert.alert('Error', 'Failed to load WhatsApp messages: ' + (error as Error).message);
+    } finally {
+      setLoadingMessages(false);
+    }
   };
 
   const testWhatsAppConnection = async () => {
@@ -1174,6 +1205,12 @@ export default function CampaignsScreen() {
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>WhatsApp Business Configuration</Text>
                 
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>
+                    ⚠️ Your access token has expired (Dec 2, 2025). Please generate a new token from Meta Developer Portal to send messages.
+                  </Text>
+                </View>
+                
                 <Text style={styles.label}>Access Token *</Text>
                 <TextInput
                   style={styles.input}
@@ -1222,6 +1259,75 @@ export default function CampaignsScreen() {
                     <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
                   </TouchableOpacity>
                 </View>
+
+                <TouchableOpacity
+                  style={styles.inboxToggle}
+                  onPress={() => {
+                    setShowWhatsAppInbox(!showWhatsAppInbox);
+                    if (!showWhatsAppInbox && whatsappMessages.length === 0) {
+                      loadWhatsAppMessages();
+                    }
+                  }}
+                >
+                  <View style={styles.settingsToggleLeft}>
+                    <Inbox size={20} color={Colors.light.tint} />
+                    <Text style={styles.settingsToggleText}>WhatsApp Inbox ({whatsappMessages.length})</Text>
+                  </View>
+                  {showWhatsAppInbox ? (
+                    <ChevronUp size={20} color={Colors.light.tint} />
+                  ) : (
+                    <ChevronDown size={20} color={Colors.light.tint} />
+                  )}
+                </TouchableOpacity>
+
+                {showWhatsAppInbox && (
+                  <View style={styles.inboxContainer}>
+                    <View style={styles.inboxHeader}>
+                      <Text style={styles.inboxTitle}>Received Messages</Text>
+                      <TouchableOpacity
+                        style={styles.refreshButton}
+                        onPress={loadWhatsAppMessages}
+                        disabled={loadingMessages}
+                      >
+                        {loadingMessages ? (
+                          <ActivityIndicator size="small" color={Colors.light.tint} />
+                        ) : (
+                          <Text style={styles.refreshButtonText}>Refresh</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    <ScrollView style={styles.messageList} nestedScrollEnabled>
+                      {whatsappMessages.length === 0 && !loadingMessages && (
+                        <View style={styles.emptyInbox}>
+                          <Inbox size={48} color={Colors.light.tabIconDefault} />
+                          <Text style={styles.emptyInboxText}>No messages received yet</Text>
+                          <Text style={styles.emptyInboxSubtext}>
+                            Messages received via WhatsApp webhook will appear here
+                          </Text>
+                        </View>
+                      )}
+
+                      {whatsappMessages.map((msg, index) => (
+                        <View key={msg.id || index} style={styles.messageItem}>
+                          <View style={styles.messageHeader}>
+                            <Text style={styles.messageSender}>{msg.fromName || msg.from}</Text>
+                            <Text style={styles.messageTime}>
+                              {new Date(msg.timestamp * 1000).toLocaleString()}
+                            </Text>
+                          </View>
+                          <Text style={styles.messagePhone}>{msg.from}</Text>
+                          {msg.type === 'text' && msg.text && (
+                            <Text style={styles.messageText}>{msg.text}</Text>
+                          )}
+                          {msg.type !== 'text' && (
+                            <Text style={styles.messageTypeLabel}>Type: {msg.type}</Text>
+                          )}
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
               </View>
             )}
 
@@ -1675,5 +1781,120 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700' as const,
     color: '#FFFFFF',
+  },
+  infoBox: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  infoText: {
+    fontSize: 13,
+    color: '#92400E',
+    lineHeight: 18,
+  },
+  inboxToggle: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  inboxContainer: {
+    marginTop: 16,
+    backgroundColor: Colors.light.card,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 16,
+  },
+  inboxHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 16,
+  },
+  inboxTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  refreshButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  refreshButtonText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
+  },
+  messageList: {
+    maxHeight: 400,
+  },
+  emptyInbox: {
+    paddingVertical: 40,
+    alignItems: 'center' as const,
+  },
+  emptyInboxText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginTop: 12,
+  },
+  emptyInboxSubtext: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
+    marginTop: 4,
+    textAlign: 'center' as const,
+  },
+  messageItem: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  messageHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 4,
+  },
+  messageSender: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    flex: 1,
+  },
+  messageTime: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  messagePhone: {
+    fontSize: 13,
+    color: Colors.light.tint,
+    marginBottom: 8,
+  },
+  messageText: {
+    fontSize: 14,
+    color: Colors.light.text,
+    lineHeight: 20,
+  },
+  messageTypeLabel: {
+    fontSize: 13,
+    color: Colors.light.tabIconDefault,
+    fontStyle: 'italic' as const,
   },
 });
