@@ -225,8 +225,10 @@ export default function StockCheckScreen() {
     // CRITICAL: Get the LATEST (most recent) stock check from history
     // This checks ALL visible (non-deleted) stock checks in history including the current day
     // and finds the LAST one done by a user (not AUTO) by checking both date AND time
-    console.log('getPreviousDayStockCheck: Finding latest stock check for outlet:', outletName);
+    console.log('\n=== getPreviousDayStockCheck: FINDING LATEST STOCK CHECK ===');
+    console.log('getPreviousDayStockCheck: Target outlet:', outletName);
     console.log('getPreviousDayStockCheck: Current date:', currentDate);
+    console.log('getPreviousDayStockCheck: Total stock checks in memory:', stockChecks.length);
     
     // Filter all stock checks for this outlet from ALL history
     // CRITICAL: Include current day checks BUT only those done BEFORE now (by timestamp)
@@ -237,8 +239,8 @@ export default function StockCheckScreen() {
       check => {
         // Must be same outlet
         if (check.outlet !== outletName) return false;
-        // Must not be AUTO or deleted
-        if (check.completedBy === 'AUTO' || check.deleted) return false;
+        // Must not be deleted
+        if (check.deleted) return false;
         // Must be before current date OR (same date AND done before now)
         if (check.date < currentDate) return true;
         if (check.date === currentDate && check.timestamp < currentTimestamp) return true;
@@ -246,32 +248,48 @@ export default function StockCheckScreen() {
       }
     );
     
-    console.log('getPreviousDayStockCheck: Found', allChecksForOutlet.length, 'visible stock checks (excluding AUTO and deleted)');
-    console.log('getPreviousDayStockCheck: Including ALL checks from history up to current moment');
+    console.log('getPreviousDayStockCheck: Found', allChecksForOutlet.length, 'stock checks for outlet', outletName);
+    console.log('getPreviousDayStockCheck: (including deleted=false checks from ALL history up to now)');
     
     if (allChecksForOutlet.length === 0) {
-      console.log('getPreviousDayStockCheck: No stock checks found in history');
+      console.log('getPreviousDayStockCheck: ⚠️ NO stock checks found in history for this outlet');
+      console.log('=== getPreviousDayStockCheck: DONE (no checks found) ===\n');
       return undefined;
     }
     
     // CRITICAL: Sort by date DESC, then by timestamp DESC to get the LATEST check
     // This ensures we get the most recent check even if there are multiple checks on the same day
+    console.log('getPreviousDayStockCheck: Sorting checks to find the LATEST one...');
+    console.log('getPreviousDayStockCheck: Available checks BEFORE sorting:');
+    allChecksForOutlet.forEach((check, i) => {
+      console.log(`  [${i}] Date: ${check.date}, Time: ${new Date(check.timestamp).toLocaleTimeString()}, By: ${check.completedBy}, Products: ${check.counts.length}`);
+    });
+    
     allChecksForOutlet.sort((a, b) => {
-      // First sort by date (descending)
+      // First sort by date (descending) - most recent date first
       const dateCompare = (b.date || '').localeCompare(a.date || '');
       if (dateCompare !== 0) return dateCompare;
       // Then by timestamp (descending) - CRITICAL for same-day multiple checks
+      // Most recent timestamp first
       return b.timestamp - a.timestamp;
     });
     
+    console.log('getPreviousDayStockCheck: Available checks AFTER sorting (latest first):');
+    allChecksForOutlet.forEach((check, i) => {
+      console.log(`  [${i}] Date: ${check.date}, Time: ${new Date(check.timestamp).toLocaleTimeString()}, By: ${check.completedBy}, Products: ${check.counts.length}`);
+    });
+    
     const latestCheck = allChecksForOutlet[0];
-    console.log('getPreviousDayStockCheck: Latest stock check found:');
+    console.log('\ngetPreviousDayStockCheck: ✓✓✓ LATEST STOCK CHECK SELECTED:');
     console.log('  Date:', latestCheck.date);
     console.log('  Timestamp:', latestCheck.timestamp, '(' + new Date(latestCheck.timestamp).toLocaleString() + ')');
+    console.log('  Time:', new Date(latestCheck.timestamp).toLocaleTimeString());
     console.log('  Outlet:', latestCheck.outlet);
     console.log('  CompletedBy:', latestCheck.completedBy);
     console.log('  Products count:', latestCheck.counts.length);
-    console.log('  This is the LATEST stock check by date and time (including today)');
+    console.log('  This is the MOST RECENT stock check by date AND time');
+    console.log('  (If multiple checks exist on same day, this is the LAST one done)');
+    console.log('=== getPreviousDayStockCheck: DONE ===\n');
     
     return latestCheck;
   }, [stockChecks]);
@@ -340,25 +358,43 @@ export default function StockCheckScreen() {
 
     console.log('Found outlet:', outlet.name, 'type:', outlet.outletType);
 
-    // FIRST: Check for previous day's stock check to get closing stock as opening stock
-    console.log('Checking for previous day stock check to use as opening stock...');
+    // FIRST: Check for LATEST stock check to get closing stock (current stock) as opening stock
+    console.log('\n=== LOADING FROM LATEST STOCK CHECK ===');
+    console.log('Checking for LATEST stock check to use as opening stock...');
+    console.log('Selected outlet:', selectedOutlet);
+    console.log('Selected date:', selectedDate);
+    
     const previousDayCheck = getPreviousDayStockCheck(selectedDate, selectedOutlet);
     if (previousDayCheck) {
-      console.log('Found previous day stock check from:', previousDayCheck.date);
-      console.log('Using previous day closing stock as today opening stock');
+      console.log('✓ Found LATEST stock check from date:', previousDayCheck.date);
+      console.log('  Completed at:', new Date(previousDayCheck.timestamp).toLocaleString());
+      console.log('  Completed by:', previousDayCheck.completedBy);
+      console.log('  Will use CURRENT STOCK (count.quantity) from this check as opening stock');
+      console.log('  Products in latest check:', previousDayCheck.counts.length);
       
+      let productsLoaded = 0;
       previousDayCheck.counts.forEach(count => {
         const closingStock = count.quantity || 0;
+        const product = products.find(p => p.id === count.productId);
+        
         if (closingStock > 0) {
           newOpeningStocks.set(count.productId, String(closingStock));
           newAutoFilled.add(count.productId);
           newCounts.set(count.productId, String(closingStock));
-          const product = products.find(p => p.id === count.productId);
-          console.log('Set opening stock for', product?.name, 'to', closingStock, '(previous day closing)');
+          productsLoaded++;
+          console.log(`  ✓ Product: ${product?.name || count.productId} → Closing Stock: ${closingStock} (will be today's Opening Stock)`);
+        } else {
+          console.log(`  ⊘ Product: ${product?.name || count.productId} → Closing Stock: ${closingStock} (skipped, zero value)`);
         }
       });
+      
+      console.log(`\n✓✓✓ Loaded ${productsLoaded} products from LATEST stock check`);
+      console.log('These values will be used as Opening Stock for today');
+      console.log('=== LOADING FROM LATEST STOCK CHECK: COMPLETE ===\n');
     } else {
-      console.log('No previous day stock check found, will use inventory system');
+      console.log('⚠️ No previous stock check found for outlet:', selectedOutlet);
+      console.log('Will fall back to inventory system');
+      console.log('=== LOADING FROM LATEST STOCK CHECK: NONE FOUND ===\n');
     }
 
     // ALWAYS load from inventory regardless of previous day stock check
