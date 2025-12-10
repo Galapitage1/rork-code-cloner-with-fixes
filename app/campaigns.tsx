@@ -1297,35 +1297,37 @@ export default function CampaignsScreen() {
                       </TouchableOpacity>
                     </View>
 
-                    <ScrollView style={styles.messageList} nestedScrollEnabled>
-                      {whatsappMessages.length === 0 && !loadingMessages && (
-                        <View style={styles.emptyInbox}>
-                          <Inbox size={48} color={Colors.light.tabIconDefault} />
-                          <Text style={styles.emptyInboxText}>No messages received yet</Text>
-                          <Text style={styles.emptyInboxSubtext}>
-                            Messages received via WhatsApp webhook will appear here
-                          </Text>
-                        </View>
-                      )}
+                    {whatsappMessages.length === 0 && !loadingMessages && (
+                      <View style={styles.emptyInbox}>
+                        <Inbox size={48} color={Colors.light.tabIconDefault} />
+                        <Text style={styles.emptyInboxText}>No messages received yet</Text>
+                        <Text style={styles.emptyInboxSubtext}>
+                          Messages received via WhatsApp webhook will appear here
+                        </Text>
+                      </View>
+                    )}
 
-                      {whatsappMessages.map((msg, index) => (
-                        <View key={msg.id || index} style={styles.messageItem}>
-                          <View style={styles.messageHeader}>
-                            <Text style={styles.messageSender}>{msg.fromName || msg.from}</Text>
-                            <Text style={styles.messageTime}>
-                              {new Date(msg.timestamp * 1000).toLocaleString()}
-                            </Text>
+                    {whatsappMessages.length > 0 && (
+                      <View style={styles.messageListContainer}>
+                        {whatsappMessages.map((msg, index) => (
+                          <View key={msg.id || index} style={styles.messageItem}>
+                            <View style={styles.messageHeader}>
+                              <Text style={styles.messageSender}>{msg.fromName || msg.from}</Text>
+                              <Text style={styles.messageTime}>
+                                {new Date(msg.timestamp * 1000).toLocaleString()}
+                              </Text>
+                            </View>
+                            <Text style={styles.messagePhone}>{msg.from}</Text>
+                            {msg.type === 'text' && msg.text && (
+                              <Text style={styles.messageText}>{msg.text}</Text>
+                            )}
+                            {msg.type !== 'text' && (
+                              <Text style={styles.messageTypeLabel}>Type: {msg.type}</Text>
+                            )}
                           </View>
-                          <Text style={styles.messagePhone}>{msg.from}</Text>
-                          {msg.type === 'text' && msg.text && (
-                            <Text style={styles.messageText}>{msg.text}</Text>
-                          )}
-                          {msg.type !== 'text' && (
-                            <Text style={styles.messageTypeLabel}>Type: {msg.type}</Text>
-                          )}
-                        </View>
-                      ))}
-                    </ScrollView>
+                        ))}
+                      </View>
+                    )}
                   </View>
                 )}
               </View>
@@ -1896,5 +1898,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.tabIconDefault,
     fontStyle: 'italic' as const,
+  },
+  messageListContainer: {
+    gap: 8,
   },
 });
