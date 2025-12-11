@@ -614,23 +614,31 @@ export default function CampaignsScreen() {
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/get-whatsapp-messages.php` : `${apiUrl}/api/get-whatsapp-messages`;
       
+      console.log('[WhatsApp Inbox] Fetching from:', phpEndpoint);
+      
       const response = await fetch(phpEndpoint, {
         method: 'GET',
       });
 
+      console.log('[WhatsApp Inbox] Response status:', response.status, response.ok);
+      
       const result = await response.json();
-      console.log('[WhatsApp Inbox] Response:', result);
+      console.log('[WhatsApp Inbox] Response data:', result);
 
       if (!response.ok || !result.success) {
         throw new Error(result.error || 'Failed to load messages');
       }
 
+      console.log('[WhatsApp Inbox] Messages count:', result.messages?.length || 0);
       setWhatsappMessages(result.messages || []);
+      console.log('[WhatsApp Inbox] Messages loaded successfully');
     } catch (error) {
       console.error('[WhatsApp Inbox] Error:', error);
+      console.error('[WhatsApp Inbox] Error details:', (error as Error).message, (error as Error).stack);
       Alert.alert('Error', 'Failed to load WhatsApp messages: ' + (error as Error).message);
     } finally {
       setLoadingMessages(false);
+      console.log('[WhatsApp Inbox] Loading complete');
     }
   };
 
