@@ -85,9 +85,15 @@ export default function CampaignsScreen() {
 
   const loadCampaignSettings = async () => {
     try {
+      console.log('[CAMPAIGNS] Loading campaign settings from AsyncStorage...');
       const settings = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
       if (settings) {
         const parsed = JSON.parse(settings);
+        console.log('[CAMPAIGNS] Settings loaded:', { 
+          hasSmtp: !!parsed.smtpHost, 
+          hasWhatsApp: !!parsed.whatsappAccessToken,
+          hasSms: !!parsed.smsApiKey 
+        });
         setSmtpHost(parsed.smtpHost || '');
         setSmtpPort(parsed.smtpPort || '587');
         setSmtpUsername(parsed.smtpUsername || '');
@@ -101,9 +107,11 @@ export default function CampaignsScreen() {
         setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
         setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
         setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
+      } else {
+        console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
       }
     } catch (error) {
-      console.error('Failed to load campaign settings:', error);
+      console.error('[CAMPAIGNS] Failed to load campaign settings:', error);
     }
   };
 
@@ -146,8 +154,20 @@ export default function CampaignsScreen() {
   };
 
   React.useEffect(() => {
-    loadCampaignSettings().finally(() => setIsPageLoading(false));
+    console.log('[CAMPAIGNS] Component mounted, loading settings...');
+    loadCampaignSettings().finally(() => {
+      console.log('[CAMPAIGNS] Settings loaded, page ready');
+      setIsPageLoading(false);
+    });
   }, []);
+
+  React.useEffect(() => {
+    console.log('[CAMPAIGNS] WhatsApp credentials updated:', {
+      hasToken: !!whatsappAccessToken,
+      hasPhoneId: !!whatsappPhoneNumberId,
+      tokenLength: whatsappAccessToken?.length || 0
+    });
+  }, [whatsappAccessToken, whatsappPhoneNumberId]);
 
   const filteredCustomers = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
@@ -618,20 +638,33 @@ export default function CampaignsScreen() {
       
       const response = await fetch(phpEndpoint, {
         method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
       console.log('[WhatsApp Inbox] Response status:', response.status, response.ok);
       
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const result = await response.json();
       console.log('[WhatsApp Inbox] Response data:', result);
 
-      if (!response.ok || !result.success) {
+      if (!result.success) {
         throw new Error(result.error || 'Failed to load messages');
       }
 
-      console.log('[WhatsApp Inbox] Messages count:', result.messages?.length || 0);
-      setWhatsappMessages(result.messages || []);
-      console.log('[WhatsApp Inbox] Messages loaded successfully');
+      const messages = result.messages || [];
+      console.log('[WhatsApp Inbox] Messages count:', messages.length);
+      console.log('[WhatsApp Inbox] Messages:', messages);
+      setWhatsappMessages(messages);
+      console.log('[WhatsApp Inbox] State updated with messages');
+      
+      if (messages.length === 0) {
+        console.log('[WhatsApp Inbox] No messages found. Webhook messages are stored in: public/Tracker/data/whatsapp-messages.json');
+      }
     } catch (error) {
       console.error('[WhatsApp Inbox] Error:', error);
       console.error('[WhatsApp Inbox] Error details:', (error as Error).message, (error as Error).stack);
@@ -705,13 +738,26 @@ export default function CampaignsScreen() {
       return;
     }
 
+    console.log('[WhatsApp CAMPAIGN] Checking credentials before send...');
+    console.log('[WhatsApp CAMPAIGN] Current credentials:', {
+      hasToken: !!whatsappAccessToken,
+      hasPhoneId: !!whatsappPhoneNumberId,
+      tokenLength: whatsappAccessToken?.length || 0,
+      phoneId: whatsappPhoneNumberId
+    });
+
     if (!whatsappAccessToken || !whatsappPhoneNumberId) {
-      Alert.alert(
-        'WhatsApp Not Configured',
-        'Please configure WhatsApp Business API settings before sending messages.',
-        [{ text: 'OK' }]
-      );
-      return;
+      console.log('[WhatsApp CAMPAIGN] Missing credentials, reloading from storage...');
+      await loadCampaignSettings();
+      
+      if (!whatsappAccessToken || !whatsappPhoneNumberId) {
+        Alert.alert(
+          'WhatsApp Not Configured',
+          'Please configure WhatsApp Business API settings before sending messages.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
     }
 
     console.log('[WhatsApp CAMPAIGN] Opening confirm dialog...');
@@ -720,11 +766,18 @@ export default function CampaignsScreen() {
       message: `Send WhatsApp message to ${selectedCustomers.length} customer(s)?`,
       onConfirm: async () => {
         console.log('[WhatsApp CAMPAIGN] User confirmed, starting send...');
+        console.log('[WhatsApp CAMPAIGN] Using credentials:', {
+          hasToken: !!whatsappAccessToken,
+          hasPhoneId: !!whatsappPhoneNumberId,
+          tokenLength: whatsappAccessToken?.length || 0
+        });
         try {
           setIsSending(true);
 
           const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
+          console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
+          
           const response = await fetch(phpEndpoint, {
             method: 'POST',
             headers: {
@@ -1271,8 +1324,11 @@ export default function CampaignsScreen() {
                 <TouchableOpacity
                   style={styles.inboxToggle}
                   onPress={() => {
-                    setShowWhatsAppInbox(!showWhatsAppInbox);
-                    if (!showWhatsAppInbox && whatsappMessages.length === 0) {
+                    const newState = !showWhatsAppInbox;
+                    console.log('[WhatsApp Inbox] Toggling inbox:', newState);
+                    setShowWhatsAppInbox(newState);
+                    if (newState) {
+                      console.log('[WhatsApp Inbox] Loading messages on toggle...');
                       loadWhatsAppMessages();
                     }
                   }}
