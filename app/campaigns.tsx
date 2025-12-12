@@ -627,6 +627,10 @@ export default function CampaignsScreen() {
   };
 
   const loadWhatsAppMessages = async () => {
+    console.log('[WhatsApp Inbox] === loadWhatsAppMessages called ===');
+    console.log('[WhatsApp Inbox] Current loadingMessages state:', loadingMessages);
+    console.log('[WhatsApp Inbox] Current messages count:', whatsappMessages.length);
+    
     try {
       setLoadingMessages(true);
       console.log('[WhatsApp Inbox] Loading messages...');
@@ -634,7 +638,9 @@ export default function CampaignsScreen() {
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/get-whatsapp-messages.php` : `${apiUrl}/api/get-whatsapp-messages`;
       
+      console.log('[WhatsApp Inbox] API URL:', apiUrl);
       console.log('[WhatsApp Inbox] Fetching from:', phpEndpoint);
+      console.log('[WhatsApp Inbox] Starting fetch request...');
       
       const response = await fetch(phpEndpoint, {
         method: 'GET',
@@ -643,14 +649,19 @@ export default function CampaignsScreen() {
         },
       });
 
-      console.log('[WhatsApp Inbox] Response status:', response.status, response.ok);
+      console.log('[WhatsApp Inbox] Fetch completed');
+      console.log('[WhatsApp Inbox] Response status:', response.status);
+      console.log('[WhatsApp Inbox] Response ok:', response.ok);
+      console.log('[WhatsApp Inbox] Response headers:', response.headers);
       
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error('[WhatsApp Inbox] Error response body:', errorText);
+        throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`);
       }
       
       const result = await response.json();
-      console.log('[WhatsApp Inbox] Response data:', result);
+      console.log('[WhatsApp Inbox] Response data:', JSON.stringify(result, null, 2));
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to load messages');
@@ -658,20 +669,25 @@ export default function CampaignsScreen() {
 
       const messages = result.messages || [];
       console.log('[WhatsApp Inbox] Messages count:', messages.length);
-      console.log('[WhatsApp Inbox] Messages:', messages);
+      console.log('[WhatsApp Inbox] Messages array:', JSON.stringify(messages, null, 2));
+      
       setWhatsappMessages(messages);
-      console.log('[WhatsApp Inbox] State updated with messages');
+      console.log('[WhatsApp Inbox] State updated with', messages.length, 'messages');
       
       if (messages.length === 0) {
         console.log('[WhatsApp Inbox] No messages found. Webhook messages are stored in: public/Tracker/data/whatsapp-messages.json');
+        Alert.alert('Info', 'No messages received yet. Messages from WhatsApp webhook will appear here.');
+      } else {
+        Alert.alert('Success', `Loaded ${messages.length} message(s)`);
       }
     } catch (error) {
-      console.error('[WhatsApp Inbox] Error:', error);
-      console.error('[WhatsApp Inbox] Error details:', (error as Error).message, (error as Error).stack);
+      console.error('[WhatsApp Inbox] Error caught:', error);
+      console.error('[WhatsApp Inbox] Error message:', (error as Error).message);
+      console.error('[WhatsApp Inbox] Error stack:', (error as Error).stack);
       Alert.alert('Error', 'Failed to load WhatsApp messages: ' + (error as Error).message);
     } finally {
       setLoadingMessages(false);
-      console.log('[WhatsApp Inbox] Loading complete');
+      console.log('[WhatsApp Inbox] Loading complete, loadingMessages set to false');
     }
   };
 
