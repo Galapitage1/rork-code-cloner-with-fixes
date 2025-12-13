@@ -127,6 +127,20 @@ export default function SalesUploadScreen() {
 
       console.log(`SalesUpload: Processing ${rawConsumption.rows.length} raw material deductions`);
 
+      const productionOutletNames = outlets.filter(o => o.outletType === 'production').map(o => o.name);
+      const allProductionStockChecks = stockChecks.filter(c => productionOutletNames.includes(c.outlet || ''));
+      const sortedProductionStockChecks = allProductionStockChecks.sort((a, b) => b.timestamp - a.timestamp);
+      
+      const deductionsToProcess: Array<{
+        outletName: string;
+        productId: string;
+        salesDate: string;
+        wholeDeducted: number;
+        slicesDeducted: number;
+      }> = [];
+      
+      const stockCheckUpdates: Map<string, any> = new Map();
+
       for (const rawRow of rawConsumption.rows) {
         const rawProduct = products.find(p => p.id === rawRow.rawProductId);
         if (!rawProduct) {
@@ -165,19 +179,16 @@ export default function SalesUploadScreen() {
           console.log(`  DEDUCTING FROM INVENTORY (for Inventory Section)`);
           console.log(`  RECORDING AS SALES DEDUCTION (for Live Inventory Sold column)`);
 
-          try {
-            await deductInventoryFromSales(
-              outletName,
-              productPair.wholeProductId,
-              salesDate,
-              wholeDeducted,
-              slicesDeducted
-            );
-            console.log(`  ✓ Deducted from Inventory + Recorded sales deduction`);
-            console.log(`  ✓ This will show as -${wholeDeducted}W -${slicesDeducted}S in Live Inventory Sold row`);
-          } catch (error) {
-            console.error(`SalesUpload: Failed to deduct inventory for raw ${rawRow.rawName}:`, error);
-          }
+          deductionsToProcess.push({
+            outletName,
+            productId: productPair.wholeProductId,
+            salesDate,
+            wholeDeducted,
+            slicesDeducted
+          });
+          
+          console.log(`  ✓ Queued deduction for batch processing`);
+          console.log(`  ✓ Will show as -${wholeDeducted}W -${slicesDeducted}S in Live Inventory Sold row`);
           console.log(`=== END DEDUCTING RAW MATERIAL WITH CONVERSION ===\n`);
         } else {
           console.log(`\n=== DEDUCTING RAW MATERIAL (Other Units): ${rawRow.rawName} ===`);
@@ -245,36 +256,55 @@ export default function SalesUploadScreen() {
             console.log(`    Before: receivedStock=${receivedStock}, quantity=${currentQuantity}`);
             console.log(`    After: receivedStock=${updatedReceivedStock}, quantity=${updatedQuantity}`);
             
-            const updatedCounts = [...check.counts];
-            updatedCounts[countIndex] = {
-              ...count,
-              receivedStock: updatedReceivedStock,
-              quantity: updatedQuantity,
-            };
+            let updatedCounts = stockCheckUpdates.get(check.id) || [...check.counts];
+            const updateIndex = updatedCounts.findIndex((c: any) => c.productId === rawProduct.id);
+            if (updateIndex !== -1) {
+              updatedCounts[updateIndex] = {
+                ...updatedCounts[updateIndex],
+                receivedStock: updatedReceivedStock,
+                quantity: updatedQuantity,
+              };
+            }
             
-            await updateStockCheck(check.id, updatedCounts);
+            stockCheckUpdates.set(check.id, updatedCounts);
             remainingToDeduct -= deductAmount;
             
-            console.log(`  ✓ Deducted ${deductAmount} from production stock check (remaining: ${remainingToDeduct})`);
+            console.log(`  ✓ Queued ${deductAmount} deduction from production stock check (remaining: ${remainingToDeduct})`);
           }
 
           console.log(`  STEP 2: Recording sales deduction for Live Inventory`);
-          try {
-            await deductInventoryFromSales(
-              outletName,
-              rawProduct.id,
-              salesDate,
-              rawRow.consumed,
-              0
-            );
-            console.log(`  ✓ Recorded sales deduction - will show as -${rawRow.consumed} in Live Inventory Sold column`);
-            console.log(`  ✓ Inventory Section updated: -${rawRow.consumed} ${rawRow.rawUnit}`);
-          } catch (error) {
-            console.error(`  ❌ Failed to record sales deduction:`, error);
-          }
+          deductionsToProcess.push({
+            outletName,
+            productId: rawProduct.id,
+            salesDate,
+            wholeDeducted: rawRow.consumed,
+            slicesDeducted: 0
+          });
+          console.log(`  ✓ Queued sales deduction - will show as -${rawRow.consumed} in Live Inventory Sold column`);
+          console.log(`  ✓ Inventory Section will be updated: -${rawRow.consumed} ${rawRow.rawUnit}`);
           console.log(`=== END DEDUCTING RAW MATERIAL (Other Units) ===\n`);
         }
       }
+      
+      console.log(`\n=== BATCH PROCESSING ${stockCheckUpdates.size} STOCK CHECK UPDATES ===`);
+      const stockCheckPromises = Array.from(stockCheckUpdates.entries()).map(([checkId, counts]) => 
+        updateStockCheck(checkId, counts).catch(err => {
+          console.error(`Failed to update stock check ${checkId}:`, err);
+        })
+      );
+      await Promise.all(stockCheckPromises);
+      console.log(`✓ Completed ${stockCheckUpdates.size} stock check updates`);
+      
+      console.log(`\n=== BATCH PROCESSING ${deductionsToProcess.length} INVENTORY DEDUCTIONS ===`);
+      const deductionPromises = deductionsToProcess.map(d => 
+        deductInventoryFromSales(d.outletName, d.productId, d.salesDate, d.wholeDeducted, d.slicesDeducted)
+          .catch(err => {
+            console.error(`Failed to deduct inventory for product ${d.productId}:`, err);
+          })
+      );
+      await Promise.all(deductionPromises);
+      console.log(`✓ Completed ${deductionsToProcess.length} inventory deductions`);
+      
     } catch (error) {
       console.error('SalesUpload: Error processing raw material deductions:', error);
     }
@@ -302,11 +332,29 @@ export default function SalesUploadScreen() {
 
     console.log(`SalesUpload: Processing inventory deductions for ${outletName} on ${salesDate}`);
     
-    // Calculate next day for adding Prods.Req to live inventory
     const nextDay = new Date(salesDate);
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split('T')[0];
     console.log(`SalesUpload: Will add Prods.Req quantities to next day: ${nextDayStr}`);
+    
+    const productionOutletNames = outlets.filter(o => o.outletType === 'production').map(o => o.name);
+    const allProductionStockChecks = stockChecks.filter(c => productionOutletNames.includes(c.outlet || ''));
+    const sortedProductionStockChecks = allProductionStockChecks.sort((a, b) => b.timestamp - a.timestamp);
+    
+    const deductionsToProcess: Array<{
+      outletName: string;
+      productId: string;
+      salesDate: string;
+      wholeDeducted: number;
+      slicesDeducted: number;
+    }> = [];
+    
+    const inventoryUpdates: Array<{
+      productId: string;
+      updates: any;
+    }> = [];
+    
+    const stockCheckUpdates: Map<string, any> = new Map();
     
     for (const row of reconciled.rows) {
       if (!row.productId || !row.sold || row.sold === 0) continue;
@@ -338,18 +386,16 @@ export default function SalesUploadScreen() {
           slicesDeducted = Math.round(totalSlices % conversionFactor);
         }
 
-        try {
-          await deductInventoryFromSales(
-            outletName,
-            productPair.wholeProductId,
-            salesDate,
-            wholeDeducted,
-            slicesDeducted
-          );
-          console.log(`SalesUpload: Deducted ${wholeDeducted} whole + ${slicesDeducted} slices of ${product.name}`);
-          
-          // Add reconciled Received quantities to Prods.Req column in Inventory
-          if (row.received != null && row.received > 0) {
+        deductionsToProcess.push({
+          outletName,
+          productId: productPair.wholeProductId,
+          salesDate,
+          wholeDeducted,
+          slicesDeducted
+        });
+        console.log(`SalesUpload: Queued ${wholeDeducted} whole + ${slicesDeducted} slices of ${product.name}`);
+        
+        if (row.received != null && row.received > 0) {
             const receivedQty = row.received;
             const isReceivedWholeProduct = row.productId === productPair.wholeProductId;
             
@@ -372,25 +418,23 @@ export default function SalesUploadScreen() {
               receivedSlices = Math.round(receivedSlices % conversionFactor);
             }
             
-            console.log(`SalesUpload: Adding ${receivedWhole} whole + ${receivedSlices} slices to Prods.Req for ${product.name}`);
-            
-            // Update inventory Prods.Req column by adding the received quantities
-            const currentProdsReqWhole = invStock.prodsReqWhole || 0;
-            const currentProdsReqSlices = invStock.prodsReqSlices || 0;
-            
-            const newProdsReqWhole = currentProdsReqWhole + receivedWhole;
-            const newProdsReqSlices = currentProdsReqSlices + receivedSlices;
-            
-            await updateInventoryStock(productPair.wholeProductId, {
+          console.log(`SalesUpload: Adding ${receivedWhole} whole + ${receivedSlices} slices to Prods.Req for ${product.name}`);
+          
+          const currentProdsReqWhole = invStock.prodsReqWhole || 0;
+          const currentProdsReqSlices = invStock.prodsReqSlices || 0;
+          
+          const newProdsReqWhole = currentProdsReqWhole + receivedWhole;
+          const newProdsReqSlices = currentProdsReqSlices + receivedSlices;
+          
+          inventoryUpdates.push({
+            productId: productPair.wholeProductId,
+            updates: {
               prodsReqWhole: newProdsReqWhole,
               prodsReqSlices: newProdsReqSlices,
-            });
-            
-            console.log(`SalesUpload: Updated Prods.Req - was ${currentProdsReqWhole}W/${currentProdsReqSlices}S, now ${newProdsReqWhole}W/${newProdsReqSlices}S`);
-          }
+            }
+          });
           
-        } catch (error) {
-          console.error(`SalesUpload: Failed to deduct inventory for ${product.name}:`, error);
+          console.log(`SalesUpload: Queued Prods.Req update - was ${currentProdsReqWhole}W/${currentProdsReqSlices}S, will be ${newProdsReqWhole}W/${newProdsReqSlices}S`);
         }
       } else {
         console.log(`SalesUpload: No product pair found for ${product.name}, checking Production Stock (Other Units)`);
@@ -403,12 +447,8 @@ export default function SalesUploadScreen() {
           console.log(`SalesUpload: Sales already processed for ${product.name} at ${outletName} on ${salesDate}`);
           continue;
         }
-
-        const productionOutletNames = outlets.filter(o => o.outletType === 'production').map(o => o.name);
-        const allProductionStockChecks = stockChecks.filter(c => productionOutletNames.includes(c.outlet || ''));
         
         let totalAvailableQty = 0;
-        const sortedProductionStockChecks = allProductionStockChecks.sort((a, b) => b.timestamp - a.timestamp);
         
         for (const check of sortedProductionStockChecks) {
           const countIndex = check.counts.findIndex(c => c.productId === row.productId);
@@ -449,32 +489,60 @@ export default function SalesUploadScreen() {
           const deductAmount = Math.min(netStock, remainingToDeduct);
           const updatedReceivedStock = Math.max(0, receivedStock - deductAmount);
           
-          const updatedCounts = [...check.counts];
-          updatedCounts[countIndex] = {
-            ...count,
-            receivedStock: updatedReceivedStock,
-          };
+          let updatedCounts = stockCheckUpdates.get(check.id) || [...check.counts];
+          const updateIndex = updatedCounts.findIndex((c: any) => c.productId === row.productId);
+          if (updateIndex !== -1) {
+            updatedCounts[updateIndex] = {
+              ...updatedCounts[updateIndex],
+              receivedStock: updatedReceivedStock,
+            };
+          }
           
-          await updateStockCheck(check.id, updatedCounts);
+          stockCheckUpdates.set(check.id, updatedCounts);
           remainingToDeduct -= deductAmount;
           
-          console.log(`SalesUpload: Deducted ${deductAmount} of ${product.name} from production stock check ${check.id}`);
+          console.log(`SalesUpload: Queued ${deductAmount} of ${product.name} from production stock check ${check.id}`);
         }
 
-        try {
-          await deductInventoryFromSales(
-            outletName,
-            row.productId,
-            salesDate,
-            row.sold,
-            0
-          );
-          console.log(`SalesUpload: Successfully deducted ${row.sold} ${product.unit} of ${product.name} from Production Stock`);
-        } catch (error) {
-          console.error(`SalesUpload: Failed to record sales deduction for ${product.name}:`, error);
-        }
+        deductionsToProcess.push({
+          outletName,
+          productId: row.productId,
+          salesDate,
+          wholeDeducted: row.sold,
+          slicesDeducted: 0
+        });
+        console.log(`SalesUpload: Queued ${row.sold} ${product.unit} of ${product.name} from Production Stock`);
       }
     }
+    
+    console.log(`\n=== BATCH PROCESSING ${stockCheckUpdates.size} STOCK CHECK UPDATES ===`);
+    const stockCheckPromises = Array.from(stockCheckUpdates.entries()).map(([checkId, counts]) => 
+      updateStockCheck(checkId, counts).catch(err => {
+        console.error(`Failed to update stock check ${checkId}:`, err);
+      })
+    );
+    await Promise.all(stockCheckPromises);
+    console.log(`✓ Completed ${stockCheckUpdates.size} stock check updates`);
+    
+    console.log(`\n=== BATCH PROCESSING ${deductionsToProcess.length} INVENTORY DEDUCTIONS ===`);
+    const deductionPromises = deductionsToProcess.map(d => 
+      deductInventoryFromSales(d.outletName, d.productId, d.salesDate, d.wholeDeducted, d.slicesDeducted)
+        .catch(err => {
+          console.error(`Failed to deduct inventory for product ${d.productId}:`, err);
+        })
+    );
+    await Promise.all(deductionPromises);
+    console.log(`✓ Completed ${deductionsToProcess.length} inventory deductions`);
+    
+    console.log(`\n=== BATCH PROCESSING ${inventoryUpdates.length} INVENTORY STOCK UPDATES ===`);
+    const inventoryPromises = inventoryUpdates.map(u => 
+      updateInventoryStock(u.productId, u.updates).catch(err => {
+        console.error(`Failed to update inventory for product ${u.productId}:`, err);
+      })
+    );
+    await Promise.all(inventoryPromises);
+    console.log(`✓ Completed ${inventoryUpdates.length} inventory stock updates`);
+    
   }, [products, inventoryStocks, outlets, stockChecks, salesDeductions, deductInventoryFromSales, updateStockCheck, getProductPair, updateInventoryStock]);
 
   const saveReconciliationToHistory = useCallback(async (reconciled: SalesReconcileResult) => {
@@ -599,8 +667,10 @@ export default function SalesUploadScreen() {
       updateStep(3, 'complete');
       
       updateStep(4, 'active');
-      await processSalesInventoryDeductions(reconciled);
-      await processRawMaterialDeductions(reconciled, base64);
+      await Promise.all([
+        processSalesInventoryDeductions(reconciled),
+        processRawMaterialDeductions(reconciled, base64)
+      ]);
       updateStep(4, 'complete');
       
       updateStep(5, 'active');
