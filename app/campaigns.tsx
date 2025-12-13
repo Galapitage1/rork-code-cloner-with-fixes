@@ -15,6 +15,7 @@ import {
 import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
+import { useAuth } from '@/contexts/AuthContext';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -35,6 +36,7 @@ const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 
 export default function CampaignsScreen() {
   const { customers } = useCustomers();
+  const { currentUser } = useAuth();
   const [isPageLoading, setIsPageLoading] = React.useState(true);
   
   const [campaignType, setCampaignType] = useState<CampaignType>('email');
@@ -160,6 +162,13 @@ export default function CampaignsScreen() {
       setIsPageLoading(false);
     });
   }, []);
+
+  React.useEffect(() => {
+    if (currentUser) {
+      console.log('[CAMPAIGNS] User changed, reloading settings for:', currentUser.username);
+      loadCampaignSettings();
+    }
+  }, [currentUser?.id]);
 
   React.useEffect(() => {
     console.log('[CAMPAIGNS] WhatsApp credentials updated:', {
