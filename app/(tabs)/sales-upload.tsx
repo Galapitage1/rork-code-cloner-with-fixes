@@ -773,6 +773,21 @@ export default function SalesUploadScreen() {
       const outlet = reconciled.matchedOutletName || reconciled.outletFromSheet;
       const date = reconciled.sheetDate;
       if (outlet && date && reconciled.dateMatched) {
+        console.log('\n=== SAVING RECONCILIATION HISTORY ===');
+        console.log('Outlet:', outlet);
+        console.log('Date:', date);
+        console.log('Sales rows:', reconciled.rows.length);
+        console.log('Raw consumption rows:', raw?.rows.length || 0);
+        
+        if (raw?.rows && raw.rows.length > 0) {
+          console.log('Raw materials consumed:');
+          raw.rows.forEach(r => {
+            console.log(`  - ${r.rawName} (ID: ${r.rawProductId}): ${r.consumed} ${r.rawUnit}`);
+          });
+        } else {
+          console.log('⚠️ WARNING: No raw consumption data to save!');
+        }
+        
         try {
           await addReconcileHistory({
             id: `reconcile-${Date.now()}`,
