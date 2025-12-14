@@ -779,19 +779,68 @@ function LiveInventoryScreen() {
     let isMounted = true;
     
     if (selectedOutlet && isMounted) {
-      console.log('[LIVE INVENTORY] Outlet or date changed:', selectedOutlet, selectedDate, '- triggering sync to load latest sales data');
+      console.log('\n[LIVE INVENTORY] ========== SYNC TRIGGER ==========');
+      console.log('[LIVE INVENTORY] Outlet or date changed:', selectedOutlet, selectedDate);
       console.log('[LIVE INVENTORY] This ensures sales from reconciliations on other devices are loaded');
-      console.log('[LIVE INVENTORY] Current salesDeductions count BEFORE sync:', salesDeductions.length);
-      console.log('[LIVE INVENTORY] Current reconcileHistory count BEFORE sync:', reconcileHistory.length);
+      console.log('[LIVE INVENTORY] BEFORE sync:');
+      console.log('  - salesDeductions count:', salesDeductions.length);
+      console.log('  - reconcileHistory count:', reconcileHistory.length);
       
+      if (salesDeductions.length > 0) {
+        const outletSales = salesDeductions.filter(s => s.outletName === selectedOutlet);
+        console.log(`  - salesDeductions for "${selectedOutlet}": ${outletSales.length}`);
+      }
+      
+      if (reconcileHistory.length > 0) {
+        const outletReconcile = reconcileHistory.filter(r => r.outlet === selectedOutlet);
+        console.log(`  - reconcileHistory for "${selectedOutlet}": ${outletReconcile.length}`);
+      }
+      
+      console.log('[LIVE INVENTORY] Starting sync to pull latest data from server...');
       syncAll(true).then(() => {
         if (isMounted) {
-          console.log('[LIVE INVENTORY] ✓ Sync completed successfully');
-          console.log('[LIVE INVENTORY] Sync brought in updated data - component will recalculate');
+          console.log('[LIVE INVENTORY] ✓ Sync completed - checking results...');
+          
+          // Re-read data from AsyncStorage to verify sync worked
+          import('@react-native-async-storage/async-storage').then(({ default: AsyncStorage }) => {
+            Promise.all([
+              AsyncStorage.getItem('@stock_app_sales_deductions'),
+              AsyncStorage.getItem('@stock_app_reconcile_history')
+            ]).then(([salesData, reconcileData]) => {
+              const salesFromStorage = salesData ? JSON.parse(salesData) : [];
+              const reconcileFromStorage = reconcileData ? JSON.parse(reconcileData) : [];
+              
+              console.log('[LIVE INVENTORY] AFTER sync (from AsyncStorage):');
+              console.log('  - salesDeductions count:', salesFromStorage.length);
+              console.log('  - reconcileHistory count:', reconcileFromStorage.length);
+              
+              if (salesFromStorage.length > 0) {
+                const outletSales = salesFromStorage.filter((s: any) => s.outletName === selectedOutlet && !s.deleted);
+                console.log(`  - salesDeductions for "${selectedOutlet}": ${outletSales.length}`);
+                if (outletSales.length > 0) {
+                  console.log('  Sample entries:');
+                  outletSales.slice(0, 3).forEach((d: any) => {
+                    console.log(`    ${d.salesDate}: product ${d.productId} = ${d.wholeDeducted}W + ${d.slicesDeducted}S`);
+                  });
+                }
+              }
+              
+              if (reconcileFromStorage.length > 0) {
+                const outletReconcile = reconcileFromStorage.filter((r: any) => r.outlet === selectedOutlet && !r.deleted);
+                console.log(`  - reconcileHistory for "${selectedOutlet}": ${outletReconcile.length}`);
+                if (outletReconcile.length > 0) {
+                  console.log('  Reconciliation dates:', outletReconcile.map((r: any) => r.date).join(', '));
+                }
+              }
+              
+              console.log('[LIVE INVENTORY] ========================================\n');
+            });
+          });
         }
       }).catch(e => {
         if (isMounted) {
-          console.log('[LIVE INVENTORY] Silent sync error:', e);
+          console.error('[LIVE INVENTORY] ❌ Sync error:', e);
+          console.log('[LIVE INVENTORY] ========================================\n');
         }
       });
     }
@@ -799,7 +848,7 @@ function LiveInventoryScreen() {
     return () => {
       isMounted = false;
     };
-  }, [selectedOutlet, selectedDate, syncAll, salesDeductions.length, reconcileHistory.length]);
+  }, [selectedOutlet, selectedDate]);
 
   const handleExportDiscrepancies = async () => {
     try {
