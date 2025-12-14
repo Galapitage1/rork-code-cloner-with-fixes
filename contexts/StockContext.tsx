@@ -3286,8 +3286,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       // CRITICAL FIX: Always use smart merging to prevent data loss
       // This applies to BOTH manual and background syncs
-      const mergeByTimestamp = <T extends { id?: string; productId?: string; updatedAt?: number }>(existing: T[], synced: any[], label: string, idField: 'id' | 'productId' = 'id'): T[] => {
+      const mergeByTimestamp = <T extends { id?: string; productId?: string; updatedAt?: number; deleted?: boolean }>(existing: T[], synced: any[], label: string, idField: 'id' | 'productId' = 'id'): T[] => {
         console.log(`StockContext syncAll: Merging ${label} - existing:`, existing.length, 'synced:', Array.isArray(synced) ? synced.length : 0);
+        
+        // CRITICAL: For sales deductions, ALWAYS preserve local data during sync
+        // Sales deductions contain the ACTUAL sold data from reconciliation reports
+        // They must NEVER be overwritten by empty/old server data
+        if (label === 'salesDeductions' && existing.length > 0) {
+          console.log(`StockContext syncAll: CRITICAL - ${label} merge - Preserving ${existing.length} local sales deductions`);
+          console.log(`StockContext syncAll: Local sales deductions MUST be preserved to prevent sold column from becoming empty`);
+          
+          // If synced is empty or not an array, DEFINITELY keep all existing
+          if (!Array.isArray(synced) || synced.length === 0) {
+            console.log(`StockContext syncAll: ${label} - synced is empty, preserving ALL ${existing.length} existing items`);
+            console.log(`StockContext syncAll: ✓ Sales deductions preserved - sold column will show correct data`);
+            return existing;
+          }
+        }
         
         // If synced is empty or not an array, keep existing to prevent data loss
         if (!Array.isArray(synced) || synced.length === 0) {
@@ -3317,6 +3332,32 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           const itemUpdatedAt = (item as any).updatedAt || 0;
           const existingUpdatedAt = existingItem ? ((existingItem as any).updatedAt || 0) : 0;
           
+          // CRITICAL: For sales deductions, be extra cautious about overwriting
+          if (label === 'salesDeductions' && existingItem) {
+            // Only update if server version is SIGNIFICANTLY newer (not just by milliseconds)
+            // AND if the item is not deleted on server
+            const isServerDeleted = (item as any).deleted;
+            if (isServerDeleted) {
+              // If server says deleted but local is not, keep local (prevent accidental deletion)
+              if (!existingItem.deleted) {
+                console.log(`  ${label}: Server has deleted ${key} but local is active - keeping local to prevent data loss`);
+                keptLocal++;
+                return;
+              }
+            }
+            
+            // Only update if server is at least 5 seconds newer
+            if (itemUpdatedAt > existingUpdatedAt + 5000) {
+              merged.set(key, item);
+              updated++;
+              console.log(`  ${label}: Updated ${key} with significantly newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt} + 5s)`);
+            } else {
+              keptLocal++;
+              console.log(`  ${label}: Kept local ${key} (local: ${existingUpdatedAt} is recent enough vs server: ${itemUpdatedAt})`);
+            }
+            return;
+          }
+          
           if (!existingItem) {
             merged.set(key, item);
             addedFromServer++;
@@ -3340,6 +3381,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         
         const result = Array.from(merged.values());
         console.log(`StockContext syncAll: ${label} - final count:`, result.length);
+        
+        // CRITICAL VALIDATION: For sales deductions, verify we didn't lose data
+        if (label === 'salesDeductions') {
+          if (result.length < existing.length) {
+            console.error(`StockContext syncAll: ❌ CRITICAL ERROR - Lost ${existing.length - result.length} sales deductions during merge!`);
+            console.error(`  This will cause sold column in Live Inventory to be EMPTY!`);
+            console.error(`  Existing count: ${existing.length}, Result count: ${result.length}`);
+            console.error(`  REVERTING to existing data to prevent data loss`);
+            return existing;
+          }
+          console.log(`StockContext syncAll: ✓ Sales deductions merge validated - no data loss (${result.length} items preserved)`);
+        }
+        
         return result;
       };
       
