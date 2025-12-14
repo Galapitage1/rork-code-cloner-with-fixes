@@ -759,12 +759,28 @@ function LiveInventoryScreen() {
 
   console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
+  console.log('[LIVE INVENTORY] Sales deductions for selected outlet:', salesDeductions.filter(s => s.outletName === selectedOutlet).length);
+  if (salesDeductions.length > 0 && selectedOutlet) {
+    const outletSales = salesDeductions.filter(s => s.outletName === selectedOutlet);
+    if (outletSales.length > 0) {
+      console.log('[LIVE INVENTORY] Sample sales deductions for', selectedOutlet, ':', outletSales.slice(0, 3).map(s => ({
+        date: s.salesDate,
+        product: products.find(p => p.id === s.productId)?.name || s.productId,
+        whole: s.wholeDeducted,
+        slices: s.slicesDeducted
+      })));
+    } else {
+      console.log('[LIVE INVENTORY] ⚠️ No sales deductions found for outlet:', selectedOutlet);
+      console.log('[LIVE INVENTORY] Available outlets in sales deductions:', [...new Set(salesDeductions.map(s => s.outletName))]);
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
     
     if (selectedOutlet && isMounted) {
-      console.log('[LIVE INVENTORY] Outlet selected/changed:', selectedOutlet, '- triggering silent sync to load latest sales data');
+      console.log('[LIVE INVENTORY] Outlet or date changed:', selectedOutlet, selectedDate, '- triggering sync to load latest sales data');
+      console.log('[LIVE INVENTORY] This ensures sales from reconciliations on other devices are loaded');
       syncAll(true).catch(e => {
         if (isMounted) {
           console.log('[LIVE INVENTORY] Silent sync error:', e);
@@ -775,7 +791,7 @@ function LiveInventoryScreen() {
     return () => {
       isMounted = false;
     };
-  }, [selectedOutlet, syncAll]);
+  }, [selectedOutlet, selectedDate, syncAll]);
 
   const handleExportDiscrepancies = async () => {
     try {
