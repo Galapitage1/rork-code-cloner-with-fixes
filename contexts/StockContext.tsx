@@ -3508,8 +3508,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         if (hasChanges.outlets || !silent) setOutlets(activeOutlets);
         if (hasChanges.conversions || !silent) setProductConversions(activeConversions);
         if (hasChanges.inventory || !silent) setInventoryStocks(activeInventory);
-        if (hasChanges.salesDeductions || !silent) setSalesDeductions(activeSalesDeductions);
-        if (hasChanges.reconcileHistory || !silent) setReconcileHistory(activeReconcileHistory);
+        
+        // CRITICAL FIX: Always update salesDeductions and reconcileHistory for cross-device sync
+        // Menu products (with/without conversions) need salesDeductions to show sold amounts
+        // Raw materials need reconcileHistory.rawConsumption to show sold amounts
+        // Force update even if change detection says no changes to ensure cross-device data appears
+        console.log('StockContext syncAll: FORCE updating salesDeductions and reconcileHistory for cross-device menu/raw product sales');
+        setSalesDeductions(activeSalesDeductions);
+        setReconcileHistory(activeReconcileHistory);
         
         // Only update stock counts map if there are changes to stock checks
         if (hasChanges.stockChecks || !silent) {
@@ -3518,6 +3524,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         
         setLastSyncTime(Date.now());
         console.log('StockContext syncAll: ✓ React state updated with changed data');
+        console.log('StockContext syncAll: ✓ salesDeductions count in state:', activeSalesDeductions.length, '(for menu products sold)');
+        console.log('StockContext syncAll: ✓ reconcileHistory count in state:', activeReconcileHistory.length, '(for raw materials consumed)');
       } else {
         console.log('StockContext syncAll: No changes detected during silent sync - preserving UI state and scroll position');
         setLastSyncTime(Date.now()); // Still update sync time to show sync happened
