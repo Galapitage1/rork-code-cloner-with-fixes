@@ -365,6 +365,17 @@ export default function SalesUploadScreen() {
       const productPair = getProductPair(product);
       
       if (productPair) {
+        const existingDeduction = salesDeductions.find(
+          d => d.outletName === outletName && 
+               d.productId === productPair.wholeProductId && 
+               d.salesDate === salesDate
+        );
+        
+        if (existingDeduction) {
+          console.log(`SalesUpload: Sales already processed for ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
+          continue;
+        }
+
         const invStock = inventoryStocks.find(s => s.productId === productPair.wholeProductId);
         if (!invStock) {
           console.log(`SalesUpload: No inventory found for product ${product.name}`);
