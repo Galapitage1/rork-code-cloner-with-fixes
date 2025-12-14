@@ -382,19 +382,23 @@ export default function SalesUploadScreen() {
       const productPair = getProductPair(product);
       
       if (productPair) {
-        // FIX: Don't skip - always create/update sales deductions for Live Inventory display
-        // Sales deductions are REQUIRED for Live Inventory sold column to work
-        console.log(`SalesUpload: Processing ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
-        console.log(`SalesUpload: This will create/update sales deduction for Live Inventory sold column`);
+        console.log(`\n=== PROCESSING MENU ITEM: ${product.name} ===`);
+        console.log(`SalesUpload: Product ID: ${product.id}`);
+        console.log(`SalesUpload: Outlet: ${outletName}, Date: ${salesDate}`);
+        console.log(`SalesUpload: Sold quantity: ${row.sold}`);
+        console.log(`SalesUpload: Product has unit conversions - will create/update sales deduction`);
         
-        // Check if we already processed this (for logging only, not for skipping)
+        // Check if we already processed this
         const existingReconciliation = reconcileHistory.find(
           (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
         if (existingReconciliation) {
-          console.log(`SalesUpload: Found existing reconciliation for ${outletName} on ${salesDate}`);
-          console.log(`SalesUpload: Will update sales deductions to match current reconciliation data`);
+          console.log(`SalesUpload: ⚠️ Re-reconciliation detected for ${outletName} on ${salesDate}`);
+          console.log(`SalesUpload: Will update sales deductions to match NEW reconciliation data`);
+          console.log(`SalesUpload: This prevents duplicate inventory deductions`);
+        } else {
+          console.log(`SalesUpload: First reconciliation for ${outletName} on ${salesDate}`);
         }
 
         const invStock = inventoryStocks.find(s => s.productId === productPair.wholeProductId);
@@ -425,7 +429,9 @@ export default function SalesUploadScreen() {
           wholeDeducted,
           slicesDeducted
         });
-        console.log(`SalesUpload: Queued ${wholeDeducted} whole + ${slicesDeducted} slices of ${product.name}`);
+        console.log(`SalesUpload: ✓ Queued sales deduction: ${wholeDeducted}W + ${slicesDeducted}S`);
+        console.log(`SalesUpload: This will appear in Live Inventory 'Sold' column for ${product.name}`);
+        console.log(`=== END PROCESSING MENU ITEM ===\n`);
         
         if (row.received != null && row.received > 0) {
             const receivedQty = row.received;
@@ -469,19 +475,22 @@ export default function SalesUploadScreen() {
           console.log(`SalesUpload: Queued Prods.Req update - was ${currentProdsReqWhole}W/${currentProdsReqSlices}S, will be ${newProdsReqWhole}W/${newProdsReqSlices}S`);
         }
       } else {
-        console.log(`SalesUpload: No product pair found for ${product.name}, checking Production Stock (Other Units)`);
+        console.log(`\n=== PROCESSING MENU ITEM (NO CONVERSION): ${product.name} ===`);
+        console.log(`SalesUpload: Product ID: ${product.id}`);
+        console.log(`SalesUpload: Outlet: ${outletName}, Date: ${salesDate}`);
+        console.log(`SalesUpload: Sold quantity: ${row.sold}`);
+        console.log(`SalesUpload: No unit conversions - production stock (other units)`);
         
-        // FIX: Don't skip - always create/update sales deductions for Live Inventory display
-        console.log(`SalesUpload: Processing ${product.name} at ${outletName} on ${salesDate} (no conversion)`);
-        console.log(`SalesUpload: This will create/update sales deduction for Live Inventory sold column`);
-        
-        // Check if we already processed this (for logging only)
+        // Check if we already processed this
         const existingReconciliation = reconcileHistory.find(
           (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
         if (existingReconciliation) {
-          console.log(`SalesUpload: Found existing reconciliation - will update to match current data`);
+          console.log(`SalesUpload: ⚠️ Re-reconciliation detected for ${outletName} on ${salesDate}`);
+          console.log(`SalesUpload: Will update sales deductions to match NEW reconciliation data`);
+        } else {
+          console.log(`SalesUpload: First reconciliation for ${outletName} on ${salesDate}`);
         }
         
         let totalAvailableQty = 0;
@@ -547,7 +556,9 @@ export default function SalesUploadScreen() {
           wholeDeducted: row.sold,
           slicesDeducted: 0
         });
-        console.log(`SalesUpload: Queued ${row.sold} ${product.unit} of ${product.name} from Production Stock`);
+        console.log(`SalesUpload: ✓ Queued sales deduction: ${row.sold} ${product.unit}`);
+        console.log(`SalesUpload: This will appear in Live Inventory 'Sold' column for ${product.name}`);
+        console.log(`=== END PROCESSING MENU ITEM (NO CONVERSION) ===\n`);
       }
     }
     
