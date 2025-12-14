@@ -141,14 +141,19 @@ export default function CampaignsScreen() {
       console.log('[CAMPAIGNS] Settings to save:', { 
         hasSmtp: !!smtpHost, 
         hasImap: !!imapHost,
+        hasWhatsApp: !!whatsappAccessToken,
         smtpPort,
         imapPort 
       });
       
       await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
-      console.log('[CAMPAIGNS] Settings saved to AsyncStorage');
+      console.log('[CAMPAIGNS] Settings saved to AsyncStorage successfully');
+      console.log('[CAMPAIGNS] Saved WhatsApp credentials:', {
+        tokenLength: whatsappAccessToken?.length || 0,
+        phoneId: whatsappPhoneNumberId
+      });
       
-      Alert.alert('Success', 'Email settings saved successfully');
+      Alert.alert('Success', 'Settings saved successfully');
     } catch (error) {
       console.error('[CAMPAIGNS] Failed to save campaign settings:', error);
       Alert.alert('Error', 'Failed to save settings');
@@ -159,6 +164,11 @@ export default function CampaignsScreen() {
     console.log('[CAMPAIGNS] Component mounted, loading settings...');
     loadCampaignSettings().finally(() => {
       console.log('[CAMPAIGNS] Settings loaded, page ready');
+      console.log('[CAMPAIGNS] Loaded credentials:', {
+        hasWhatsAppToken: !!whatsappAccessToken,
+        hasPhoneId: !!whatsappPhoneNumberId,
+        hasSmtp: !!smtpHost
+      });
       setIsPageLoading(false);
     });
   }, []);
@@ -166,7 +176,9 @@ export default function CampaignsScreen() {
   React.useEffect(() => {
     if (currentUser) {
       console.log('[CAMPAIGNS] User changed, reloading settings for:', currentUser.username);
-      loadCampaignSettings();
+      loadCampaignSettings().then(() => {
+        console.log('[CAMPAIGNS] Settings reloaded after user change');
+      });
     }
   }, [currentUser?.id]);
 
@@ -1291,11 +1303,7 @@ export default function CampaignsScreen() {
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>WhatsApp Business Configuration</Text>
                 
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    ⚠️ Your access token has expired (Dec 2, 2025). Please generate a new token from Meta Developer Portal to send messages.
-                  </Text>
-                </View>
+
                 
                 <Text style={styles.label}>Access Token *</Text>
                 <TextInput
@@ -1375,7 +1383,10 @@ export default function CampaignsScreen() {
                       <Text style={styles.inboxTitle}>Received Messages</Text>
                       <TouchableOpacity
                         style={styles.refreshButton}
-                        onPress={loadWhatsAppMessages}
+                        onPress={() => {
+                          console.log('[WhatsApp Inbox] Refresh button pressed');
+                          loadWhatsAppMessages();
+                        }}
                         disabled={loadingMessages}
                       >
                         {loadingMessages ? (
