@@ -382,34 +382,19 @@ export default function SalesUploadScreen() {
       const productPair = getProductPair(product);
       
       if (productPair) {
-        // CRITICAL: Check BOTH in-memory array AND reconciliation history to prevent duplicate deductions
-        const existingDeduction = salesDeductions.find(
-          d => d.outletName === outletName && 
-               d.productId === productPair.wholeProductId && 
-               d.salesDate === salesDate && 
-               !d.deleted
-        );
+        // FIX: Don't skip - always create/update sales deductions for Live Inventory display
+        // Sales deductions are REQUIRED for Live Inventory sold column to work
+        console.log(`SalesUpload: Processing ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
+        console.log(`SalesUpload: This will create/update sales deduction for Live Inventory sold column`);
         
-        // DOUBLE-CHECK: Also verify in reconciliation history
+        // Check if we already processed this (for logging only, not for skipping)
         const existingReconciliation = reconcileHistory.find(
           (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
-        if (existingDeduction) {
-          console.log(`SalesUpload: ✓ Sales already processed for ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
-          console.log(`SalesUpload: Existing deduction ID: ${existingDeduction.id}, created at: ${new Date(existingDeduction.updatedAt || 0).toISOString()}`);
-          
-          if (existingReconciliation) {
-            console.log(`SalesUpload: ✓ Reconciliation history confirms this date was already processed`);
-            console.log(`SalesUpload: Reconciliation timestamp: ${new Date(existingReconciliation.timestamp).toISOString()}`);
-          }
-          continue;
-        }
-        
         if (existingReconciliation) {
-          console.log(`SalesUpload: ⚠️ WARNING - Reconciliation history shows this date was processed, but deduction record is missing`);
-          console.log(`SalesUpload: This may indicate data loss or sync issue. Skipping to prevent duplicate deduction.`);
-          continue;
+          console.log(`SalesUpload: Found existing reconciliation for ${outletName} on ${salesDate}`);
+          console.log(`SalesUpload: Will update sales deductions to match current reconciliation data`);
         }
 
         const invStock = inventoryStocks.find(s => s.productId === productPair.wholeProductId);
@@ -486,30 +471,17 @@ export default function SalesUploadScreen() {
       } else {
         console.log(`SalesUpload: No product pair found for ${product.name}, checking Production Stock (Other Units)`);
         
-        // CRITICAL: Check BOTH in-memory array AND reconciliation history to prevent duplicate deductions
-        const existingDeduction = salesDeductions.find(
-          d => d.outletName === outletName && d.productId === row.productId && d.salesDate === salesDate && !d.deleted
-        );
+        // FIX: Don't skip - always create/update sales deductions for Live Inventory display
+        console.log(`SalesUpload: Processing ${product.name} at ${outletName} on ${salesDate} (no conversion)`);
+        console.log(`SalesUpload: This will create/update sales deduction for Live Inventory sold column`);
         
-        // DOUBLE-CHECK: Also verify in reconciliation history
+        // Check if we already processed this (for logging only)
         const existingReconciliation = reconcileHistory.find(
           (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
-        if (existingDeduction) {
-          console.log(`SalesUpload: ✓ Sales already processed for ${product.name} at ${outletName} on ${salesDate}`);
-          console.log(`SalesUpload: Existing deduction ID: ${existingDeduction.id}, created at: ${new Date(existingDeduction.updatedAt || 0).toISOString()}`);
-          
-          if (existingReconciliation) {
-            console.log(`SalesUpload: ✓ Reconciliation history confirms this date was already processed`);
-          }
-          continue;
-        }
-        
         if (existingReconciliation) {
-          console.log(`SalesUpload: ⚠️ WARNING - Reconciliation history shows this date was processed, but deduction record is missing`);
-          console.log(`SalesUpload: This may indicate data loss or sync issue. Skipping to prevent duplicate deduction.`);
-          continue;
+          console.log(`SalesUpload: Found existing reconciliation - will update to match current data`);
         }
         
         let totalAvailableQty = 0;
