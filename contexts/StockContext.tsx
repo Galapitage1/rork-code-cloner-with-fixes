@@ -3429,9 +3429,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const finalOutlets = mergeByTimestamp(outlets, syncedOutlets, 'outlets');
       const finalProducts = mergeByTimestamp(products, syncedProducts, 'products');
       
+      // CRITICAL: Merge reconcile history to preserve local reconciliation data
+      console.log('StockContext syncAll: CRITICAL - Merging reconcile history');
+      console.log('  Local reconcile history:', reconcileHistory.length);
+      console.log('  Synced reconcile history:', Array.isArray(syncedReconcileHistory) ? syncedReconcileHistory.length : 'not array');
+      const finalReconcileHistory = mergeByTimestamp(reconcileHistory, syncedReconcileHistory, 'reconcileHistory');
+      console.log('  Final reconcile history after merge:', finalReconcileHistory.length);
+      
       console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
       console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
-      console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, '← CRITICAL FOR LIVE INVENTORY', 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
+      console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, '← CRITICAL FOR LIVE INVENTORY', 'reconcile:', finalReconcileHistory.length, '← RECONCILE DATA', 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
       
       // Batch all state updates together to prevent multiple re-renders
       const activeProducts = (finalProducts as any[]).filter(p => !p?.deleted);
@@ -3441,7 +3448,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const activeConversions = (finalConversions as any[]).filter(c => !c?.deleted);
       const activeInventory = (finalInventory as any[]).filter(i => !i?.deleted);
       const activeSalesDeductions = (finalSalesDeductions as any[]).filter(d => !d?.deleted);
-      const activeReconcileHistory = (syncedReconcileHistory as any[]).filter(h => !h?.deleted);
+      const activeReconcileHistory = (finalReconcileHistory as any[]).filter(h => !h?.deleted);
       
       console.log('StockContext syncAll: Active (non-deleted) counts:');
       console.log('  - products:', activeProducts.length);
@@ -3481,7 +3488,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         conversions: JSON.stringify(productConversions.map(c => ({ id: c.id, updatedAt: c.updatedAt }))) !== JSON.stringify(activeConversions.map((c: any) => ({ id: c.id, updatedAt: c.updatedAt }))),
         inventory: JSON.stringify(inventoryStocks.map(i => ({ id: i.productId, updatedAt: i.updatedAt }))) !== JSON.stringify(activeInventory.map((i: any) => ({ id: i.productId, updatedAt: i.updatedAt }))),
         salesDeductions: JSON.stringify(salesDeductions.map(d => ({ id: d.id, updatedAt: d.updatedAt }))) !== JSON.stringify(activeSalesDeductions.map((d: any) => ({ id: d.id, updatedAt: d.updatedAt }))),
-        reconcileHistory: JSON.stringify(reconcileHistory.map(h => ({ id: h.id }))) !== JSON.stringify(activeReconcileHistory.map((h: any) => ({ id: h.id }))),
+        reconcileHistory: JSON.stringify(reconcileHistory.map(h => ({ id: h.id, updatedAt: h.updatedAt }))) !== JSON.stringify(activeReconcileHistory.map((h: any) => ({ id: h.id, updatedAt: h.updatedAt }))),
       };
       
       const changedItems = Object.entries(hasChanges).filter(([_, changed]) => changed).map(([name]) => name);
