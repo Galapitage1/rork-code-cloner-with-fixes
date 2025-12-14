@@ -41,7 +41,7 @@ const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
-  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock } = useStock();
+  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory } = useStock();
   const { recipes } = useRecipes();
   const { isSuperAdmin } = useAuth();
   
@@ -194,12 +194,29 @@ export default function SalesUploadScreen() {
           console.log(`\n=== DEDUCTING RAW MATERIAL (Other Units): ${rawRow.rawName} ===`);
           console.log(`  No product pair found - this is a Production Stock (Other Units) product`);
           
+          // CRITICAL: Check BOTH in-memory array AND reconciliation history to prevent duplicate deductions
           const existingDeduction = salesDeductions.find(
-            d => d.outletName === outletName && d.productId === rawProduct.id && d.salesDate === salesDate
+            d => d.outletName === outletName && d.productId === rawProduct.id && d.salesDate === salesDate && !d.deleted
+          );
+          
+          // DOUBLE-CHECK: Also verify in reconciliation history
+          const existingReconciliation = reconcileHistory.find(
+            (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
           );
           
           if (existingDeduction) {
-            console.log(`  Sales already processed for raw ${rawRow.rawName} at ${outletName} on ${salesDate}`);
+            console.log(`  ✓ Sales already processed for raw ${rawRow.rawName} at ${outletName} on ${salesDate}`);
+            console.log(`  Existing deduction ID: ${existingDeduction.id}`);
+            
+            if (existingReconciliation) {
+              console.log(`  ✓ Reconciliation history confirms this date was already processed`);
+            }
+            continue;
+          }
+          
+          if (existingReconciliation) {
+            console.log(`  ⚠️ WARNING - Reconciliation history shows raw material was already processed`);
+            console.log(`  Skipping to prevent duplicate deduction.`);
             continue;
           }
 
@@ -365,14 +382,33 @@ export default function SalesUploadScreen() {
       const productPair = getProductPair(product);
       
       if (productPair) {
+        // CRITICAL: Check BOTH in-memory array AND reconciliation history to prevent duplicate deductions
         const existingDeduction = salesDeductions.find(
           d => d.outletName === outletName && 
                d.productId === productPair.wholeProductId && 
-               d.salesDate === salesDate
+               d.salesDate === salesDate && 
+               !d.deleted
+        );
+        
+        // DOUBLE-CHECK: Also verify in reconciliation history
+        const existingReconciliation = reconcileHistory.find(
+          (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
         if (existingDeduction) {
-          console.log(`SalesUpload: Sales already processed for ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
+          console.log(`SalesUpload: ✓ Sales already processed for ${product.name} at ${outletName} on ${salesDate} (with conversions)`);
+          console.log(`SalesUpload: Existing deduction ID: ${existingDeduction.id}, created at: ${new Date(existingDeduction.updatedAt || 0).toISOString()}`);
+          
+          if (existingReconciliation) {
+            console.log(`SalesUpload: ✓ Reconciliation history confirms this date was already processed`);
+            console.log(`SalesUpload: Reconciliation timestamp: ${new Date(existingReconciliation.timestamp).toISOString()}`);
+          }
+          continue;
+        }
+        
+        if (existingReconciliation) {
+          console.log(`SalesUpload: ⚠️ WARNING - Reconciliation history shows this date was processed, but deduction record is missing`);
+          console.log(`SalesUpload: This may indicate data loss or sync issue. Skipping to prevent duplicate deduction.`);
           continue;
         }
 
@@ -450,12 +486,29 @@ export default function SalesUploadScreen() {
       } else {
         console.log(`SalesUpload: No product pair found for ${product.name}, checking Production Stock (Other Units)`);
         
+        // CRITICAL: Check BOTH in-memory array AND reconciliation history to prevent duplicate deductions
         const existingDeduction = salesDeductions.find(
-          d => d.outletName === outletName && d.productId === row.productId && d.salesDate === salesDate
+          d => d.outletName === outletName && d.productId === row.productId && d.salesDate === salesDate && !d.deleted
+        );
+        
+        // DOUBLE-CHECK: Also verify in reconciliation history
+        const existingReconciliation = reconcileHistory.find(
+          (r: any) => r.outlet === outletName && r.date === salesDate && !r.deleted
         );
         
         if (existingDeduction) {
-          console.log(`SalesUpload: Sales already processed for ${product.name} at ${outletName} on ${salesDate}`);
+          console.log(`SalesUpload: ✓ Sales already processed for ${product.name} at ${outletName} on ${salesDate}`);
+          console.log(`SalesUpload: Existing deduction ID: ${existingDeduction.id}, created at: ${new Date(existingDeduction.updatedAt || 0).toISOString()}`);
+          
+          if (existingReconciliation) {
+            console.log(`SalesUpload: ✓ Reconciliation history confirms this date was already processed`);
+          }
+          continue;
+        }
+        
+        if (existingReconciliation) {
+          console.log(`SalesUpload: ⚠️ WARNING - Reconciliation history shows this date was processed, but deduction record is missing`);
+          console.log(`SalesUpload: This may indicate data loss or sync issue. Skipping to prevent duplicate deduction.`);
           continue;
         }
         
