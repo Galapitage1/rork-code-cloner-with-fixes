@@ -797,7 +797,8 @@ function LiveInventoryScreen() {
       }
       
       console.log('[LIVE INVENTORY] Starting sync to pull latest data from server...');
-      syncAll(true).then(() => {
+      console.log('[LIVE INVENTORY] Using MANUAL sync (not silent) to force state update for cross-device data');
+      syncAll(false).then(() => {
         if (isMounted) {
           console.log('[LIVE INVENTORY] ✓ Sync completed - checking results...');
           
