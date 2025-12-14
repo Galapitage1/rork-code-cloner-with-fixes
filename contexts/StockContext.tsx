@@ -3286,7 +3286,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       // CRITICAL FIX: Always use smart merging to prevent data loss
       // This applies to BOTH manual and background syncs
-      const mergeByTimestamp = <T extends { id: string; updatedAt?: number }>(existing: T[], synced: any[], label: string): T[] => {
+      const mergeByTimestamp = <T extends { id?: string; productId?: string; updatedAt?: number }>(existing: T[], synced: any[], label: string, idField: 'id' | 'productId' = 'id'): T[] => {
         console.log(`StockContext syncAll: Merging ${label} - existing:`, existing.length, 'synced:', Array.isArray(synced) ? synced.length : 0);
         
         // If synced is empty or not an array, keep existing to prevent data loss
@@ -3298,7 +3298,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         const merged = new Map<string, T>();
         
         // First, add all existing items
-        existing.forEach(item => merged.set(item.id, item));
+        existing.forEach(item => {
+          const key = idField === 'productId' ? (item as any).productId : (item as any).id;
+          if (key) merged.set(key, item);
+        });
         console.log(`StockContext syncAll: ${label} - added ${existing.length} existing items to merge map`);
         
         // Then, only update if synced item is newer OR if item doesn't exist locally
@@ -3307,15 +3310,24 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         let updated = 0;
         
         (synced as T[]).forEach(item => {
-          const existingItem = merged.get(item.id);
+          const key = idField === 'productId' ? (item as any).productId : (item as any).id;
+          if (!key) return;
+          
+          const existingItem = merged.get(key);
+          const itemUpdatedAt = (item as any).updatedAt || 0;
+          const existingUpdatedAt = existingItem ? ((existingItem as any).updatedAt || 0) : 0;
+          
           if (!existingItem) {
-            merged.set(item.id, item);
+            merged.set(key, item);
             addedFromServer++;
-          } else if ((item.updatedAt || 0) > (existingItem.updatedAt || 0)) {
-            merged.set(item.id, item);
+            console.log(`  ${label}: Added new item ${key} from server (updatedAt: ${itemUpdatedAt})`);
+          } else if (itemUpdatedAt > existingUpdatedAt) {
+            merged.set(key, item);
             updated++;
+            console.log(`  ${label}: Updated item ${key} with newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt})`);
           } else {
             keptLocal++;
+            console.log(`  ${label}: Kept local item ${key} (local: ${existingUpdatedAt} >= server: ${itemUpdatedAt})`);
           }
         });
         
@@ -3332,7 +3344,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       };
       
       // ALWAYS merge with timestamp-based logic to prevent data loss
-      const finalInventory = mergeByTimestamp(inventoryStocks, syncedInventory, 'inventory');
+      // Use productId as the key for inventoryStocks since that's the unique identifier
+      const finalInventory = mergeByTimestamp(inventoryStocks, syncedInventory, 'inventory', 'productId');
       
       // CRITICAL: Sales deductions must ALWAYS be preserved during sync
       // They contain the ACTUAL sold data from reconciliation reports
