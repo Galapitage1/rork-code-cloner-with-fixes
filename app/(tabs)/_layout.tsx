@@ -1,5 +1,5 @@
 import { Tabs, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, Home, Package, FileBarChart, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, Home, Package, FileBarChart, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, Activity } from 'lucide-react-native';
 import React from 'react';
 import { StyleSheet, View, Text, Image, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,7 +33,7 @@ function CustomHeader({ title }: { title: string }) {
 }
 
 export default function TabLayout() {
-  const { isAdmin, currentUser, showPageTabs } = useAuth();
+  const { currentUser, showPageTabs } = useAuth();
   const isUser = currentUser?.role === 'user';
   const isMobile = Platform.OS === 'ios' || Platform.OS === 'android';
 
@@ -119,6 +119,15 @@ export default function TabLayout() {
           title: 'Live Inventory',
           header: () => <CustomHeader title="Live Inventory" />,
           tabBarIcon: ({ color, size }) => <TrendingUp size={size} color={color} />,
+          href: isUser ? null : undefined,
+        }}
+      />
+      <Tabs.Screen
+        name="product-tracker"
+        options={{
+          title: 'Product Tracker',
+          header: () => <CustomHeader title="Product Tracker" />,
+          tabBarIcon: ({ color, size }) => <Activity size={size} color={color} />,
           href: isUser ? null : undefined,
         }}
       />

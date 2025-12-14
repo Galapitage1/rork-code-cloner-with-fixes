@@ -370,3 +370,40 @@ export interface ActivityLog {
   deleted?: boolean;
   deviceId?: string;
 }
+
+export interface ProductTrackerMovement {
+  productId: string;
+  productName: string;
+  unit: string;
+  hasConversion: boolean;
+  openingWhole: number;
+  openingSlices: number;
+  receivedWhole: number;
+  receivedSlices: number;
+  wastageWhole: number;
+  wastageSlices: number;
+  soldWhole: number;
+  soldSlices: number;
+  currentWhole: number;
+  currentSlices: number;
+  discrepancyWhole: number;
+  discrepancySlices: number;
+}
+
+export interface ProductTrackerData {
+  outlet: string;
+  date: string;
+  movements: ProductTrackerMovement[];
+  timestamp: number;
+}
+
+export interface ProductTrackerSnapshot {
+  id: string;
+  outlet: string;
+  startDate: string;
+  endDate: string;
+  data: ProductTrackerData[];
+  updatedAt: number;
+  deviceId?: string;
+  deleted?: boolean;
+}

@@ -16,6 +16,7 @@ import { StoresProvider, useStores } from '@/contexts/StoresContext';
 import { ProductionProvider, useProduction } from '@/contexts/ProductionContext';
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { MoirProvider } from '@/contexts/MoirContext';
+import { ProductTrackerProvider } from '@/contexts/ProductTrackerContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { loadInitialDataIfNeeded } from '@/utils/initialDataLoader';
 import { performCleanupOnLogin } from '@/utils/storageCleanup';
@@ -136,7 +137,9 @@ function AppProviders({ children }: { children: React.ReactNode }) {
         <OrderProvider currentUser={currentUser}>
           <ProductUsageProvider>
             <RecipesProviderLayer>
-              {children}
+              <ProductTrackerProvider>
+                {children}
+              </ProductTrackerProvider>
             </RecipesProviderLayer>
           </ProductUsageProvider>
         </OrderProvider>
