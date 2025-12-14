@@ -781,7 +781,15 @@ function LiveInventoryScreen() {
     if (selectedOutlet && isMounted) {
       console.log('[LIVE INVENTORY] Outlet or date changed:', selectedOutlet, selectedDate, '- triggering sync to load latest sales data');
       console.log('[LIVE INVENTORY] This ensures sales from reconciliations on other devices are loaded');
-      syncAll(true).catch(e => {
+      console.log('[LIVE INVENTORY] Current salesDeductions count BEFORE sync:', salesDeductions.length);
+      console.log('[LIVE INVENTORY] Current reconcileHistory count BEFORE sync:', reconcileHistory.length);
+      
+      syncAll(true).then(() => {
+        if (isMounted) {
+          console.log('[LIVE INVENTORY] ✓ Sync completed successfully');
+          console.log('[LIVE INVENTORY] Sync brought in updated data - component will recalculate');
+        }
+      }).catch(e => {
         if (isMounted) {
           console.log('[LIVE INVENTORY] Silent sync error:', e);
         }
@@ -791,7 +799,7 @@ function LiveInventoryScreen() {
     return () => {
       isMounted = false;
     };
-  }, [selectedOutlet, selectedDate, syncAll]);
+  }, [selectedOutlet, selectedDate, syncAll, salesDeductions.length, reconcileHistory.length]);
 
   const handleExportDiscrepancies = async () => {
     try {
