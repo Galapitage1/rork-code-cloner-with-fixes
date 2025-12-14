@@ -3289,18 +3289,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const mergeByTimestamp = <T extends { id?: string; productId?: string; updatedAt?: number; deleted?: boolean }>(existing: T[], synced: any[], label: string, idField: 'id' | 'productId' = 'id'): T[] => {
         console.log(`StockContext syncAll: Merging ${label} - existing:`, existing.length, 'synced:', Array.isArray(synced) ? synced.length : 0);
         
-        // CRITICAL: For sales deductions, ALWAYS preserve local data during sync
+        // CRITICAL: For sales deductions, handle sync correctly for cross-device scenarios
         // Sales deductions contain the ACTUAL sold data from reconciliation reports
-        // They must NEVER be overwritten by empty/old server data
-        if (label === 'salesDeductions' && existing.length > 0) {
-          console.log(`StockContext syncAll: CRITICAL - ${label} merge - Preserving ${existing.length} local sales deductions`);
-          console.log(`StockContext syncAll: Local sales deductions MUST be preserved to prevent sold column from becoming empty`);
+        if (label === 'salesDeductions') {
+          console.log(`StockContext syncAll: CRITICAL - ${label} merge - Local: ${existing.length}, Server: ${Array.isArray(synced) ? synced.length : 0}`);
+          console.log(`StockContext syncAll: Will merge to show sales from ALL devices (including this one and others)`);
           
-          // If synced is empty or not an array, DEFINITELY keep all existing
-          if (!Array.isArray(synced) || synced.length === 0) {
-            console.log(`StockContext syncAll: ${label} - synced is empty, preserving ALL ${existing.length} existing items`);
+          // Only return early if server has NO data AND we have local data to preserve
+          if ((!Array.isArray(synced) || synced.length === 0) && existing.length > 0) {
+            console.log(`StockContext syncAll: ${label} - server is empty but local has ${existing.length} items, preserving local`);
             console.log(`StockContext syncAll: ✓ Sales deductions preserved - sold column will show correct data`);
             return existing;
+          }
+          
+          // If local is empty but server has data, we MUST pull it (don't return early)
+          if (existing.length === 0 && Array.isArray(synced) && synced.length > 0) {
+            console.log(`StockContext syncAll: ${label} - local is empty but server has ${synced.length} items, will pull from server`);
+            console.log(`StockContext syncAll: This is data from reconciliations done on OTHER devices`);
           }
         }
         
@@ -3332,28 +3337,28 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           const itemUpdatedAt = (item as any).updatedAt || 0;
           const existingUpdatedAt = existingItem ? ((existingItem as any).updatedAt || 0) : 0;
           
-          // CRITICAL: For sales deductions, be extra cautious about overwriting
+          // CRITICAL: For sales deductions, use smart merging for cross-device scenarios
           if (label === 'salesDeductions' && existingItem) {
-            // Only update if server version is SIGNIFICANTLY newer (not just by milliseconds)
-            // AND if the item is not deleted on server
+            // Check if server version is deleted
             const isServerDeleted = (item as any).deleted;
-            if (isServerDeleted) {
-              // If server says deleted but local is not, keep local (prevent accidental deletion)
-              if (!existingItem.deleted) {
-                console.log(`  ${label}: Server has deleted ${key} but local is active - keeping local to prevent data loss`);
-                keptLocal++;
-                return;
-              }
+            const isLocalDeleted = existingItem.deleted;
+            
+            // If server says deleted but local is not, keep local (prevent accidental deletion)
+            if (isServerDeleted && !isLocalDeleted) {
+              console.log(`  ${label}: Server has deleted ${key} but local is active - keeping local to prevent data loss`);
+              keptLocal++;
+              return;
             }
             
-            // Only update if server is at least 5 seconds newer
-            if (itemUpdatedAt > existingUpdatedAt + 5000) {
+            // Use normal timestamp comparison for sales deductions
+            // This allows pulling updates from other devices
+            if (itemUpdatedAt > existingUpdatedAt) {
               merged.set(key, item);
               updated++;
-              console.log(`  ${label}: Updated ${key} with significantly newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt} + 5s)`);
+              console.log(`  ${label}: Updated ${key} with newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt})`);
             } else {
               keptLocal++;
-              console.log(`  ${label}: Kept local ${key} (local: ${existingUpdatedAt} is recent enough vs server: ${itemUpdatedAt})`);
+              console.log(`  ${label}: Kept local ${key} (local: ${existingUpdatedAt} >= server: ${itemUpdatedAt})`);
             }
             return;
           }
