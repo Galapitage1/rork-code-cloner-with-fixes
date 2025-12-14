@@ -772,8 +772,24 @@ export default function SalesUploadScreen() {
         }
         
         try {
-          await addReconcileHistory({
-            id: `reconcile-${Date.now()}`,
+          console.log('\n=== SAVING RECONCILIATION TO STOCKCONTEXT ===');
+          console.log('Date:', date);
+          console.log('Outlet:', outlet);
+          console.log('Sales rows:', reconciled.rows.length);
+          console.log('Raw consumption rows:', raw?.rows.length || 0);
+          
+          if (raw?.rows && raw.rows.length > 0) {
+            console.log('Raw consumption data to save:');
+            raw.rows.forEach(r => {
+              console.log(`  - ${r.rawName} (ID: ${r.rawProductId}): ${r.consumed} ${r.rawUnit}`);
+            });
+          } else {
+            console.log('⚠️ WARNING: No raw consumption data to save!');
+            console.log('Live Inventory Sold column for raw materials will NOT be updated');
+          }
+          
+          const reconcileHistoryEntry = {
+            id: `reconcile-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             date,
             outlet,
             salesData: reconciled.rows.map(r => ({
@@ -795,13 +811,26 @@ export default function SalesUploadScreen() {
               consumed: r.consumed,
             })) || [],
             timestamp: Date.now(),
-          });
-          console.log('Saved reconciliation to StockContext for', outlet, date, 'with', raw?.rows.length || 0, 'raw consumption entries');
+            updatedAt: Date.now(),
+          };
+          
+          console.log('Reconciliation entry to save:', JSON.stringify({
+            id: reconcileHistoryEntry.id,
+            date: reconcileHistoryEntry.date,
+            outlet: reconcileHistoryEntry.outlet,
+            rawConsumptionCount: reconcileHistoryEntry.rawConsumption.length,
+            rawConsumption: reconcileHistoryEntry.rawConsumption
+          }, null, 2));
+          
+          await addReconcileHistory(reconcileHistoryEntry);
+          console.log('✓ Saved reconciliation to StockContext for', outlet, date, 'with', raw?.rows.length || 0, 'raw consumption entries');
           
           // Trigger immediate sync so other devices are notified
+          console.log('\n=== SYNCING RECONCILIATION TO SERVER ===');
           console.log('Triggering immediate sync to share reconciliation with other devices...');
           await syncAll().catch(e => console.error('Failed to sync reconciliation:', e));
           console.log('✓ Reconciliation synced to server - other devices will receive it on their next sync');
+          console.log('=== RECONCILIATION SAVE COMPLETE ===\n');
         } catch (error) {
           console.error('Failed to save reconciliation to StockContext:', error);
         }
