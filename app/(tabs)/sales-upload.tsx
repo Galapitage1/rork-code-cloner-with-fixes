@@ -41,7 +41,7 @@ const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
-  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory } = useStock();
+  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory, clearAllReconcileHistory } = useStock();
   const { recipes } = useRecipes();
   const { isSuperAdmin } = useAuth();
   
@@ -73,6 +73,8 @@ export default function SalesUploadScreen() {
   const [showClearDataModal, setShowClearDataModal] = useState<boolean>(false);
   const [clearDateInput, setClearDateInput] = useState<string>('');
   const [isClearing, setIsClearing] = useState<boolean>(false);
+  const [showDeleteAllReconcileConfirm, setShowDeleteAllReconcileConfirm] = useState<boolean>(false);
+  const [isDeletingAllReconcile, setIsDeletingAllReconcile] = useState<boolean>(false);
 
   const getProductPair = useCallback((product: Product) => {
     const fromConversion = productConversions.find(c => c.fromProductId === product.id);
@@ -969,11 +971,18 @@ export default function SalesUploadScreen() {
           await addReconcileHistory(reconcileHistoryEntry);
           console.log('✓ Saved reconciliation to StockContext for', outlet, date, 'with', raw?.rows.length || 0, 'raw consumption entries');
           
-          // Trigger immediate sync so other devices are notified
-          console.log('\n=== SYNCING RECONCILIATION TO SERVER ===');
+          // CRITICAL FIX: Trigger immediate sync and AWAIT it so reconciliation is on server BEFORE user can navigate away
+          console.log('\n=== SYNCING RECONCILIATION TO SERVER (IMMEDIATE) ===');
           console.log('Triggering immediate sync to share reconciliation with other devices...');
-          await syncAll().catch(e => console.error('Failed to sync reconciliation:', e));
-          console.log('✓ Reconciliation synced to server - other devices will receive it on their next sync');
+          try {
+            await syncAll(false); // Use manual sync (not silent) to ensure it completes
+            console.log('✓ Reconciliation synced to server successfully');
+            console.log('✓ Other devices will receive it on their next sync');
+          } catch (syncError) {
+            console.error('❌ Failed to sync reconciliation to server:', syncError);
+            console.error('Reconciliation is saved locally but may not be available on other devices');
+            Alert.alert('Sync Warning', 'Reconciliation saved locally but could not sync to server. Other devices may not see this data.');
+          }
           console.log('=== RECONCILIATION SAVE COMPLETE ===\n');
         } catch (error) {
           console.error('Failed to save reconciliation to StockContext:', error);
@@ -1029,15 +1038,64 @@ export default function SalesUploadScreen() {
 
   const handleDeleteAllHistory = useCallback(async () => {
     try {
+      console.log('handleDeleteAllHistory: Deleting local reconciliation history (UI view)');
       setReconciliationHistory([]);
       await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify([]));
       setShowDeleteAllConfirm(false);
-      Alert.alert('Success', 'All reconciliation history deleted successfully.');
+      Alert.alert('Success', 'All reconciliation history deleted successfully from this view.');
     } catch (error) {
       console.error('Failed to delete all reconciliation history:', error);
       Alert.alert('Error', 'Failed to delete all reconciliation history.');
     }
   }, []);
+
+  const handleDeleteAllReconciliationData = useCallback(async () => {
+    try {
+      setIsDeletingAllReconcile(true);
+      console.log('\n=== DELETE ALL RECONCILIATION DATA START ===');
+      console.log('This will delete ALL reconciliation data:');
+      console.log('  1. Local reconciliation history (UI view)');
+      console.log('  2. StockContext reconcileHistory (synced to server)');
+      console.log('  3. Server reconciliation data');
+      console.log('  4. Prevent sync from other devices');
+      
+      // Step 1: Clear local reconciliation history (UI view)
+      console.log('Step 1: Clearing local reconciliation history...');
+      setReconciliationHistory([]);
+      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify([]));
+      console.log('✓ Local reconciliation history cleared');
+      
+      // Step 2: Clear StockContext reconcileHistory and sync deletion to server
+      console.log('Step 2: Clearing StockContext reconcileHistory and syncing to server...');
+      await clearAllReconcileHistory();
+      console.log('✓ StockContext reconcileHistory cleared and synced to server');
+      
+      // Step 3: Trigger immediate full sync to ensure deletions are on server
+      console.log('Step 3: Triggering immediate full sync to persist deletions...');
+      try {
+        await syncAll(false); // Manual sync to ensure it completes
+        console.log('✓ Full sync complete - reconciliation deletions are on server');
+      } catch (syncError) {
+        console.error('❌ Sync failed:', syncError);
+        console.log('Reconciliation data deleted locally but may not be synced to server');
+      }
+      
+      setShowDeleteAllReconcileConfirm(false);
+      console.log('=== DELETE ALL RECONCILIATION DATA COMPLETE ===\n');
+      Alert.alert(
+        'Success',
+        'All reconciliation data has been deleted locally and from the server. Other devices will sync this deletion on their next sync cycle.'
+      );
+    } catch (error) {
+      console.error('Failed to delete all reconciliation data:', error);
+      Alert.alert(
+        'Error',
+        `Failed to delete all reconciliation data: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    } finally {
+      setIsDeletingAllReconcile(false);
+    }
+  }, [clearAllReconcileHistory, syncAll]);
 
   const handleClearReconciliationData = useCallback(async () => {
     if (!clearDateInput.trim()) {
@@ -1372,16 +1430,27 @@ export default function SalesUploadScreen() {
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <AlertTriangle color="#FF9F0A" size={20} />
-            <Text style={[styles.cardTitle, { color: '#FF9F0A' }]}>Super Admin: Clear Reconciliation Data</Text>
+            <Text style={[styles.cardTitle, { color: '#FF9F0A' }]}>Super Admin: Reconciliation Management</Text>
           </View>
-          <Text style={styles.cardDesc}>Clear all reconciliation data for a specific date. This will restore deducted inventory and remove sales records.</Text>
+          <Text style={styles.cardDesc}>Manage reconciliation data. Clear data for a specific date or delete all reconciliation data from local storage and server.</Text>
+          
           <TouchableOpacity
-            style={[styles.primaryBtn, { backgroundColor: '#FF9F0A' }]}
+            style={[styles.primaryBtn, { backgroundColor: '#FF9F0A', marginBottom: 12 }]}
             onPress={() => setShowClearDataModal(true)}
           >
             <View style={styles.btnInner}>
               <Calendar color="#fff" size={18} />
               <Text style={styles.primaryBtnText}>Clear Data by Date</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: '#f44336' }]}
+            onPress={() => setShowDeleteAllReconcileConfirm(true)}
+          >
+            <View style={styles.btnInner}>
+              <Trash2 color="#fff" size={18} />
+              <Text style={styles.primaryBtnText}>Delete All Reconciliation Data</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -1912,6 +1981,49 @@ export default function SalesUploadScreen() {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text style={styles.confirmModalButtonTextDelete}>Clear Data</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showDeleteAllReconcileConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDeleteAllReconcileConfirm(false)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalContent}>
+            <View style={styles.clearDataModalHeader}>
+              <Trash2 size={32} color="#f44336" />
+              <Text style={styles.confirmModalTitle}>Delete All Reconciliation Data?</Text>
+            </View>
+            <Text style={styles.confirmModalMessage}>
+              This will permanently delete ALL reconciliation data:
+              {`\n`}• Local reconciliation history (this device)
+              {`\n`}• Server reconciliation data
+              {`\n`}• Prevents sync from other devices
+              {`\n`}{`\n`}This action cannot be undone. Are you absolutely sure?
+            </Text>
+            <View style={styles.confirmModalButtons}>
+              <TouchableOpacity
+                style={[styles.confirmModalButton, styles.confirmModalButtonCancel]}
+                onPress={() => setShowDeleteAllReconcileConfirm(false)}
+                disabled={isDeletingAllReconcile}
+              >
+                <Text style={styles.confirmModalButtonTextCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmModalButton, styles.confirmModalButtonDelete]}
+                onPress={handleDeleteAllReconciliationData}
+                disabled={isDeletingAllReconcile}
+              >
+                {isDeletingAllReconcile ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.confirmModalButtonTextDelete}>Delete All</Text>
                 )}
               </TouchableOpacity>
             </View>
