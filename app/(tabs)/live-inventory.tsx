@@ -52,6 +52,7 @@ function LiveInventoryScreen() {
   const [editingCell, setEditingCell] = useState<{productId: string; date: string; field: 'currentWhole' | 'currentSlices'} | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const editInputRef = useRef<TextInput>(null);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
   const getDateRange = useCallback((endDate: string, rangeType: 'week' | 'month'): string[] => {
     const end = new Date(endDate);
@@ -823,16 +824,20 @@ function LiveInventoryScreen() {
       if (!selectedOutlet || !isMounted || syncInProgress) return;
       
       syncInProgress = true;
+      setIsLoadingData(true);
       console.log('\n[LIVE INVENTORY] ========== LOADING LATEST DATA ==========');
       console.log('[LIVE INVENTORY] Syncing to get latest reconciliation data from server...');
+      console.log('[LIVE INVENTORY] This will pull ALL reconcileHistory (discrepancy reports) from server');
       
       try {
         await syncAll(true); // silent=true to avoid UI interruption
         console.log('[LIVE INVENTORY] ✓ Sync complete - latest reconciliation data loaded');
+        console.log('[LIVE INVENTORY] ✓ reconcileHistory count after sync:', reconcileHistory.length);
       } catch (syncError) {
         console.error('[LIVE INVENTORY] Sync failed, using cached data:', syncError);
       } finally {
         syncInProgress = false;
+        setIsLoadingData(false);
       }
     };
     
@@ -875,7 +880,7 @@ function LiveInventoryScreen() {
     return () => {
       isMounted = false;
     };
-  }, [selectedOutlet, selectedDate, salesDeductions.length, reconcileHistory.length]);
+  }, [selectedOutlet, selectedDate, salesDeductions.length, reconcileHistory.length, syncAll]);
 
   const handleExportDiscrepancies = async () => {
     try {
@@ -1359,6 +1364,12 @@ function LiveInventoryScreen() {
           <TrendingUp size={64} color={Colors.light.muted} />
           <Text style={styles.emptyTitle}>Select an Outlet</Text>
           <Text style={styles.emptyText}>Choose an outlet to view live inventory tracking</Text>
+        </View>
+      ) : isLoadingData ? (
+        <View style={styles.emptyContainer}>
+          <TrendingUp size={64} color={Colors.light.muted} />
+          <Text style={styles.emptyTitle}>Loading Data...</Text>
+          <Text style={styles.emptyText}>Syncing latest reconciliation data from server</Text>
         </View>
       ) : productInventoryHistory.length === 0 ? (
         <View style={styles.emptyContainer}>
