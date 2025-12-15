@@ -704,7 +704,7 @@ export default function SalesUploadScreen() {
       console.log('Pulling latest reconciliation data from server...');
       try {
         await syncAll(true); // silent sync
-        console.log('✓ Sync complete - reconcileHistory count:', reconcileHistory.length);
+        console.log('✓ Sync complete - will read fresh data from AsyncStorage');
       } catch (syncError) {
         console.error('Sync failed, proceeding with cached data:', syncError);
       }
@@ -737,9 +737,26 @@ export default function SalesUploadScreen() {
       if (outlet && date) {
         console.log('\n=== CHECKING FOR EXISTING RECONCILIATION ===');
         console.log('Outlet:', outlet, 'Date:', date);
-        console.log('reconcileHistory entries:', reconcileHistory.length);
         
-        const existingReconciliation = reconcileHistory.find(
+        // CRITICAL: Read reconcileHistory directly from AsyncStorage to get FRESH synced data
+        // React state updates are async and may not reflect the sync that just completed
+        console.log('Reading FRESH reconcileHistory from AsyncStorage (bypassing stale React state)...');
+        let freshReconcileHistory: any[] = [];
+        try {
+          const historyData = await AsyncStorage.getItem('@stock_app_reconcile_history');
+          if (historyData) {
+            freshReconcileHistory = JSON.parse(historyData).filter((h: any) => !h?.deleted);
+            console.log('✓ Loaded', freshReconcileHistory.length, 'reconciliation entries from AsyncStorage');
+          } else {
+            console.log('No reconciliation history in AsyncStorage');
+          }
+        } catch (readError) {
+          console.error('Failed to read reconcileHistory from AsyncStorage:', readError);
+          console.log('Falling back to React state (may be stale):', reconcileHistory.length, 'entries');
+          freshReconcileHistory = reconcileHistory;
+        }
+        
+        const existingReconciliation = freshReconcileHistory.find(
           r => r.outlet === outlet && r.date === date && !r.deleted
         );
         
