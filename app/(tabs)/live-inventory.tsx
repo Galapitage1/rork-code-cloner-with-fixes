@@ -777,12 +777,29 @@ function LiveInventoryScreen() {
 
   useEffect(() => {
     let isMounted = true;
+    let syncInProgress = false;
     
-    // REMOVED automatic sync - it was causing the sold data to be overwritten with stale server data
-    // The sync happens automatically in the background via StockContext
-    // When you do a sales reconciliation, it saves locally and syncs to server
-    // The data is already in the local state (salesDeductions, reconcileHistory)
-    // No need to sync again when viewing live inventory
+    // CRITICAL FIX: Force sync when loading live inventory to pull latest reconciliation data
+    // This ensures that ALL devices see the same sold data from reconciliation
+    // Without this, each device only sees its own locally-saved reconciliation data
+    const loadLatestData = async () => {
+      if (!selectedOutlet || !isMounted || syncInProgress) return;
+      
+      syncInProgress = true;
+      console.log('\n[LIVE INVENTORY] ========== LOADING LATEST DATA ==========');
+      console.log('[LIVE INVENTORY] Syncing to get latest reconciliation data from server...');
+      
+      try {
+        await syncAll(true); // silent=true to avoid UI interruption
+        console.log('[LIVE INVENTORY] ✓ Sync complete - latest reconciliation data loaded');
+      } catch (syncError) {
+        console.error('[LIVE INVENTORY] Sync failed, using cached data:', syncError);
+      } finally {
+        syncInProgress = false;
+      }
+    };
+    
+    loadLatestData();
     
     if (selectedOutlet && isMounted) {
       console.log('\n[LIVE INVENTORY] ========== DATA CHECK ==========');
