@@ -788,24 +788,81 @@ export default function SalesUploadScreen() {
             console.log('Live Inventory Sold column for raw materials will NOT be updated');
           }
           
-          const reconcileHistoryEntry = {
-            id: `reconcile-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            date,
-            outlet,
-            salesData: reconciled.rows.map(r => ({
-              productId: r.productId || '',
+          // CRITICAL FIX: For products with unit conversions, we need to create separate salesData entries
+          // for both whole and slices units so that live inventory can find them
+          const salesDataArray: Array<{ productId: string; sold: number; opening: number; received: number; closing: number }> = [];
+          const stockCheckDataArray: Array<{ productId: string; openingStock: number; receivedStock: number; wastage: number; closingStock: number }> = [];
+          
+          reconciled.rows.forEach(r => {
+            const productId = r.productId || '';
+            if (!productId) return;
+            
+            // Add main product entry
+            salesDataArray.push({
+              productId: productId,
               sold: r.sold,
               opening: r.opening ?? 0,
               received: r.received ?? 0,
               closing: r.closing ?? 0,
-            })),
-            stockCheckData: reconciled.rows.map(r => ({
-              productId: r.productId || '',
+            });
+            
+            stockCheckDataArray.push({
+              productId: productId,
               openingStock: r.opening ?? 0,
               receivedStock: r.received ?? 0,
               wastage: r.wastage ?? 0,
               closingStock: r.closing ?? 0,
-            })),
+            });
+            
+            // CRITICAL: If this product has splitUnits (unit conversions), add entries for each unit
+            // This ensures live inventory can find sold data for both whole and slices units
+            if (r.splitUnits && r.splitUnits.length > 0) {
+              console.log(`Product has split units (conversions): ${r.name}`);
+              
+              r.splitUnits.forEach(split => {
+                // Find the product for this specific unit
+                const product = products.find(p => 
+                  p.name.toLowerCase() === r.name.toLowerCase() && 
+                  p.unit.toLowerCase() === split.unit.toLowerCase()
+                );
+                
+                if (product && product.id !== productId) {
+                  console.log(`  Adding separate entry for unit: ${split.unit} (productId: ${product.id})`);
+                  
+                  // For split units, the sold value is 0 because the main unit already has the total sold
+                  // But we need the stock check data for each unit
+                  salesDataArray.push({
+                    productId: product.id,
+                    sold: 0, // Sold is already counted in the main product
+                    opening: split.opening,
+                    received: split.received,
+                    closing: split.closing,
+                  });
+                  
+                  stockCheckDataArray.push({
+                    productId: product.id,
+                    openingStock: split.opening,
+                    receivedStock: split.received,
+                    wastage: split.wastage,
+                    closingStock: split.closing,
+                  });
+                }
+              });
+            }
+          });
+          
+          console.log('salesData entries created:', salesDataArray.length);
+          console.log('Products with data:', salesDataArray.map(sd => {
+            const prod = products.find(p => p.id === sd.productId);
+            return `${prod?.name} (${prod?.unit}): sold=${sd.sold}`;
+          }).join(', '));
+          
+          const reconcileHistoryEntry = {
+            id: `reconcile-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            date,
+            outlet,
+            salesData: salesDataArray,
+            stockCheckData: stockCheckDataArray,
             rawConsumption: raw?.rows.map(r => ({
               rawProductId: r.rawProductId,
               consumed: r.consumed,
