@@ -329,28 +329,40 @@ function LiveInventoryScreen() {
               console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), use salesDeductions as before
-            // ALWAYS USE salesDeductions data when available - this is the ACTUAL sold data from reconciliation
-            console.log(`Product ${wholeProduct.name} on ${date} - checking salesDeductions for outlet:`, selectedOutlet);
-            console.log('  Total salesDeductions in context:', salesDeductions.length);
+            // For menu/kitchen products (not raw materials), use reconcileHistory.salesData
+            // This contains the Sold (AC) column data from the discrepancies tab
+            console.log(`Product ${wholeProduct.name} on ${date} - checking reconcileHistory.salesData for outlet:`, selectedOutlet);
+            console.log('  Total reconcileHistory entries:', reconcileHistory.length);
             
-            const salesForDate = salesDeductions.filter(
-              s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
-                   s.salesDate === date && 
-                   s.productId === pair.wholeId && 
-                   !s.deleted
+            const reconcileForDate = reconcileHistory.find(
+              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
             );
             
-            console.log('  Sales deductions found for this date:', salesForDate.length);
+            console.log('  Found reconciliation for date?', !!reconcileForDate);
             
-            salesForDate.forEach(s => {
-              soldWhole += s.wholeDeducted || 0;
-              soldSlices += s.slicesDeducted || 0;
-              console.log(`  Sold: ${s.wholeDeducted}W + ${s.slicesDeducted}S from sales reconciliation`);
-            });
-            
-            if (salesForDate.length === 0) {
-              console.log('  WARNING: No sales deductions found - sold will be 0');
+            if (reconcileForDate && reconcileForDate.salesData) {
+              console.log('  salesData entries in reconciliation:', reconcileForDate.salesData.length);
+              
+              // Find the sold data for this product from the reconciliation
+              const salesData = reconcileForDate.salesData.find(
+                sd => sd.productId === pair.wholeId
+              );
+              
+              if (salesData) {
+                // The 'sold' field contains the value from Sold (AC) column
+                const soldQty = salesData.sold;
+                const conversionFactor = pair.factor;
+                
+                soldWhole = Math.floor(soldQty);
+                soldSlices = Math.round((soldQty % 1) * conversionFactor);
+                
+                console.log(`  Sold from reconciliation (AC column): ${soldQty} = ${soldWhole}W + ${soldSlices}S`);
+              } else {
+                console.log('  No salesData found for product ${wholeProduct.name} in reconciliation');
+                console.log('  Available product IDs in salesData:', reconcileForDate.salesData.map(sd => sd.productId).join(', '));
+              }
+            } else {
+              console.log('  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no salesData');
             }
           }
         }
@@ -620,18 +632,30 @@ function LiveInventoryScreen() {
               console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), use salesDeductions as before
-            // ALWAYS USE salesDeductions data when available
-            const salesForDate = salesDeductions.filter(
-              s => (s.outletName === selectedOutlet || s.outletName.toLowerCase().trim() === selectedOutlet.toLowerCase().trim()) && 
-                   s.salesDate === date && 
-                   s.productId === product.id && 
-                   !s.deleted
+            // For menu/kitchen products (not raw materials), use reconcileHistory.salesData
+            // This contains the Sold (AC) column data from the discrepancies tab
+            console.log(`Product ${product.name} on ${date} - checking reconcileHistory.salesData`);
+            
+            const reconcileForDate = reconcileHistory.find(
+              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
             );
             
-            salesForDate.forEach(s => { 
-              sold += s.wholeDeducted || 0;
-            });
+            if (reconcileForDate && reconcileForDate.salesData) {
+              // Find the sold data for this product from the reconciliation
+              const salesData = reconcileForDate.salesData.find(
+                sd => sd.productId === product.id
+              );
+              
+              if (salesData) {
+                // The 'sold' field contains the value from Sold (AC) column
+                sold = salesData.sold;
+                console.log(`  Sold from reconciliation (AC column): ${sold}`);
+              } else {
+                console.log(`  No salesData found for product ${product.name} in reconciliation`);
+              }
+            } else {
+              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no salesData`);
+            }
           }
         }
 
