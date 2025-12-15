@@ -5,6 +5,7 @@ import { Calendar, RefreshCw } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { useProductTracker } from '@/contexts/ProductTrackerContext';
 import { useStock } from '@/contexts/StockContext';
+import { useAuth } from '@/contexts/AuthContext';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 type ViewType = 'weekly' | 'monthly';
@@ -12,6 +13,7 @@ type ViewType = 'weekly' | 'monthly';
 export default function ProductTrackerScreen() {
   const { trackerData, isLoading, isSyncing, refreshTrackerData } = useProductTracker();
   const { outlets, syncAll } = useStock();
+  const { currentUser } = useAuth();
   
   const [selectedOutlet, setSelectedOutlet] = useState<string>('ALL');
   const [viewType, setViewType] = useState<ViewType>('weekly');
@@ -42,8 +44,9 @@ export default function ProductTrackerScreen() {
   const loadData = useCallback(async () => {
     const start = startDate.toISOString().split('T')[0];
     const end = endDate.toISOString().split('T')[0];
-    await refreshTrackerData(selectedOutlet, start, end);
-  }, [selectedOutlet, startDate, endDate, refreshTrackerData]);
+    console.log('ProductTracker: Loading data with userId:', currentUser?.id);
+    await refreshTrackerData(selectedOutlet, start, end, currentUser?.id);
+  }, [selectedOutlet, startDate, endDate, refreshTrackerData, currentUser]);
 
   useEffect(() => {
     loadData();

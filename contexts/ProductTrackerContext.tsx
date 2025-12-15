@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { useState, useEffect, useCallback } from 'react';
 import { ProductTrackerData, ProductTrackerMovement, Product, StockCheck, ProductRequest, SalesReconciliationHistory, ProductConversion } from '@/types';
+import { syncData } from '@/utils/syncData';
 
 const STORAGE_KEY = '@stock_app_product_tracker_data';
 
@@ -10,7 +11,7 @@ interface ProductTrackerContextValue {
   isLoading: boolean;
   isSyncing: boolean;
   lastSyncTime: number;
-  refreshTrackerData: (outlet: string, startDate: string, endDate: string) => Promise<void>;
+  refreshTrackerData: (outlet: string, startDate: string, endDate: string, userId?: string) => Promise<void>;
   syncTrackerData: () => Promise<void>;
 }
 
@@ -96,9 +97,15 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
     );
 
     menuAndRawProducts.forEach(product => {
-      const hasConversion = Array.from(conversionMap.values()).some(
-        conv => conv.fromProductId === product.id || conv.toProductId === product.id
+      const wholeToSliceConv = Array.from(conversionMap.values()).find(
+        conv => conv.fromProductId === product.id
       );
+      const sliceToWholeConv = Array.from(conversionMap.values()).find(
+        conv => conv.toProductId === product.id
+      );
+      const hasConversion = !!(wholeToSliceConv || sliceToWholeConv);
+      
+      const sliceProductId = wholeToSliceConv?.toProductId;
 
       let openingWhole = 0;
       let openingSlices = 0;
@@ -107,6 +114,13 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
         const prevCount = previousStockCheck.counts.find(c => c.productId === product.id);
         if (prevCount) {
           openingWhole = prevCount.quantity || 0;
+        }
+        
+        if (hasConversion && sliceProductId) {
+          const prevSliceCount = previousStockCheck.counts.find(c => c.productId === sliceProductId);
+          if (prevSliceCount) {
+            openingSlices = prevSliceCount.quantity || 0;
+          }
         }
       }
 
@@ -118,16 +132,23 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
           !r.deleted && 
           r.status === 'approved' && 
           r.doneDate === date && 
-          r.fromOutlet === 'Production' &&
-          r.productId === product.id
+          r.fromOutlet === 'Production'
         );
         sentRequests.forEach(req => {
-          receivedWhole += req.quantity || 0;
+          if (req.productId === product.id) {
+            receivedWhole += req.quantity || 0;
+          }
+          if (hasConversion && sliceProductId && req.productId === sliceProductId) {
+            receivedSlices += req.quantity || 0;
+          }
         });
       } else {
         approvedRequestsForDate.forEach(req => {
           if (req.productId === product.id) {
             receivedWhole += req.quantity || 0;
+          }
+          if (hasConversion && sliceProductId && req.productId === sliceProductId) {
+            receivedSlices += req.quantity || 0;
           }
         });
       }
@@ -140,6 +161,13 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
         if (count) {
           wastageWhole = count.wastage || 0;
         }
+        
+        if (hasConversion && sliceProductId) {
+          const sliceCount = currentStockCheck.counts.find(c => c.productId === sliceProductId);
+          if (sliceCount) {
+            wastageSlices = sliceCount.wastage || 0;
+          }
+        }
       }
 
       let soldWhole = 0;
@@ -149,6 +177,13 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
         const saleData = reconcileForDate.salesData?.find(sd => sd.productId === product.id);
         if (saleData) {
           soldWhole = saleData.sold || 0;
+        }
+        
+        if (hasConversion && sliceProductId) {
+          const sliceSaleData = reconcileForDate.salesData?.find(sd => sd.productId === sliceProductId);
+          if (sliceSaleData) {
+            soldSlices = sliceSaleData.sold || 0;
+          }
         }
 
         if (reconcileForDate.rawConsumption && product.type === 'raw') {
@@ -167,6 +202,13 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
         if (count) {
           currentWhole = count.quantity || 0;
         }
+        
+        if (hasConversion && sliceProductId) {
+          const sliceCount = currentStockCheck.counts.find(c => c.productId === sliceProductId);
+          if (sliceCount) {
+            currentSlices = sliceCount.quantity || 0;
+          }
+        }
       }
 
       const nextDate = new Date(date);
@@ -179,16 +221,25 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
         sc.doneDate === nextDateStr
       );
 
-      let nextDayOpening = 0;
+      let nextDayOpeningWhole = 0;
+      let nextDayOpeningSlices = 0;
+      
       if (nextStockCheck) {
         const nextCount = nextStockCheck.counts.find(c => c.productId === product.id);
         if (nextCount && nextCount.openingStock !== undefined) {
-          nextDayOpening = nextCount.openingStock;
+          nextDayOpeningWhole = nextCount.openingStock;
+        }
+        
+        if (hasConversion && sliceProductId) {
+          const nextSliceCount = nextStockCheck.counts.find(c => c.productId === sliceProductId);
+          if (nextSliceCount && nextSliceCount.openingStock !== undefined) {
+            nextDayOpeningSlices = nextSliceCount.openingStock;
+          }
         }
       }
 
-      const discrepancyWhole = nextDayOpening - currentWhole;
-      const discrepancySlices = 0;
+      const discrepancyWhole = nextDayOpeningWhole - currentWhole;
+      const discrepancySlices = hasConversion ? nextDayOpeningSlices - currentSlices : 0;
 
       movements.push({
         productId: product.id,
@@ -219,9 +270,36 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
     );
   }, []);
 
-  const refreshTrackerData = useCallback(async (outlet: string, startDate: string, endDate: string) => {
+  const refreshTrackerData = useCallback(async (outlet: string, startDate: string, endDate: string, userId?: string) => {
     setIsLoading(true);
     try {
+      console.log('ProductTracker: Refreshing data for', outlet, 'from', startDate, 'to', endDate);
+      
+      if (userId) {
+        console.log('ProductTracker: Syncing data from server...');
+        try {
+          const [syncedProducts, syncedStockChecks, syncedRequests, syncedReconcileHistory, syncedConversions] = await Promise.all([
+            syncData('products', [], userId, { forceDownload: true }),
+            syncData('stockChecks', [], userId, { forceDownload: true }),
+            syncData('requests', [], userId, { forceDownload: true }),
+            syncData('reconcileHistory', [], userId, { forceDownload: true }),
+            syncData('productConversions', [], userId, { forceDownload: true }),
+          ]);
+          
+          await Promise.all([
+            AsyncStorage.setItem('@stock_app_products', JSON.stringify(syncedProducts)),
+            AsyncStorage.setItem('@stock_app_stock_checks', JSON.stringify(syncedStockChecks)),
+            AsyncStorage.setItem('@stock_app_requests', JSON.stringify(syncedRequests)),
+            AsyncStorage.setItem('@stock_app_reconcile_history', JSON.stringify(syncedReconcileHistory)),
+            AsyncStorage.setItem('@stock_app_product_conversions', JSON.stringify(syncedConversions)),
+          ]);
+          
+          console.log('ProductTracker: ✓ Server data synced and saved locally');
+        } catch (syncError) {
+          console.error('ProductTracker: Sync error, using local data:', syncError);
+        }
+      }
+      
       const [productsStr, stockChecksStr, requestsStr, reconcileHistoryStr, conversionsStr] = await Promise.all([
         AsyncStorage.getItem('@stock_app_products'),
         AsyncStorage.getItem('@stock_app_stock_checks'),
