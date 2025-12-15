@@ -329,8 +329,9 @@ function LiveInventoryScreen() {
               console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), use reconcileHistory.salesData
-            // This contains the Sold (AC) column data from the discrepancies tab
+            // For menu/kitchen products (not raw materials), get sold data from reconcileHistory.salesData
+            // This contains the Sold (AC) column data from the discrepancies report on the SERVER
+            // IMPORTANT: Match each unit separately. If unit doesn't exist, place under Whole
             console.log(`Product ${wholeProduct.name} on ${date} - checking reconcileHistory.salesData for outlet:`, selectedOutlet);
             console.log('  Total reconcileHistory entries:', reconcileHistory.length);
             
@@ -343,22 +344,34 @@ function LiveInventoryScreen() {
             if (reconcileForDate && reconcileForDate.salesData) {
               console.log('  salesData entries in reconciliation:', reconcileForDate.salesData.length);
               
-              // Find the sold data for this product from the reconciliation
-              const salesData = reconcileForDate.salesData.find(
+              // CRITICAL FIX: Check BOTH whole and slices units separately in salesData
+              // The sold data from server is per product unit, not combined
+              const wholeSalesData = reconcileForDate.salesData.find(
                 sd => sd.productId === pair.wholeId
               );
               
-              if (salesData) {
-                // The 'sold' field contains the value from Sold (AC) column
-                const soldQty = salesData.sold;
-                const conversionFactor = pair.factor;
-                
-                soldWhole = Math.floor(soldQty);
-                soldSlices = Math.round((soldQty % 1) * conversionFactor);
-                
-                console.log(`  Sold from reconciliation (AC column): ${soldQty} = ${soldWhole}W + ${soldSlices}S`);
-              } else {
-                console.log('  No salesData found for product ${wholeProduct.name} in reconciliation');
+              const slicesSalesData = reconcileForDate.salesData.find(
+                sd => sd.productId === pair.slicesId
+              );
+              
+              console.log('  Found wholeSalesData?', !!wholeSalesData);
+              console.log('  Found slicesSalesData?', !!slicesSalesData);
+              
+              // If whole unit exists in sold column, use it
+              if (wholeSalesData) {
+                soldWhole = wholeSalesData.sold;
+                console.log(`  Sold (Whole) from reconciliation: ${soldWhole}`);
+              }
+              
+              // If slices unit exists in sold column, use it
+              if (slicesSalesData) {
+                soldSlices = slicesSalesData.sold;
+                console.log(`  Sold (Slices) from reconciliation: ${soldSlices}`);
+              }
+              
+              // If neither exists, both remain 0
+              if (!wholeSalesData && !slicesSalesData) {
+                console.log('  No salesData found for either whole or slices units');
                 console.log('  Available product IDs in salesData:', reconcileForDate.salesData.map(sd => sd.productId).join(', '));
               }
             } else {
