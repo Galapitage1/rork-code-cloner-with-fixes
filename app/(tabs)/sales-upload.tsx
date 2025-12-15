@@ -674,8 +674,10 @@ export default function SalesUploadScreen() {
       const steps = [
         { text: 'Selecting Excel file...', status: 'active' as const },
         { text: 'Reading file contents...', status: 'pending' as const },
+        { text: 'Syncing latest data from server...', status: 'pending' as const },
         { text: 'Parsing sales data...', status: 'pending' as const },
         { text: 'Matching with stock checks...', status: 'pending' as const },
+        { text: 'Checking for existing reconciliation...', status: 'pending' as const },
         { text: 'Processing inventory deductions...', status: 'pending' as const },
         { text: 'Finalizing results...', status: 'pending' as const },
       ];
@@ -694,7 +696,21 @@ export default function SalesUploadScreen() {
       const base64 = await base64FromUri(file.uri);
       console.log('SalesUpload: base64 length', base64.length);
       updateStep(1, 'complete');
+      
+      // CRITICAL FIX: Sync BEFORE reconciliation to get latest data from server
+      // This ensures we see if reconciliation was already done on another device
       updateStep(2, 'active');
+      console.log('\n=== SYNCING BEFORE RECONCILIATION ===');
+      console.log('Pulling latest reconciliation data from server...');
+      try {
+        await syncAll(true); // silent sync
+        console.log('✓ Sync complete - reconcileHistory count:', reconcileHistory.length);
+      } catch (syncError) {
+        console.error('Sync failed, proceeding with cached data:', syncError);
+      }
+      updateStep(2, 'complete');
+      
+      updateStep(3, 'active');
       let requestsMap: Map<string, number> | undefined;
       if (manualMode && requestBase64) {
         try {
@@ -706,37 +722,82 @@ export default function SalesUploadScreen() {
           console.log('SalesUpload: failed to pre-parse requests', e);
         }
       }
-      updateStep(2, 'complete');
-      
-      updateStep(3, 'active');
-      const reconciled = reconcileSalesFromExcelBase64(base64, stockChecks, products, { requestsReceivedByProductId: requestsMap, productConversions });
-      console.log('SalesUpload: reconciled', reconciled);
       updateStep(3, 'complete');
       
       updateStep(4, 'active');
-      await Promise.all([
-        processSalesInventoryDeductions(reconciled),
-        processRawMaterialDeductions(reconciled, base64)
-      ]);
+      const reconciled = reconcileSalesFromExcelBase64(base64, stockChecks, products, { requestsReceivedByProductId: requestsMap, productConversions });
+      console.log('SalesUpload: reconciled', reconciled);
       updateStep(4, 'complete');
       
+      // CRITICAL FIX: Check if reconciliation already exists BEFORE making any deductions
       updateStep(5, 'active');
+      const outlet = reconciled.matchedOutletName || reconciled.outletFromSheet;
+      const date = reconciled.sheetDate;
+      
+      if (outlet && date) {
+        console.log('\n=== CHECKING FOR EXISTING RECONCILIATION ===');
+        console.log('Outlet:', outlet, 'Date:', date);
+        console.log('reconcileHistory entries:', reconcileHistory.length);
+        
+        const existingReconciliation = reconcileHistory.find(
+          r => r.outlet === outlet && r.date === date && !r.deleted
+        );
+        
+        if (existingReconciliation) {
+          console.log('✓ FOUND EXISTING RECONCILIATION - Skipping inventory deductions');
+          console.log('  This reconciliation was already processed before');
+          console.log('  Reconciliation ID:', existingReconciliation.id);
+          console.log('  Timestamp:', new Date(existingReconciliation.timestamp).toISOString());
+          console.log('  Sales data entries:', existingReconciliation.salesData?.length || 0);
+          console.log('  Raw consumption entries:', existingReconciliation.rawConsumption?.length || 0);
+          console.log('=== SKIPPING DEDUCTIONS - Using existing data ===\n');
+          
+          updateStep(5, 'complete');
+          setProcessingSteps(prev => [...prev, { 
+            text: '✓ Found existing reconciliation - No duplicate deductions', 
+            status: 'complete' 
+          }]);
+        } else {
+          console.log('✗ NO EXISTING RECONCILIATION FOUND - Proceeding with deductions');
+          console.log('  This is the first time processing this date/outlet');
+          console.log('=== PROCEEDING WITH INVENTORY DEDUCTIONS ===\n');
+          
+          updateStep(5, 'complete');
+          updateStep(6, 'active');
+          await Promise.all([
+            processSalesInventoryDeductions(reconciled),
+            processRawMaterialDeductions(reconciled, base64)
+          ]);
+          updateStep(6, 'complete');
+        }
+      } else {
+        console.log('⚠️ WARNING: Missing outlet or date - cannot check for existing reconciliation');
+        updateStep(5, 'complete');
+        updateStep(6, 'active');
+        await Promise.all([
+          processSalesInventoryDeductions(reconciled),
+          processRawMaterialDeductions(reconciled, base64)
+        ]);
+        updateStep(6, 'complete');
+      }
+      
+      updateStep(7, 'active');
       
       if (reconciled.errors.length > 0 && reconciled.rows.length === 0) {
-        updateStep(5, 'error');
+        updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: `Error: ${reconciled.errors.join(', ')}`, status: 'error' }]);
         return;
       }
       
       if (!reconciled.dateMatched) {
         const msg = reconciled.errors.length > 0 ? reconciled.errors.join('\n') : 'Stock check date does not match sales sheet date (H9). Please ensure dates match and try again.';
-        updateStep(5, 'error');
+        updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: `Error: Date mismatch - ${msg}`, status: 'error' }]);
         return;
       }
       
       if (reconciled.rows.length === 0) {
-        updateStep(5, 'error');
+        updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: 'Error: No valid sales data found in the uploaded file', status: 'error' }]);
         return;
       }
@@ -753,9 +814,18 @@ export default function SalesUploadScreen() {
         setRawResult(null);
       }
       
-      const outlet = reconciled.matchedOutletName || reconciled.outletFromSheet;
-      const date = reconciled.sheetDate;
       if (outlet && date && reconciled.dateMatched) {
+        // Check again if reconciliation exists (might have just been created above)
+        const existingReconciliation = reconcileHistory.find(
+          r => r.outlet === outlet && r.date === date && !r.deleted
+        );
+        
+        if (existingReconciliation) {
+          console.log('\n=== RECONCILIATION ALREADY EXISTS - SKIPPING SAVE ===');
+          console.log('Existing reconciliation ID:', existingReconciliation.id);
+          console.log('Not saving duplicate reconciliation');
+          console.log('=== RECONCILIATION ALREADY SAVED ===\n');
+        } else {
         console.log('\n=== SAVING RECONCILIATION HISTORY ===');
         console.log('Outlet:', outlet);
         console.log('Date:', date);
@@ -891,9 +961,10 @@ export default function SalesUploadScreen() {
         } catch (error) {
           console.error('Failed to save reconciliation to StockContext:', error);
         }
+        }
       }
       
-      updateStep(5, 'complete');
+      updateStep(7, 'complete');
       setProcessingSteps(prev => [...prev, { text: `✓ Successfully processed ${reconciled.rows.length} products`, status: 'complete' }]);
       
       if (!reconciled.outletMatched) {
