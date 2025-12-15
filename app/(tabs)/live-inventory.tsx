@@ -815,72 +815,44 @@ function LiveInventoryScreen() {
 
   useEffect(() => {
     let isMounted = true;
-    let syncInProgress = false;
     
-    // CRITICAL FIX: Force sync when loading live inventory to pull latest reconciliation data
-    // This ensures that ALL devices see the same sold data from reconciliation
-    // Without this, each device only sees its own locally-saved reconciliation data
     const loadLatestData = async () => {
-      if (!selectedOutlet || !isMounted || syncInProgress) return;
+      if (!selectedOutlet || !isMounted) return;
       
-      syncInProgress = true;
       setIsLoadingData(true);
       console.log('\n[LIVE INVENTORY] ========== LOADING LATEST DATA ==========');
-      console.log('[LIVE INVENTORY] Syncing to get latest reconciliation data from server...');
-      console.log('[LIVE INVENTORY] This will pull ALL reconcileHistory (discrepancy reports) from server');
+      console.log('[LIVE INVENTORY] Outlet:', selectedOutlet);
+      console.log('[LIVE INVENTORY] Date:', selectedDate);
+      console.log('[LIVE INVENTORY] Date Range:', dateRange);
+      console.log('[LIVE INVENTORY] Syncing reconciliation data from server...');
       
       try {
-        await syncAll(true); // silent=true to avoid UI interruption
+        await syncAll(true);
         console.log('[LIVE INVENTORY] ✓ Sync complete - latest reconciliation data loaded');
-        console.log('[LIVE INVENTORY] ✓ reconcileHistory count after sync:', reconcileHistory.length);
+        console.log('[LIVE INVENTORY] ✓ reconcileHistory count:', reconcileHistory.length);
+        
+        if (reconcileHistory.length > 0) {
+          const outletReconcile = reconcileHistory.filter(r => r.outlet === selectedOutlet && !r.deleted);
+          console.log('[LIVE INVENTORY] ✓ reconcileHistory for this outlet:', outletReconcile.length);
+          if (outletReconcile.length > 0) {
+            console.log('[LIVE INVENTORY] ✓ Dates:', outletReconcile.map(r => r.date).join(', '));
+          }
+        }
       } catch (syncError) {
-        console.error('[LIVE INVENTORY] Sync failed, using cached data:', syncError);
+        console.error('[LIVE INVENTORY] ✗ Sync failed:', syncError);
       } finally {
-        syncInProgress = false;
-        setIsLoadingData(false);
+        if (isMounted) {
+          setIsLoadingData(false);
+        }
       }
     };
     
     loadLatestData();
     
-    if (selectedOutlet && isMounted) {
-      console.log('\n[LIVE INVENTORY] ========== DATA CHECK ==========');
-      console.log('[LIVE INVENTORY] Outlet selected:', selectedOutlet);
-      console.log('[LIVE INVENTORY] Date selected:', selectedDate);
-      console.log('[LIVE INVENTORY] Data available:');
-      console.log('  - salesDeductions count:', salesDeductions.length);
-      console.log('  - reconcileHistory count:', reconcileHistory.length);
-      
-      if (salesDeductions.length > 0) {
-        const outletSales = salesDeductions.filter(s => s.outletName === selectedOutlet && !s.deleted);
-        console.log(`  - salesDeductions for "${selectedOutlet}": ${outletSales.length}`);
-        if (outletSales.length > 0) {
-          console.log('  Sample entries:');
-          outletSales.slice(0, 3).forEach(d => {
-            console.log(`    ${d.salesDate}: product ${d.productId} = ${d.wholeDeducted}W + ${d.slicesDeducted}S`);
-          });
-        }
-      } else {
-        console.log('  ⚠️ No sales deductions found');
-      }
-      
-      if (reconcileHistory.length > 0) {
-        const outletReconcile = reconcileHistory.filter(r => r.outlet === selectedOutlet && !r.deleted);
-        console.log(`  - reconcileHistory for "${selectedOutlet}": ${outletReconcile.length}`);
-        if (outletReconcile.length > 0) {
-          console.log('  Reconciliation dates:', outletReconcile.map(r => r.date).join(', '));
-        }
-      } else {
-        console.log('  ⚠️ No reconciliation history found');
-      }
-      
-      console.log('[LIVE INVENTORY] ========================================\n');
-    }
-    
     return () => {
       isMounted = false;
     };
-  }, [selectedOutlet, selectedDate, salesDeductions.length, reconcileHistory.length, syncAll]);
+  }, [selectedOutlet, selectedDate, dateRange, syncAll]);
 
   const handleExportDiscrepancies = async () => {
     try {
