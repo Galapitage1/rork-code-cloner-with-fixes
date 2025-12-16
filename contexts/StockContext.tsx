@@ -2948,22 +2948,43 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   const clearAllReconcileHistory = useCallback(async () => {
     try {
       console.log('clearAllReconcileHistory: Starting...');
+      console.log('clearAllReconcileHistory: Current reconcile history count:', reconcileHistory.length);
+      
       const deletedHistory = reconcileHistory.map(h => ({
         ...h,
         deleted: true as const,
         updatedAt: Date.now(),
       }));
       
-      await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(deletedHistory));
-      setReconcileHistory([]);
+      console.log('clearAllReconcileHistory: Marked', deletedHistory.length, 'items as deleted with timestamps');
       
+      // CRITICAL: Save deleted items to AsyncStorage FIRST
+      // This ensures the sync system knows they're deleted and won't resurrect them
+      await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(deletedHistory));
+      console.log('clearAllReconcileHistory: ✓ Saved deleted items to AsyncStorage');
+      
+      // Update React state to show empty list
+      setReconcileHistory([]);
+      console.log('clearAllReconcileHistory: ✓ Cleared React state');
+      
+      // CRITICAL: Sync deleted items to server IMMEDIATELY
+      // This prevents other devices from pushing the data back
       if (currentUser?.id) {
-        syncData('reconcileHistory', deletedHistory, currentUser.id).catch(syncError => {
-          console.log('clearAllReconcileHistory: Sync failed, clearing data locally anyway');
-        });
+        console.log('clearAllReconcileHistory: Syncing deleted items to server...');
+        try {
+          await syncData('reconcileHistory', deletedHistory, currentUser.id);
+          console.log('clearAllReconcileHistory: ✓ Synced deletion to server successfully');
+        } catch (syncError) {
+          console.error('clearAllReconcileHistory: Sync failed:', syncError);
+          console.log('clearAllReconcileHistory: Data is deleted locally but may resurrect from server');
+        }
       }
       
-      await AsyncStorage.removeItem(STORAGE_KEYS.RECONCILE_HISTORY);
+      // CRITICAL: DO NOT remove from AsyncStorage
+      // Keep deleted items in storage for 30 days to prevent resurrection by old devices
+      // The 60-second sync cleanup will handle old deleted items automatically
+      console.log('clearAllReconcileHistory: ⚠️ Keeping deleted items in AsyncStorage to prevent resurrection');
+      console.log('clearAllReconcileHistory: Deleted items will be auto-cleaned after 30 days by sync system');
       console.log('clearAllReconcileHistory: Complete');
     } catch (error) {
       console.error('Failed to clear reconcile history:', error);
