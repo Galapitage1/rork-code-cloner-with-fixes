@@ -1,5 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Platform, TextInput, Alert } from 'react-native';
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StockCount, StockCheck } from '@/types';
 import { Stack } from 'expo-router';
 import { Calendar, Download, ChevronLeft, ChevronRight, TrendingUp, AlertTriangle } from 'lucide-react-native';
@@ -827,19 +828,56 @@ function LiveInventoryScreen() {
       console.log('[LIVE INVENTORY] Syncing reconciliation data from server...');
       
       try {
+        // CRITICAL FIX: Sync and WAIT for it to complete
         await syncAll(true);
-        console.log('[LIVE INVENTORY] ✓ Sync complete - latest reconciliation data loaded');
-        console.log('[LIVE INVENTORY] ✓ reconcileHistory count:', reconcileHistory.length);
+        console.log('[LIVE INVENTORY] ✓ Sync complete - now loading fresh data from AsyncStorage');
         
-        if (reconcileHistory.length > 0) {
-          const outletReconcile = reconcileHistory.filter(r => r.outlet === selectedOutlet && !r.deleted);
-          console.log('[LIVE INVENTORY] ✓ reconcileHistory for this outlet:', outletReconcile.length);
-          if (outletReconcile.length > 0) {
-            console.log('[LIVE INVENTORY] ✓ Dates:', outletReconcile.map(r => r.date).join(', '));
+        // CRITICAL FIX: Force reload reconcileHistory from AsyncStorage AFTER sync completes
+        // This ensures we get the latest synced data, not stale React state
+        console.log('[LIVE INVENTORY] Loading fresh reconciliation data from AsyncStorage...');
+        const freshReconcileData = await AsyncStorage.getItem('@stock_app_reconcile_history');
+        let freshReconcileHistory: any[] = [];
+        
+        if (freshReconcileData) {
+          try {
+            const parsed = JSON.parse(freshReconcileData);
+            freshReconcileHistory = Array.isArray(parsed) ? parsed.filter((r: any) => !r?.deleted) : [];
+            console.log('[LIVE INVENTORY] ✓ Loaded', freshReconcileHistory.length, 'reconciliation entries from AsyncStorage');
+          } catch (parseError) {
+            console.error('[LIVE INVENTORY] Failed to parse reconciliation data:', parseError);
           }
+        } else {
+          console.log('[LIVE INVENTORY] No reconciliation data in AsyncStorage');
         }
+        
+        // Log what we have for this outlet
+        if (freshReconcileHistory.length > 0) {
+          const outletReconcile = freshReconcileHistory.filter((r: any) => r.outlet === selectedOutlet && !r.deleted);
+          console.log('[LIVE INVENTORY] ✓ reconcileHistory for outlet', selectedOutlet, ':', outletReconcile.length, 'entries');
+          if (outletReconcile.length > 0) {
+            console.log('[LIVE INVENTORY] ✓ Available dates:', outletReconcile.map((r: any) => r.date).join(', '));
+            
+            // Log sample reconciliation data structure
+            const sampleReconcile = outletReconcile[0];
+            console.log('[LIVE INVENTORY] Sample reconciliation structure:');
+            console.log('  - Date:', sampleReconcile.date);
+            console.log('  - Outlet:', sampleReconcile.outlet);
+            console.log('  - Sales data entries:', sampleReconcile.salesData?.length || 0);
+            console.log('  - Raw consumption entries:', sampleReconcile.rawConsumption?.length || 0);
+            if (sampleReconcile.salesData && sampleReconcile.salesData.length > 0) {
+              console.log('  - Sample sales product:', sampleReconcile.salesData[0].productId, 'sold:', sampleReconcile.salesData[0].sold);
+            }
+            if (sampleReconcile.rawConsumption && sampleReconcile.rawConsumption.length > 0) {
+              console.log('  - Sample raw consumption:', sampleReconcile.rawConsumption[0].rawProductId, 'consumed:', sampleReconcile.rawConsumption[0].consumed);
+            }
+          }
+        } else {
+          console.log('[LIVE INVENTORY] ⚠️ No reconciliation data found for any outlet');
+        }
+        
+        console.log('[LIVE INVENTORY] ========== DATA LOAD COMPLETE ==========\n');
       } catch (syncError) {
-        console.error('[LIVE INVENTORY] ✗ Sync failed:', syncError);
+        console.error('[LIVE INVENTORY] ✗ Sync or data load failed:', syncError);
       } finally {
         if (isMounted) {
           setIsLoadingData(false);
