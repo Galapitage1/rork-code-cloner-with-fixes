@@ -55,28 +55,8 @@ function LiveInventoryScreen() {
   const [editValue, setEditValue] = useState<string>('');
   const editInputRef = useRef<TextInput>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
-
-  // CRITICAL: Sync reconciliation data when outlet or date changes
-  // This ensures sold items from other devices are displayed
-  useEffect(() => {
-    if (!selectedOutlet || !selectedDate) return;
-    
-    console.log('[LIVE INVENTORY] Outlet or date changed, syncing reconciliation data...');
-    console.log('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date:', selectedDate);
-    setIsLoadingData(true);
-    
-    Promise.all([
-      syncAll(true),
-      syncAllReconciliationData()
-    ]).then(() => {
-      console.log('[LIVE INVENTORY] ✓ Sync complete - reconciliation data updated from BOTH systems');
-      console.log('[LIVE INVENTORY] reconcileHistory now has', reconcileHistory.length, 'entries');
-    }).catch(error => {
-      console.error('[LIVE INVENTORY] Sync failed:', error);
-    }).finally(() => {
-      setIsLoadingData(false);
-    });
-  }, [selectedOutlet, selectedDate]);
+  const [kitchenStockReports, setKitchenStockReports] = useState<KitchenStockReport[]>([]);
+  const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
 
   const getDateRange = useCallback((endDate: string, rangeType: 'week' | 'month'): string[] => {
     const end = new Date(endDate);
@@ -92,28 +72,55 @@ function LiveInventoryScreen() {
     return dates;
   }, []);
 
+  // CRITICAL: Sync reconciliation data when outlet or date changes
+  // This ensures sold items from other devices are displayed
+  useEffect(() => {
+    if (!selectedOutlet || !selectedDate) return;
+    
+    console.log('[LIVE INVENTORY] Outlet or date changed, syncing and fetching reconciliation data...');
+    console.log('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date:', selectedDate);
+    setIsLoadingData(true);
+    
+    const outlet = outlets.find(o => o.name === selectedOutlet);
+    if (!outlet) {
+      setIsLoadingData(false);
+      return;
+    }
+    
+    const dates = getDateRange(selectedDate, dateRange);
+    const startDate = dates[0];
+    const endDate = dates[dates.length - 1];
+    
+    Promise.all([
+      syncAll(true),
+      syncAllReconciliationData()
+    ]).then(async () => {
+      console.log('[LIVE INVENTORY] ✓ Sync complete - now fetching reconciliation reports...');
+      
+      // Fetch the NEW reconciliation system data based on outlet type
+      if (outlet.outletType === 'production') {
+        const reports = await getKitchenStockReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
+        console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'kitchen stock reports for production outlet');
+        setKitchenStockReports(reports);
+        setSalesReports([]);
+      } else if (outlet.outletType === 'sales') {
+        const reports = await getSalesReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
+        console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'sales reports for sales outlet');
+        setSalesReports(reports);
+        setKitchenStockReports([]);
+      }
+    }).catch(error => {
+      console.error('[LIVE INVENTORY] Sync failed:', error);
+    }).finally(() => {      setIsLoadingData(false);
+    });
+  }, [selectedOutlet, selectedDate, dateRange, outlets, getDateRange]);
+
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
     console.log('\n========================================');
     console.log('[LIVE INVENTORY] Recalculating inventory history at', new Date().toISOString());
-    console.log('[LIVE INVENTORY] reconcileHistory count:', reconcileHistory.length);
-    if (reconcileHistory.length > 0) {
-      console.log('[LIVE INVENTORY] First reconcile entry:', JSON.stringify(reconcileHistory[0], null, 2));
-      console.log('[LIVE INVENTORY] All reconcile outlets:', reconcileHistory.map(r => r.outlet).join(', '));
-      console.log('[LIVE INVENTORY] All reconcile dates:', reconcileHistory.map(r => r.date).join(', '));
-      
-      // Check for raw consumption data
-      reconcileHistory.forEach((r, idx) => {
-        if (r.rawConsumption && r.rawConsumption.length > 0) {
-          console.log(`[LIVE INVENTORY] Reconcile entry ${idx}: outlet=${r.outlet}, date=${r.date}, rawConsumption entries:`, r.rawConsumption.length);
-          r.rawConsumption.forEach(rc => {
-            console.log(`  - Raw Product ID: ${rc.rawProductId}, Consumed: ${rc.consumed}`);
-          });
-        } else {
-          console.log(`[LIVE INVENTORY] Reconcile entry ${idx}: outlet=${r.outlet}, date=${r.date}, NO rawConsumption data`);
-        }
-      });
-    }
-    console.log('========================================\n')
+    console.log('[LIVE INVENTORY] Kitchen stock reports:', kitchenStockReports.length);
+    console.log('[LIVE INVENTORY] Sales reports:', salesReports.length);
+    console.log('========================================\n');
     if (!selectedOutlet) return [];
 
     const dates = getDateRange(selectedDate, dateRange);
@@ -194,27 +201,24 @@ function LiveInventoryScreen() {
         let receivedSlices = 0;
 
         if (isProductionOutlet) {
-          // For production outlets: Show approved production requests (Prods.Req)
-          const approvedProds = approvedProductions.filter(
-            ap => ap.approvalDate === date
-          );
-
-          approvedProds.forEach(ap => {
-            if (ap.items && Array.isArray(ap.items)) {
-              ap.items.forEach(item => {
-                if (item.productId === pair.wholeId) {
-                  const whole = Math.floor(item.requestedQuantity);
-                  const slices = Math.round((item.requestedQuantity % 1) * pair.factor);
-                  receivedWhole += whole;
-                  receivedSlices += slices;
-                } else if (item.productId === pair.slicesId) {
-                  const totalSlices = Math.round(item.requestedQuantity);
-                  receivedWhole += Math.floor(totalSlices / pair.factor);
-                  receivedSlices += Math.round(totalSlices % pair.factor);
-                }
-              });
+          // For production outlets: Show kitchen stock reconciliation quantities in Prods.Req column
+          console.log(`[PRODUCTION OUTLET] Checking kitchen stock reports for ${wholeProduct.name} on ${date}`);
+          const kitchenReport = kitchenStockReports.find(r => r.date === date && r.outlet === selectedOutlet);
+          
+          if (kitchenReport) {
+            console.log(`[PRODUCTION OUTLET] ✓ Found kitchen stock report for ${date}`);
+            const productEntry = kitchenReport.products.find(p => p.productId === pair.wholeId);
+            
+            if (productEntry) {
+              receivedWhole = productEntry.quantityWhole;
+              receivedSlices = productEntry.quantitySlices;
+              console.log(`[PRODUCTION OUTLET] Kitchen reconciliation quantities: ${receivedWhole}W + ${receivedSlices}S`);
+            } else {
+              console.log(`[PRODUCTION OUTLET] No product entry found for ${wholeProduct.name} in kitchen report`);
             }
-          });
+          } else {
+            console.log(`[PRODUCTION OUTLET] No kitchen stock report found for ${date}`);
+          }
         } else {
           // For sales outlets: Show approved requests TO this outlet
           const receivedRequests = requests.filter(
@@ -354,53 +358,40 @@ function LiveInventoryScreen() {
               console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), get sold data from reconcileHistory.salesData
-            // This contains the Sold (AC) column data from the discrepancies report on the SERVER
-            // IMPORTANT: Match each unit separately. If unit doesn't exist, place under Whole
-            console.log(`Product ${wholeProduct.name} on ${date} - checking reconcileHistory.salesData for outlet:`, selectedOutlet);
-            console.log('  Total reconcileHistory entries:', reconcileHistory.length);
+            // For menu/kitchen products (not raw materials), get sold data from NEW sales reports system
+            console.log(`[SALES OUTLET] Product ${wholeProduct.name} on ${date} - checking NEW sales reports`);
+            console.log('[SALES OUTLET] Total sales reports:', salesReports.length);
             
-            const reconcileForDate = reconcileHistory.find(
-              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-            );
+            const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
             
-            console.log('  Found reconciliation for date?', !!reconcileForDate);
+            console.log('[SALES OUTLET] Found sales report for date?', !!salesReport);
             
-            if (reconcileForDate && reconcileForDate.salesData) {
-              console.log('  salesData entries in reconciliation:', reconcileForDate.salesData.length);
+            if (salesReport && salesReport.salesData) {
+              console.log('[SALES OUTLET] salesData entries in report:', salesReport.salesData.length);
               
-              // CRITICAL FIX: Check BOTH whole and slices units separately in salesData
-              // The sold data from server is per product unit, not combined
-              const wholeSalesData = reconcileForDate.salesData.find(
-                sd => sd.productId === pair.wholeId
-              );
+              // Check BOTH whole and slices units separately
+              const wholeSalesData = salesReport.salesData.find(sd => sd.productId === pair.wholeId);
+              const slicesSalesData = salesReport.salesData.find(sd => sd.productId === pair.slicesId);
               
-              const slicesSalesData = reconcileForDate.salesData.find(
-                sd => sd.productId === pair.slicesId
-              );
+              console.log('[SALES OUTLET] Found wholeSalesData?', !!wholeSalesData);
+              console.log('[SALES OUTLET] Found slicesSalesData?', !!slicesSalesData);
               
-              console.log('  Found wholeSalesData?', !!wholeSalesData);
-              console.log('  Found slicesSalesData?', !!slicesSalesData);
-              
-              // If whole unit exists in sold column, use it
               if (wholeSalesData) {
-                soldWhole = wholeSalesData.sold;
-                console.log(`  Sold (Whole) from reconciliation: ${soldWhole}`);
+                soldWhole = wholeSalesData.soldWhole;
+                console.log(`[SALES OUTLET] Sold (Whole): ${soldWhole}`);
               }
               
-              // If slices unit exists in sold column, use it
               if (slicesSalesData) {
-                soldSlices = slicesSalesData.sold;
-                console.log(`  Sold (Slices) from reconciliation: ${soldSlices}`);
+                soldSlices = slicesSalesData.soldSlices;
+                console.log(`[SALES OUTLET] Sold (Slices): ${soldSlices}`);
               }
               
-              // If neither exists, both remain 0
               if (!wholeSalesData && !slicesSalesData) {
-                console.log('  No salesData found for either whole or slices units');
-                console.log('  Available product IDs in salesData:', reconcileForDate.salesData.map(sd => sd.productId).join(', '));
+                console.log('[SALES OUTLET] No salesData found for either unit');
+                console.log('[SALES OUTLET] Available product IDs:', salesReport.salesData.map(sd => sd.productId).join(', '));
               }
             } else {
-              console.log('  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no salesData');
+              console.log(`[SALES OUTLET] No sales report found for ${date}`);
             }
           }
         }
