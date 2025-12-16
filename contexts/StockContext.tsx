@@ -3330,6 +3330,146 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext syncAll: Current product conversions count:', productConversions.length);
       console.log('StockContext syncAll: Current outlets count:', outlets.length);
       console.log('StockContext syncAll: Current products count:', products.length);
+      console.log('StockContext syncAll: Current reconcile history count:', reconcileHistory.length);
+      
+      // CRITICAL: Specialized merge for reconciliation history that compares by ACTUAL reconciliation timestamp
+      // NOT by updatedAt (sync time) - this ensures the most recent reconciliation wins, not the most recent sync
+      const mergeReconcileHistoryByActualTimestamp = (
+        local: SalesReconciliationHistory[],
+        synced: SalesReconciliationHistory[] | any
+      ): SalesReconciliationHistory[] => {
+        console.log('\n[mergeReconcileHistory] ========== RECONCILIATION-SPECIFIC MERGE START ==========');
+        console.log('[mergeReconcileHistory] Local entries:', local.length);
+        console.log('[mergeReconcileHistory] Synced entries:', Array.isArray(synced) ? synced.length : 'not array');
+        
+        if (!Array.isArray(synced)) {
+          console.log('[mergeReconcileHistory] Synced is not an array, keeping local');
+          return local;
+        }
+        
+        if (synced.length === 0) {
+          console.log('[mergeReconcileHistory] Synced is empty, keeping', local.length, 'local items');
+          return local;
+        }
+        
+        // Group by outlet+date key (each outlet+date should have only ONE reconciliation)
+        const merged = new Map<string, SalesReconciliationHistory>();
+        
+        // Helper to create a unique key for outlet+date
+        const getKey = (r: SalesReconciliationHistory) => `${r.outlet}|${r.date}`;
+        
+        // Helper to get the actual reconciliation timestamp (not sync time)
+        const getReconcileTime = (r: SalesReconciliationHistory): number => {
+          return r.timestamp || r.updatedAt || 0;
+        };
+        
+        // First, add all local reconciliations
+        local.forEach(item => {
+          const key = getKey(item);
+          const time = getReconcileTime(item);
+          
+          if (item.deleted) {
+            console.log(`[mergeReconcileHistory] Local ${key} is DELETED (time: ${new Date(time).toISOString()})`);
+          } else {
+            console.log(`[mergeReconcileHistory] Local ${key} - reconciled at: ${new Date(time).toISOString()}`);
+          }
+          merged.set(key, item);
+        });
+        
+        console.log('[mergeReconcileHistory] Added', local.length, 'local reconciliations');
+        
+        // Then, only update if synced reconciliation has newer ACTUAL timestamp
+        let remoteNewer = 0;
+        let localNewer = 0;
+        let remoteNew = 0;
+        let deletionWins = 0;
+        
+        (synced as SalesReconciliationHistory[]).forEach(item => {
+          const key = getKey(item);
+          const existing = merged.get(key);
+          const remoteTime = getReconcileTime(item);
+          const localTime = existing ? getReconcileTime(existing) : 0;
+          
+          // CRITICAL: Check deletion status
+          if (existing && existing.deleted) {
+            // Local has deleted this reconciliation
+            if (item.deleted) {
+              // Both deleted - keep the one with newer timestamp
+              if (remoteTime > localTime) {
+                console.log(`[mergeReconcileHistory] ${key} - Both deleted, remote newer`);
+                merged.set(key, item);
+              } else {
+                console.log(`[mergeReconcileHistory] ${key} - Both deleted, local newer/same`);
+              }
+              deletionWins++;
+              return;
+            } else {
+              // Local deleted, remote not - only allow if remote is MUCH newer (resurrection)
+              const RESURRECTION_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+              if (remoteTime > localTime + RESURRECTION_THRESHOLD) {
+                console.log(`[mergeReconcileHistory] ${key} - Remote resurrection (much newer)`);
+                console.log(`  Local deletion: ${new Date(localTime).toISOString()}`);
+                console.log(`  Remote reconciliation: ${new Date(remoteTime).toISOString()}`);
+                merged.set(key, item);
+                remoteNewer++;
+              } else {
+                console.log(`[mergeReconcileHistory] ${key} - Preserving local deletion`);
+                deletionWins++;
+              }
+              return;
+            }
+          }
+          
+          if (item.deleted) {
+            // Remote deleted, local not - apply deletion if remote is newer/equal
+            if (remoteTime >= localTime) {
+              console.log(`[mergeReconcileHistory] ${key} - Applying remote DELETION`);
+              console.log(`  Remote deletion time: ${new Date(remoteTime).toISOString()}`);
+              merged.set(key, item);
+              deletionWins++;
+            } else {
+              console.log(`[mergeReconcileHistory] ${key} - Local reconciliation NEWER than remote deletion`);
+              localNewer++;
+            }
+            return;
+          }
+          
+          if (!existing) {
+            // New reconciliation from server
+            console.log(`[mergeReconcileHistory] ${key} - NEW from server (reconciled at: ${new Date(remoteTime).toISOString()})`);
+            merged.set(key, item);
+            remoteNew++;
+          } else if (remoteTime > localTime) {
+            // Remote reconciliation is MORE RECENT (based on actual reconciliation time)
+            console.log(`[mergeReconcileHistory] ${key} - Using REMOTE (newer actual reconciliation)`);
+            console.log(`  Remote reconciled at: ${new Date(remoteTime).toISOString()}`);
+            console.log(`  Local reconciled at: ${new Date(localTime).toISOString()}`);
+            merged.set(key, item);
+            remoteNewer++;
+          } else {
+            // Local reconciliation is MORE RECENT or EQUAL
+            if (remoteTime === localTime) {
+              console.log(`[mergeReconcileHistory] ${key} - Keeping LOCAL (equal reconciliation time)`);
+            } else {
+              console.log(`[mergeReconcileHistory] ${key} - Keeping LOCAL (newer actual reconciliation)`);
+              console.log(`  Local reconciled at: ${new Date(localTime).toISOString()}`);
+              console.log(`  Remote reconciled at: ${new Date(remoteTime).toISOString()}`);
+            }
+            localNewer++;
+          }
+        });
+        
+        console.log('[mergeReconcileHistory] ========== MERGE STATISTICS ==========');
+        console.log('[mergeReconcileHistory]   New from server:', remoteNew);
+        console.log('[mergeReconcileHistory]   Remote was newer:', remoteNewer);
+        console.log('[mergeReconcileHistory]   Local was newer:', localNewer);
+        console.log('[mergeReconcileHistory]   Deletion wins:', deletionWins);
+        console.log('[mergeReconcileHistory]   Total merged:', merged.size);
+        console.log('[mergeReconcileHistory] ⚠️ CRITICAL: Compared by ACTUAL reconciliation timestamp, not sync time');
+        console.log('[mergeReconcileHistory] ========== MERGE COMPLETE ==========\n');
+        
+        return Array.from(merged.values());
+      };
       
       // CRITICAL FIX: Always use smart merging to prevent data loss
       // This applies to BOTH manual and background syncs
@@ -3481,11 +3621,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const finalOutlets = mergeByTimestamp(outlets, syncedOutlets, 'outlets');
       const finalProducts = mergeByTimestamp(products, syncedProducts, 'products');
       
-      // CRITICAL: Merge reconcile history to preserve local reconciliation data
-      console.log('StockContext syncAll: CRITICAL - Merging reconcile history');
+      // CRITICAL: Merge reconcile history using SPECIALIZED logic that compares by ACTUAL reconciliation timestamp
+      // NOT by updatedAt (sync time), to ensure the most recent ACTUAL reconciliation wins
+      console.log('StockContext syncAll: CRITICAL - Merging reconcile history with specialized merge');
       console.log('  Local reconcile history:', reconcileHistory.length);
       console.log('  Synced reconcile history:', Array.isArray(syncedReconcileHistory) ? syncedReconcileHistory.length : 'not array');
-      const finalReconcileHistory = mergeByTimestamp(reconcileHistory, syncedReconcileHistory, 'reconcileHistory');
+      const finalReconcileHistory = mergeReconcileHistoryByActualTimestamp(reconcileHistory, syncedReconcileHistory as any);
       console.log('  Final reconcile history after merge:', finalReconcileHistory.length);
       
       console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
