@@ -1369,13 +1369,19 @@ export default function SalesUploadScreen() {
           // Build products array from discrepancies
           const reportProducts = reconciled.discrepancies.map(d => {
             const product = products.find((p: Product) => p.name === d.productName && p.unit === d.unit);
-            const productConversion = product ? getProductPair(product) : null;
+            
+            if (!product) {
+              console.log(`⚠️ Product not found for kitchen report: ${d.productName} (${d.unit})`);
+              return null;
+            }
+            
+            const productConversion = getProductPair(product);
             
             let quantityWhole = d.kitchenProduction;
             let quantitySlices = 0;
             
             // If product has conversions, split into whole and slices
-            if (productConversion && product) {
+            if (productConversion) {
               const isWholeProduct = product.id === productConversion.wholeProductId;
               const conversionFactor = productConversion.conversionFactor;
               
@@ -1388,14 +1394,22 @@ export default function SalesUploadScreen() {
               }
             }
             
+            console.log(`Kitchen report product: ${d.productName} (${product.id}) - ${quantityWhole}W + ${quantitySlices}S`);
+            
             return {
-              productId: product?.id || '',
+              productId: product.id,
               productName: d.productName,
               unit: d.unit,
               quantityWhole,
               quantitySlices,
             };
-          });
+          }).filter(p => p !== null) as Array<{
+            productId: string;
+            productName: string;
+            unit: string;
+            quantityWhole: number;
+            quantitySlices: number;
+          }>;
           
           const now = Date.now();
           const reconsolidatedAt = new Date().toLocaleString('en-GB', {
