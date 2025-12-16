@@ -6,7 +6,7 @@ import { FileSpreadsheet, UploadCloud, Download, ChevronDown, ChevronUp, Trash2,
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useStock } from '@/contexts/StockContext';
-import { Product, StockCheck, SalesDeduction } from '@/types';
+import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
@@ -1321,6 +1321,114 @@ export default function SalesUploadScreen() {
             }
             
             setProcessingSteps(prev => [...prev, { text: '✓ Kitchen stock report saved and synced', status: 'complete' }]);
+            
+            // Update Prods.Req in inventory
+            console.log('\n=== UPDATING PRODS.REQ IN INVENTORY ===');
+            setProcessingSteps(prev => [...prev, { text: 'Updating Prods.Req in inventory...', status: 'active' }]);
+            
+            try {
+              const inventoryUpdates: Array<{ productId: string; updates: Partial<InventoryStock> }> = [];
+              
+              for (const reportProduct of reportProducts) {
+                if (!reportProduct.productId) continue;
+                
+                const product = products.find(p => p.id === reportProduct.productId);
+                if (!product) continue;
+                
+                const invStock = inventoryStocks.find(s => s.productId === reportProduct.productId);
+                if (!invStock) {
+                  console.log(`No inventory stock found for ${reportProduct.productName}, skipping`);
+                  continue;
+                }
+                
+                // Check if we already updated this product for this date
+                const previousReport = existingReport;
+                let shouldUpdate = true;
+                let qtyToAdd = reportProduct.quantityWhole;
+                let slicesToAdd = reportProduct.quantitySlices;
+                
+                if (previousReport) {
+                  // Find the previous quantity for this product
+                  const prevProduct = previousReport.products.find(p => p.productId === reportProduct.productId);
+                  
+                  if (prevProduct) {
+                    const quantitiesChanged = 
+                      prevProduct.quantityWhole !== reportProduct.quantityWhole ||
+                      prevProduct.quantitySlices !== reportProduct.quantitySlices;
+                    
+                    if (!quantitiesChanged) {
+                      console.log(`Quantities unchanged for ${reportProduct.productName}, skipping inventory update`);
+                      shouldUpdate = false;
+                    } else {
+                      // Calculate the difference
+                      const wholeDiff = reportProduct.quantityWhole - prevProduct.quantityWhole;
+                      const slicesDiff = reportProduct.quantitySlices - prevProduct.quantitySlices;
+                      
+                      console.log(`Quantities changed for ${reportProduct.productName}:`);
+                      console.log(`  Previous: ${prevProduct.quantityWhole}W + ${prevProduct.quantitySlices}S`);
+                      console.log(`  New: ${reportProduct.quantityWhole}W + ${reportProduct.quantitySlices}S`);
+                      console.log(`  Difference: ${wholeDiff}W + ${slicesDiff}S`);
+                      
+                      qtyToAdd = wholeDiff;
+                      slicesToAdd = slicesDiff;
+                    }
+                  }
+                }
+                
+                if (shouldUpdate) {
+                  const currentProdsReqWhole = invStock.prodsReqWhole || 0;
+                  const currentProdsReqSlices = invStock.prodsReqSlices || 0;
+                  
+                  const newProdsReqWhole = currentProdsReqWhole + qtyToAdd;
+                  const newProdsReqSlices = currentProdsReqSlices + slicesToAdd;
+                  
+                  console.log(`Updating Prods.Req for ${reportProduct.productName}:`);
+                  console.log(`  Current: ${currentProdsReqWhole}W + ${currentProdsReqSlices}S`);
+                  console.log(`  Adding: ${qtyToAdd}W + ${slicesToAdd}S`);
+                  console.log(`  New: ${newProdsReqWhole}W + ${newProdsReqSlices}S`);
+                  
+                  inventoryUpdates.push({
+                    productId: reportProduct.productId,
+                    updates: {
+                      prodsReqWhole: newProdsReqWhole,
+                      prodsReqSlices: newProdsReqSlices,
+                    }
+                  });
+                }
+              }
+              
+              // Apply all inventory updates
+              if (inventoryUpdates.length > 0) {
+                console.log(`Applying ${inventoryUpdates.length} inventory updates...`);
+                for (const update of inventoryUpdates) {
+                  await updateInventoryStock(update.productId, update.updates);
+                }
+                console.log('✓ All inventory updates applied');
+                setProcessingSteps(prev => {
+                  const updated = [...prev];
+                  const lastIndex = updated.length - 1;
+                  if (updated[lastIndex]?.text.includes('Updating Prods.Req')) {
+                    updated[lastIndex] = { text: `✓ Updated Prods.Req for ${inventoryUpdates.length} products`, status: 'complete' };
+                  }
+                  return updated;
+                });
+              } else {
+                console.log('No inventory updates needed');
+                setProcessingSteps(prev => {
+                  const updated = [...prev];
+                  const lastIndex = updated.length - 1;
+                  if (updated[lastIndex]?.text.includes('Updating Prods.Req')) {
+                    updated[lastIndex] = { text: 'No inventory updates needed', status: 'complete' };
+                  }
+                  return updated;
+                });
+              }
+              
+              console.log('=== PRODS.REQ UPDATE COMPLETE ===\n');
+            } catch (error) {
+              console.error('Failed to update Prods.Req in inventory:', error);
+              setProcessingSteps(prev => [...prev, { text: 'Warning: Failed to update inventory', status: 'error' }]);
+            }
           }
         } catch (error) {
           console.error('Failed to save kitchen stock report:', error);
