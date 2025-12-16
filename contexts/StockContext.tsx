@@ -2934,9 +2934,35 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   }, [currentUser]);
 
   const addReconcileHistory = useCallback(async (history: SalesReconciliationHistory) => {
-    const updated = [...reconcileHistory, history];
+    console.log('[addReconcileHistory] Adding new reconciliation entry:', history.id);
+    console.log('[addReconcileHistory] Date:', history.date, 'Outlet:', history.outlet);
+    console.log('[addReconcileHistory] Raw consumption entries:', history.rawConsumption?.length || 0);
+    
+    const historyWithTimestamp = {
+      ...history,
+      updatedAt: Date.now(),
+      timestamp: history.timestamp || Date.now()
+    };
+    
+    const updated = [...reconcileHistory, historyWithTimestamp];
     await saveReconcileHistory(updated);
-  }, [reconcileHistory, saveReconcileHistory]);
+    
+    // CRITICAL: Trigger IMMEDIATE sync to server so other devices can get this data
+    console.log('[addReconcileHistory] Triggering immediate sync to server...');
+    if (currentUser?.id && syncAllRef.current && !syncInProgressRef.current) {
+      try {
+        syncInProgressRef.current = true;
+        await syncData('reconcileHistory', updated, currentUser.id);
+        console.log('[addReconcileHistory] ✓ Reconciliation synced to server successfully');
+      } catch (syncError) {
+        console.error('[addReconcileHistory] ❌ Failed to sync to server:', syncError);
+      } finally {
+        syncInProgressRef.current = false;
+      }
+    } else {
+      console.log('[addReconcileHistory] ⚠️ Cannot sync - no user or sync already in progress');
+    }
+  }, [reconcileHistory, saveReconcileHistory, currentUser]);
 
   const deleteReconcileHistory = useCallback(async (historyId: string) => {
     const updated = reconcileHistory.map(h => 

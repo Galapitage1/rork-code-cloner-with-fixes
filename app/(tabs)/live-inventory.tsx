@@ -55,6 +55,25 @@ function LiveInventoryScreen() {
   const editInputRef = useRef<TextInput>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
+  // CRITICAL: Sync reconciliation data when outlet or date changes
+  // This ensures sold items from other devices are displayed
+  useEffect(() => {
+    if (!selectedOutlet || !selectedDate) return;
+    
+    console.log('[LIVE INVENTORY] Outlet or date changed, syncing reconciliation data...');
+    console.log('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date:', selectedDate);
+    setIsLoadingData(true);
+    
+    syncAll(true).then(() => {
+      console.log('[LIVE INVENTORY] ✓ Sync complete - reconciliation data updated');
+      console.log('[LIVE INVENTORY] reconcileHistory now has', reconcileHistory.length, 'entries');
+    }).catch(error => {
+      console.error('[LIVE INVENTORY] Sync failed:', error);
+    }).finally(() => {
+      setIsLoadingData(false);
+    });
+  }, [selectedOutlet, selectedDate]);
+
   const getDateRange = useCallback((endDate: string, rangeType: 'week' | 'month'): string[] => {
     const end = new Date(endDate);
     const dates: string[] = [];
