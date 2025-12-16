@@ -173,7 +173,7 @@ export default function ProductionScreen() {
 
           <TouchableOpacity
             style={styles.viewRequestsButton}
-            onPress={() => router.push('/production-requests')}
+            onPress={() => router.push('/production-requests' as any)}
           >
             <List size={20} color="#fff" />
             <Text style={styles.viewRequestsText}>View Requests</Text>

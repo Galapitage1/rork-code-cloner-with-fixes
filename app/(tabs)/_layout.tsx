@@ -22,7 +22,7 @@ function CustomHeader({ title }: { title: string }) {
       <Text style={styles.headerTitle}>{title}</Text>
       <View style={styles.headerRight}>
         <TouchableOpacity
-          onPress={() => router.push('/home')}
+          onPress={() => router.push('/home' as any)}
           style={styles.homeButton}
         >
           <Home size={24} color={Colors.light.tint} />

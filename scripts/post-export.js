@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { fileURLToPath } = require('url');
+
+const __filename = fileURLToPath(import.meta.url || 'file://' + __filename);
+const __dirname = path.dirname(__filename);
 
 const distPath = path.join(__dirname, '..', 'dist');
 const htaccessSource = path.join(__dirname, '..', '.htaccess');

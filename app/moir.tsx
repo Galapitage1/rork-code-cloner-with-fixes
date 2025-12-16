@@ -916,7 +916,7 @@ export default function MoirScreen() {
               <View style={styles.settingItem}>
                 <Text style={styles.settingLabel}>Location Radius Alert</Text>
                 <Text style={styles.settingDescription}>
-                  Set the maximum distance (in meters) from your location. Users outside this radius will be highlighted in red and you'll receive notifications.
+                  Set the maximum distance (in meters) from your location. Users outside this radius will be highlighted in red and you&apos;ll receive notifications.
                 </Text>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Radius (meters)</Text>
