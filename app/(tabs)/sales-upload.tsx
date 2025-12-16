@@ -1288,7 +1288,7 @@ export default function SalesUploadScreen() {
           
           if (existingReport) {
             console.log('Existing report found, checking for changes...');
-            hasChanges = JSON.stringify(existingReport.products) !== JSON.stringify(products);
+            hasChanges = JSON.stringify(existingReport.products) !== JSON.stringify(reportProducts);
             
             if (!hasChanges) {
               console.log('No changes detected, skipping report save');
