@@ -13,6 +13,7 @@ import Colors from '@/constants/colors';
 import * as XLSX from 'xlsx';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { getKitchenStockReportsByOutletAndDateRange, getSalesReportsByOutletAndDateRange, KitchenStockReport, SalesReport, syncAllReconciliationData } from '@/utils/reconciliationSync';
 
 type DailyInventoryRecord = {
   date: string;
@@ -64,8 +65,11 @@ function LiveInventoryScreen() {
     console.log('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date:', selectedDate);
     setIsLoadingData(true);
     
-    syncAll(true).then(() => {
-      console.log('[LIVE INVENTORY] ✓ Sync complete - reconciliation data updated');
+    Promise.all([
+      syncAll(true),
+      syncAllReconciliationData()
+    ]).then(() => {
+      console.log('[LIVE INVENTORY] ✓ Sync complete - reconciliation data updated from BOTH systems');
       console.log('[LIVE INVENTORY] reconcileHistory now has', reconcileHistory.length, 'entries');
     }).catch(error => {
       console.error('[LIVE INVENTORY] Sync failed:', error);
