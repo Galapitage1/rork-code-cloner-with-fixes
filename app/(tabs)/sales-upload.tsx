@@ -10,6 +10,7 @@ import { Product, StockCheck, SalesDeduction } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport } from '@/utils/reconciliationSync';
 
 
 function base64FromUri(uri: string): Promise<string> {
@@ -1226,6 +1227,109 @@ export default function SalesUploadScreen() {
       
       setKitchenResult(reconciled);
       updateStep(4, 'complete');
+      
+      // Save kitchen stock report
+      const outletName = reconciled.outletName;
+      const date = reconciled.stockCheckDate;
+      
+      if (outletName && date) {
+        console.log('\n=== SAVING KITCHEN STOCK REPORT ===');
+        console.log('Outlet:', outletName);
+        console.log('Date:', date);
+        console.log('Items:', reconciled.discrepancies.length);
+        
+        try {
+          // Check for existing report
+          const existingReports = await getLocalKitchenStockReports();
+          const existingReport = existingReports.find(r => r.outlet === outletName && r.date === date && !r.deleted);
+          
+          // Build products array from discrepancies
+          const reportProducts = reconciled.discrepancies.map(d => {
+            const product = products.find((p: Product) => p.name === d.productName && p.unit === d.unit);
+            const productConversion = product ? getProductPair(product) : null;
+            
+            let quantityWhole = d.kitchenProduction;
+            let quantitySlices = 0;
+            
+            // If product has conversions, split into whole and slices
+            if (productConversion && product) {
+              const isWholeProduct = product.id === productConversion.wholeProductId;
+              const conversionFactor = productConversion.conversionFactor;
+              
+              if (isWholeProduct) {
+                quantityWhole = Math.floor(d.kitchenProduction);
+                quantitySlices = Math.round((d.kitchenProduction % 1) * conversionFactor);
+              } else {
+                quantityWhole = Math.floor(d.kitchenProduction / conversionFactor);
+                quantitySlices = Math.round(d.kitchenProduction % conversionFactor);
+              }
+            }
+            
+            return {
+              productId: product?.id || '',
+              productName: d.productName,
+              unit: d.unit,
+              quantityWhole,
+              quantitySlices,
+            };
+          });
+          
+          const now = Date.now();
+          const reconsolidatedAt = new Date().toLocaleString('en-GB', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).replace(',', '');
+          
+          let hasChanges = true;
+          
+          if (existingReport) {
+            console.log('Existing report found, checking for changes...');
+            hasChanges = JSON.stringify(existingReport.products) !== JSON.stringify(products);
+            
+            if (!hasChanges) {
+              console.log('No changes detected, skipping report save');
+            }
+          }
+          
+          if (hasChanges) {
+            const report: KitchenStockReport = {
+              id: existingReport?.id || `kitchen-${now}-${Math.random().toString(36).substr(2, 9)}`,
+              outlet: outletName,
+              date,
+              timestamp: now,
+              reconsolidatedAt,
+              products: reportProducts,
+              updatedAt: now,
+            };
+            
+            // Save locally
+            await saveKitchenStockReportLocally(report);
+            console.log('✓ Kitchen stock report saved locally');
+            
+            // Push to server immediately
+            console.log('Pushing kitchen stock report to server...');
+            const serverSaved = await saveKitchenStockReportToServer(report);
+            
+            if (serverSaved) {
+              console.log('✓ Kitchen stock report synced to server');
+            } else {
+              console.log('⚠️ Failed to sync to server, will retry later');
+            }
+            
+            setProcessingSteps(prev => [...prev, { text: '✓ Kitchen stock report saved and synced', status: 'complete' }]);
+          }
+        } catch (error) {
+          console.error('Failed to save kitchen stock report:', error);
+          setProcessingSteps(prev => [...prev, { text: 'Warning: Failed to save report', status: 'error' }]);
+        }
+        
+        console.log('=== KITCHEN STOCK REPORT SAVE COMPLETE ===\n');
+      }
+      
       setProcessingSteps(prev => [...prev, { text: `✓ Successfully processed ${reconciled.discrepancies.length} items`, status: 'complete' }]);
       
       if (reconciled.errors.length > 0) {
