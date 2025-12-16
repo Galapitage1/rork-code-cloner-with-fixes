@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport } from '@/utils/reconciliationSync';
 
 
 function base64FromUri(uri: string): Promise<string> {
@@ -971,6 +971,129 @@ export default function SalesUploadScreen() {
           
           await addReconcileHistory(reconcileHistoryEntry);
           console.log('✓ Saved reconciliation to StockContext for', outlet, date, 'with', raw?.rows.length || 0, 'raw consumption entries');
+          
+          // NEW SYNC SYSTEM: Save sales report to new reconciliation sync system
+          console.log('\n=== SAVING SALES REPORT TO NEW SYNC SYSTEM ===');
+          try {
+            const existingReports = await getLocalSalesReports();
+            const existingReport = existingReports.find(r => r.outlet === outlet && r.date === date && !r.deleted);
+            
+            // Build sales data array from reconciled rows
+            const salesDataForReport = salesDataArray.map(sd => {
+              const product = products.find(p => p.id === sd.productId);
+              const productPair = product ? getProductPair(product) : null;
+              
+              let soldWhole = sd.sold;
+              let soldSlices = 0;
+              
+              if (productPair && product) {
+                const isWholeProduct = product.id === productPair.wholeProductId;
+                const conversionFactor = productPair.conversionFactor;
+                
+                if (isWholeProduct) {
+                  soldWhole = Math.floor(sd.sold);
+                  soldSlices = Math.round((sd.sold % 1) * conversionFactor);
+                } else {
+                  soldWhole = Math.floor(sd.sold / conversionFactor);
+                  soldSlices = Math.round(sd.sold % conversionFactor);
+                }
+              }
+              
+              return {
+                productId: sd.productId,
+                productName: product?.name || '',
+                unit: product?.unit || '',
+                soldWhole,
+                soldSlices,
+              };
+            });
+            
+            // Build raw consumption array
+            const rawConsumptionForReport = (raw?.rows || []).map(r => {
+              const rawProduct = products.find(p => p.id === r.rawProductId);
+              const productPair = rawProduct ? getProductPair(rawProduct) : null;
+              
+              let consumedWhole = r.consumed;
+              let consumedSlices = 0;
+              
+              if (productPair && rawProduct) {
+                const isWholeProduct = rawProduct.id === productPair.wholeProductId;
+                const conversionFactor = productPair.conversionFactor;
+                
+                if (isWholeProduct) {
+                  consumedWhole = Math.floor(r.consumed);
+                  consumedSlices = Math.round((r.consumed % 1) * conversionFactor);
+                } else {
+                  consumedWhole = Math.floor(r.consumed / conversionFactor);
+                  consumedSlices = Math.round(r.consumed % conversionFactor);
+                }
+              }
+              
+              return {
+                rawProductId: r.rawProductId,
+                rawName: r.rawName,
+                rawUnit: r.rawUnit,
+                consumedWhole,
+                consumedSlices,
+              };
+            });
+            
+            const now = Date.now();
+            const reconsolidatedAt = new Date().toLocaleString('en-GB', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false
+            }).replace(',', '');
+            
+            let hasChanges = true;
+            
+            if (existingReport) {
+              console.log('Existing sales report found, checking for changes...');
+              hasChanges = 
+                JSON.stringify(existingReport.salesData) !== JSON.stringify(salesDataForReport) ||
+                JSON.stringify(existingReport.rawConsumption) !== JSON.stringify(rawConsumptionForReport);
+              
+              if (!hasChanges) {
+                console.log('No changes detected, skipping sales report save');
+              }
+            }
+            
+            if (hasChanges) {
+              const salesReport: SalesReport = {
+                id: existingReport?.id || `sales-${now}-${Math.random().toString(36).substr(2, 9)}`,
+                outlet,
+                date,
+                timestamp: now,
+                reconsolidatedAt,
+                salesData: salesDataForReport,
+                rawConsumption: rawConsumptionForReport,
+                updatedAt: now,
+              };
+              
+              // Save locally
+              await saveSalesReportLocally(salesReport);
+              console.log('✓ Sales report saved locally');
+              
+              // Push to server immediately
+              console.log('Pushing sales report to server...');
+              const serverSaved = await saveSalesReportToServer(salesReport);
+              
+              if (serverSaved) {
+                console.log('✓ Sales report synced to server');
+                setProcessingSteps(prev => [...prev, { text: '✓ Sales report saved and synced', status: 'complete' }]);
+              } else {
+                console.log('⚠️ Failed to sync sales report to server, will retry later');
+                setProcessingSteps(prev => [...prev, { text: '⚠️ Sales report saved locally only', status: 'error' }]);
+              }
+            }
+          } catch (reportError) {
+            console.error('Failed to save sales report:', reportError);
+            setProcessingSteps(prev => [...prev, { text: 'Warning: Failed to save sales report', status: 'error' }]);
+          }
+          console.log('=== SALES REPORT SAVE COMPLETE ===\n');
           
           // CRITICAL FIX: Trigger immediate sync and AWAIT it so reconciliation is on server BEFORE user can navigate away
           console.log('\n=== SYNCING RECONCILIATION TO SERVER (IMMEDIATE) ===');
