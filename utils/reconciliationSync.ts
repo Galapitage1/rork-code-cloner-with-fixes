@@ -359,3 +359,35 @@ export async function syncAllReconciliationData(): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, Date.now().toString());
   console.log('[ReconciliationSync] ========== FULL RECONCILIATION SYNC COMPLETE ==========');
 }
+
+export async function getKitchenStockReportsByOutletAndDateRange(
+  outlet: string,
+  startDate: string,
+  endDate: string
+): Promise<KitchenStockReport[]> {
+  try {
+    const allReports = await getLocalKitchenStockReports();
+    return allReports.filter(
+      r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted
+    );
+  } catch (error) {
+    console.error('[ReconciliationSync] Error getting kitchen reports by date range:', error);
+    return [];
+  }
+}
+
+export async function getSalesReportsByOutletAndDateRange(
+  outlet: string,
+  startDate: string,
+  endDate: string
+): Promise<SalesReport[]> {
+  try {
+    const allReports = await getLocalSalesReports();
+    return allReports.filter(
+      r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted
+    );
+  } catch (error) {
+    console.error('[ReconciliationSync] Error getting sales reports by date range:', error);
+    return [];
+  }
+}
