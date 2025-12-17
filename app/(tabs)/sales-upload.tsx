@@ -1379,9 +1379,12 @@ export default function SalesUploadScreen() {
             
             let quantityWhole = d.kitchenProduction;
             let quantitySlices = 0;
+            let productIdToStore = product.id;
             
-            // If product has conversions, split into whole and slices
+            // CRITICAL FIX: If product has conversions, ALWAYS use the WHOLE product ID
+            // This ensures live inventory can find the data when searching with pair.wholeId
             if (productConversion) {
+              productIdToStore = productConversion.wholeProductId;
               const isWholeProduct = product.id === productConversion.wholeProductId;
               const conversionFactor = productConversion.conversionFactor;
               
@@ -1389,15 +1392,16 @@ export default function SalesUploadScreen() {
                 quantityWhole = Math.floor(d.kitchenProduction);
                 quantitySlices = Math.round((d.kitchenProduction % 1) * conversionFactor);
               } else {
+                // Product is in slices unit, convert to whole + slices
                 quantityWhole = Math.floor(d.kitchenProduction / conversionFactor);
                 quantitySlices = Math.round(d.kitchenProduction % conversionFactor);
               }
             }
             
-            console.log(`Kitchen report product: ${d.productName} (${product.id}) - ${quantityWhole}W + ${quantitySlices}S`);
+            console.log(`Kitchen report product: ${d.productName} - Storing with wholeId=${productIdToStore} - ${quantityWhole}W + ${quantitySlices}S`);
             
             return {
-              productId: product.id,
+              productId: productIdToStore,
               productName: d.productName,
               unit: d.unit,
               quantityWhole,
