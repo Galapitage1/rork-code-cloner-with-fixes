@@ -223,7 +223,9 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
             if (trimmed && (trimmed.startsWith('[') || trimmed.startsWith('{'))) {
               const parsed = JSON.parse(trimmed);
               if (Array.isArray(parsed)) {
-                setRequests(parsed.filter((r: any) => !r?.deleted));
+                const activeRequests = parsed.filter((r: any) => !r?.deleted);
+                setRequests(activeRequests);
+                console.log('StockContext loadData: Loaded', activeRequests.length, 'active requests from local storage (total:', parsed.length, ')');
               } else {
                 console.error('Requests data is not an array');
                 await AsyncStorage.removeItem(STORAGE_KEYS.REQUESTS);
@@ -238,6 +240,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
             await AsyncStorage.removeItem(STORAGE_KEYS.REQUESTS);
             setRequests([]);
           }
+        } else {
+          console.log('StockContext loadData: No requests data in local storage');
         }
         if (outletsData) {
           try {
@@ -3213,6 +3217,17 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext syncAll: Data to sync - products:', productsToSync.length, 'stockChecks:', stockChecksToSync.length, 'requests:', requestsToSync.length, 'outlets:', outletsToSync.length, 'conversions:', conversionsToSync.length, 'inventory:', inventoryToSync.length, 'salesDeductions:', salesDeductionsToSync.length, 'reconcileHistory:', reconcileHistoryToSync.length);
       console.log('StockContext syncAll: This is a', silent ? 'BACKGROUND' : 'MANUAL', 'sync - will', silent ? 'merge with server data preserving local data' : 'fetch from server and merge');
       
+      console.log('StockContext syncAll: ===== SYNCING REQUESTS =====');
+      console.log('StockContext syncAll: Requests to sync:', requestsToSync.length);
+      console.log('StockContext syncAll: Sample requests:', requestsToSync.slice(0, 2).map((r: any) => ({
+        id: r.id,
+        product: r.productName,
+        from: r.fromOutlet,
+        to: r.toOutlet,
+        status: r.status,
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
+      })));
+      
       const syncResults = await Promise.allSettled([
         syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
         syncData('stockChecks', stockChecksToSync, currentUser.id),
@@ -3227,6 +3242,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const syncedProducts = syncResults[0].status === 'fulfilled' ? syncResults[0].value : productsToSync;
       const syncedStockChecks = syncResults[1].status === 'fulfilled' ? syncResults[1].value : stockChecksToSync;
       let syncedRequests = syncResults[2].status === 'fulfilled' ? syncResults[2].value : requestsToSync;
+      
+      console.log('StockContext syncAll: ===== REQUESTS SYNC RESULT =====');
+      if (syncResults[2].status === 'fulfilled') {
+        console.log('StockContext syncAll: Requests sync SUCCESS');
+        console.log('StockContext syncAll: Synced requests count:', Array.isArray(syncedRequests) ? syncedRequests.length : 'not array');
+        console.log('StockContext syncAll: Sample synced requests:', Array.isArray(syncedRequests) ? (syncedRequests as any[]).slice(0, 2).map(r => ({
+          id: r.id,
+          product: r.productName,
+          from: r.fromOutlet,
+          to: r.toOutlet,
+          status: r.status,
+          updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
+        })) : 'none');
+      } else {
+        console.error('StockContext syncAll: Requests sync FAILED:', syncResults[2].reason);
+        console.log('StockContext syncAll: Keeping local requests:', requestsToSync.length);
+      }
       
       // CLEANUP: After sync, keep only recent data locally (7 days)
       // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
@@ -3616,7 +3648,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.warn('  WARNING: No sales deductions after merge! This will cause sold column to be empty!');
       }
       const finalStockChecks = mergeByTimestamp(stockChecks, mergedStockChecks, 'stockChecks');
+      console.log('StockContext syncAll: ===== MERGING REQUESTS =====');
+      console.log('StockContext syncAll: Current requests in state:', requests.length);
+      console.log('StockContext syncAll: Synced requests to merge:', Array.isArray(syncedRequests) ? syncedRequests.length : 'not array');
       const finalRequests = mergeByTimestamp(requests, syncedRequests as any[], 'requests');
+      console.log('StockContext syncAll: Final requests after merge:', Array.isArray(finalRequests) ? finalRequests.length : 'not array');
+      console.log('StockContext syncAll: Sample final requests:', Array.isArray(finalRequests) ? (finalRequests as any[]).slice(0, 2).map(r => ({
+        id: r.id,
+        product: r.productName,
+        from: r.fromOutlet,
+        to: r.toOutlet,
+        status: r.status,
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
+      })) : 'none');
       const finalConversions = mergeByTimestamp(productConversions, syncedConversions, 'productConversions');
       const finalOutlets = mergeByTimestamp(outlets, syncedOutlets, 'outlets');
       const finalProducts = mergeByTimestamp(products, syncedProducts, 'products');
@@ -3692,7 +3736,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         
         if (hasChanges.products || !silent) setProducts(activeProducts);
         if (hasChanges.stockChecks || !silent) setStockChecks(activeStockChecks);
-        if (hasChanges.requests || !silent) setRequests(activeRequests);
+        if (hasChanges.requests || !silent) {
+          console.log('StockContext syncAll: ===== UPDATING REQUESTS STATE =====');
+          console.log('StockContext syncAll: Setting requests state to:', activeRequests.length, 'items');
+          console.log('StockContext syncAll: Reason:', hasChanges.requests ? 'changes detected' : 'manual sync');
+          setRequests(activeRequests);
+        } else {
+          console.log('StockContext syncAll: Not updating requests state (no changes in silent sync)');
+        }
         if (hasChanges.outlets || !silent) setOutlets(activeOutlets);
         if (hasChanges.conversions || !silent) setProductConversions(activeConversions);
         if (hasChanges.inventory || !silent) setInventoryStocks(activeInventory);
