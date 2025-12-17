@@ -13,9 +13,10 @@ import { useProductUsage } from '@/contexts/ProductUsageContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/contexts/AuthContext';
 import { ButtonViewMode } from '@/components/ButtonViewMode';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, syncAllReconciliationData, KitchenStockReport } from '@/utils/reconciliationSync';
 
 export default function StockCheckScreen() {
-  const { products, outlets, saveStockCheck, stockChecks, isLoading, inventoryStocks, productConversions, requests, viewMode, reconcileHistory } = useStock();
+  const { products, outlets, saveStockCheck, stockChecks, isLoading, inventoryStocks, productConversions, requests, viewMode, reconcileHistory, syncAll } = useStock();
   const { getSortedProducts, trackUsage } = useProductUsage();
   const { currentUser, isSuperAdmin, enableReceivedAutoLoad } = useAuth();
   const { logActivity } = useActivityLog();
@@ -722,6 +723,101 @@ export default function StockCheckScreen() {
       await saveStockCheck(stockCheck);
       console.log('Stock check saved successfully');
       console.log('performSave: Inventory replacement completed for outlet:', selectedOutlet);
+      
+      // CRITICAL: Create and save kitchen stock report for production outlets
+      const outlet = outlets.find(o => o.name === selectedOutlet);
+      if (outlet && outlet.outletType === 'production') {
+        console.log('\n=== CREATING KITCHEN STOCK REPORT FOR PRODUCTION OUTLET ===');
+        console.log('Outlet:', selectedOutlet, 'Date:', selectedDate);
+        
+        try {
+          // Build products array from stock counts - CRITICAL: Use receivedStock (Kitchen Production / Column K)
+          const productsForReport = stockCounts
+            .filter(count => count.receivedStock && count.receivedStock > 0)
+            .map(count => {
+              const product = products.find(p => p.id === count.productId);
+              const productPair = productConversions.find(
+                c => c.fromProductId === count.productId || c.toProductId === count.productId
+              );
+              
+              // Determine if this is whole or slices product
+              let quantityWhole = 0;
+              let quantitySlices = 0;
+              
+              if (productPair) {
+                // Product with conversion
+                const isWholeProduct = productPair.fromProductId === count.productId;
+                
+                if (isWholeProduct) {
+                  quantityWhole = count.receivedStock || 0;
+                } else {
+                  quantitySlices = count.receivedStock || 0;
+                }
+              } else {
+                // Product without conversion - treat as whole
+                quantityWhole = count.receivedStock || 0;
+              }
+              
+              console.log(`  Product: ${product?.name}, received: ${count.receivedStock}, quantityWhole: ${quantityWhole}, quantitySlices: ${quantitySlices}`);
+              
+              return {
+                productId: count.productId,
+                productName: product?.name || 'Unknown',
+                unit: product?.unit || 'units',
+                quantityWhole,
+                quantitySlices,
+              };
+            });
+          
+          console.log('Products for report (with received stock):', productsForReport.length);
+          
+          const now = Date.now();
+          const reconsolidatedAt = new Date().toLocaleString('en-GB', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).replace(',', '');
+          
+          const kitchenReport: KitchenStockReport = {
+            id: `kitchen-${now}-${Math.random().toString(36).substr(2, 9)}`,
+            outlet: selectedOutlet,
+            date: selectedDate,
+            timestamp: now,
+            reconsolidatedAt,
+            products: productsForReport,
+            updatedAt: now,
+          };
+          
+          console.log('Kitchen report products:', productsForReport.length);
+          
+          // Save locally
+          await saveKitchenStockReportLocally(kitchenReport);
+          console.log('✓ Kitchen stock report saved locally');
+          
+          // Push to server immediately
+          console.log('Pushing kitchen stock report to server...');
+          const serverSaved = await saveKitchenStockReportToServer(kitchenReport);
+          
+          if (serverSaved) {
+            console.log('✓ Kitchen stock report synced to server');
+          } else {
+            console.log('⚠️ Failed to sync kitchen stock report to server, will retry later');
+          }
+          
+          // Sync all reconciliation data
+          console.log('Syncing all reconciliation data...');
+          await syncAllReconciliationData();
+          await syncAll(false);
+          console.log('✓ Reconciliation data synced');
+        } catch (reportError) {
+          console.error('Failed to save kitchen stock report:', reportError);
+        }
+        
+        console.log('=== KITCHEN STOCK REPORT SAVE COMPLETE ===\n');
+      }
       
       // Log the activity
       if (logActivity) {
