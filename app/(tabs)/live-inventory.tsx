@@ -202,6 +202,7 @@ function LiveInventoryScreen() {
 
         if (isProductionOutlet) {
           // For production outlets: Show kitchen stock reconciliation quantities in Prods.Req column
+          // IMPORTANT: Display ALL quantities under "Whole" column by converting slices to whole
           console.log(`[PRODUCTION OUTLET] Checking kitchen stock reports for ${wholeProduct.name} on ${date}`);
           const kitchenReport = kitchenStockReports.find(r => r.date === date && r.outlet === selectedOutlet);
           
@@ -210,9 +211,12 @@ function LiveInventoryScreen() {
             const productEntry = kitchenReport.products.find(p => p.productId === pair.wholeId);
             
             if (productEntry) {
-              receivedWhole = productEntry.quantityWhole;
-              receivedSlices = productEntry.quantitySlices;
-              console.log(`[PRODUCTION OUTLET] Kitchen reconciliation quantities: ${receivedWhole}W + ${receivedSlices}S`);
+              // Convert slices to whole and add to receivedWhole
+              // Display everything under "Whole" column
+              const slicesAsWhole = productEntry.quantitySlices / pair.factor;
+              receivedWhole = productEntry.quantityWhole + slicesAsWhole;
+              receivedSlices = 0; // Always 0 - display all in Whole column
+              console.log(`[PRODUCTION OUTLET] Kitchen reconciliation: ${productEntry.quantityWhole}W + ${productEntry.quantitySlices}S = ${receivedWhole} Whole (displayed in Whole column only)`);
             } else {
               console.log(`[PRODUCTION OUTLET] No product entry found for ${wholeProduct.name} in kitchen report`);
             }
