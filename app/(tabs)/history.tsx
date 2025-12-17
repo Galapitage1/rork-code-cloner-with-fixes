@@ -360,7 +360,7 @@ export default function HistoryScreen() {
         await saveStockCheck(movedStockCheck);
         console.log('Stock check moved to new date:', editingStockCheckDate);
       } else {
-        await updateStockCheck(updatedCheck.id, newCounts, editingStockCheckOutlet, outletChanged);
+        await updateStockCheck(updatedCheck.id, newCounts, editingStockCheckOutlet, outletChanged, replaceAllInventoryEdit);
       }
       
       console.log('✓ Stock check updated');
