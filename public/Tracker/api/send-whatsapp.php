@@ -36,9 +36,16 @@ $accessToken = isset($body['accessToken']) ? trim($body['accessToken']) : '';
 $phoneNumberId = isset($body['phoneNumberId']) ? trim($body['phoneNumberId']) : '';
 $message = isset($body['message']) ? trim($body['message']) : '';
 $recipients = isset($body['recipients']) ? $body['recipients'] : [];
+$mediaUrl = isset($body['mediaUrl']) ? trim($body['mediaUrl']) : '';
+$mediaType = isset($body['mediaType']) ? trim($body['mediaType']) : 'image';
+$caption = isset($body['caption']) ? trim($body['caption']) : '';
 
-if (empty($accessToken) || empty($phoneNumberId) || empty($message) || empty($recipients)) {
+if (empty($accessToken) || empty($phoneNumberId) || empty($recipients)) {
   respond(['success' => false, 'error' => 'Missing required fields'], 400);
+}
+
+if (empty($message) && empty($mediaUrl)) {
+  respond(['success' => false, 'error' => 'Either message or media URL is required'], 400);
 }
 
 $results = [
@@ -67,16 +74,33 @@ foreach ($recipients as $recipient) {
 
   $url = "https://graph.facebook.com/v21.0/{$phoneNumberId}/messages";
   
-  $payload = json_encode([
-    'messaging_product' => 'whatsapp',
-    'recipient_type' => 'individual',
-    'to' => $phone,
-    'type' => 'text',
-    'text' => [
-      'preview_url' => false,
-      'body' => $message,
-    ],
-  ]);
+  if (!empty($mediaUrl)) {
+    $messageBody = [
+      'messaging_product' => 'whatsapp',
+      'recipient_type' => 'individual',
+      'to' => $phone,
+      'type' => $mediaType,
+    ];
+    
+    $messageBody[$mediaType] = ['link' => $mediaUrl];
+    
+    if (!empty($caption) && in_array($mediaType, ['image', 'video', 'document'])) {
+      $messageBody[$mediaType]['caption'] = $caption;
+    }
+    
+    $payload = json_encode($messageBody);
+  } else {
+    $payload = json_encode([
+      'messaging_product' => 'whatsapp',
+      'recipient_type' => 'individual',
+      'to' => $phone,
+      'type' => 'text',
+      'text' => [
+        'preview_url' => false,
+        'body' => $message,
+      ],
+    ]);
+  }
 
   $ch = curl_init();
   curl_setopt($ch, CURLOPT_URL, $url);

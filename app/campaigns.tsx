@@ -9,16 +9,18 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Image,
 } from 'react-native';
 
 
-import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox } from 'lucide-react-native';
+import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox, Image as ImageIcon, FileText, Video, Music } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useAuth } from '@/contexts/AuthContext';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
@@ -84,6 +86,9 @@ export default function CampaignsScreen() {
   const [showWhatsAppInbox, setShowWhatsAppInbox] = useState(false);
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [whatsappMediaUri, setWhatsappMediaUri] = useState<string>('');
+  const [whatsappMediaType, setWhatsappMediaType] = useState<'image' | 'video' | 'document' | 'audio'>('image');
+  const [whatsappCaption, setWhatsappCaption] = useState<string>('');
 
   const loadCampaignSettings = async () => {
     try {
@@ -425,8 +430,8 @@ export default function CampaignsScreen() {
   };
 
   const validateWhatsAppCampaign = (): string | null => {
-    if (!message.trim()) {
-      return 'Please enter WhatsApp message';
+    if (!message.trim() && !whatsappMediaUri) {
+      return 'Please enter a message or attach media';
     }
     if (selectedCustomers.length === 0) {
       return 'Please select at least one customer';
@@ -823,7 +828,10 @@ export default function CampaignsScreen() {
             body: JSON.stringify({
               accessToken: whatsappAccessToken,
               phoneNumberId: whatsappPhoneNumberId,
-              message: message,
+              message: whatsappMediaUri ? whatsappCaption : message,
+              mediaUrl: whatsappMediaUri,
+              mediaType: whatsappMediaType,
+              caption: whatsappCaption,
               recipients: selectedCustomers.map(c => ({
                 name: c.name,
                 phone: c.phone,
@@ -851,6 +859,8 @@ export default function CampaignsScreen() {
 
           if (results.success > 0) {
             setMessage('');
+            setWhatsappMediaUri('');
+            setWhatsappCaption('');
             setSelectedCustomerIds(new Set());
           }
 
@@ -1436,17 +1446,172 @@ export default function CampaignsScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>WhatsApp Message</Text>
               
-              <Text style={styles.label}>Message *</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={message}
-                onChangeText={setMessage}
-                placeholder="Your WhatsApp message..."
-                multiline
-                numberOfLines={6}
-                textAlignVertical="top"
-              />
-              <Text style={styles.charCount}>{message.length} characters</Text>
+              <View style={styles.mediaSection}>
+                <Text style={styles.label}>Media Attachment (Optional)</Text>
+                
+                {whatsappMediaUri ? (
+                  <View style={styles.mediaPreviewContainer}>
+                    {whatsappMediaType === 'image' && (
+                      <Image 
+                        source={{ uri: whatsappMediaUri }} 
+                        style={styles.mediaPreview}
+                        resizeMode="cover"
+                      />
+                    )}
+                    {whatsappMediaType === 'video' && (
+                      <View style={styles.mediaPlaceholder}>
+                        <Video size={48} color={Colors.light.tint} />
+                        <Text style={styles.mediaPlaceholderText}>Video attached</Text>
+                      </View>
+                    )}
+                    {whatsappMediaType === 'document' && (
+                      <View style={styles.mediaPlaceholder}>
+                        <FileText size={48} color={Colors.light.tint} />
+                        <Text style={styles.mediaPlaceholderText}>Document attached</Text>
+                      </View>
+                    )}
+                    {whatsappMediaType === 'audio' && (
+                      <View style={styles.mediaPlaceholder}>
+                        <Music size={48} color={Colors.light.tint} />
+                        <Text style={styles.mediaPlaceholderText}>Audio attached</Text>
+                      </View>
+                    )}
+                    <TouchableOpacity 
+                      style={styles.removeMediaButton}
+                      onPress={() => {
+                        setWhatsappMediaUri('');
+                        setWhatsappCaption('');
+                      }}
+                    >
+                      <X size={20} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={styles.mediaButtonsRow}>
+                    <TouchableOpacity
+                      style={styles.mediaButton}
+                      onPress={async () => {
+                        try {
+                          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                          if (status !== 'granted') {
+                            Alert.alert('Permission Required', 'Please grant media library permissions');
+                            return;
+                          }
+                          
+                          const result = await ImagePicker.launchImageLibraryAsync({
+                            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                            allowsEditing: true,
+                            quality: 0.8,
+                          });
+                          
+                          if (!result.canceled && result.assets[0]) {
+                            setWhatsappMediaUri(result.assets[0].uri);
+                            setWhatsappMediaType('image');
+                          }
+                        } catch {
+                          Alert.alert('Error', 'Failed to pick image');
+                        }
+                      }}
+                    >
+                      <ImageIcon size={24} color={Colors.light.tint} />
+                      <Text style={styles.mediaButtonText}>Image</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      style={styles.mediaButton}
+                      onPress={async () => {
+                        try {
+                          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                          if (status !== 'granted') {
+                            Alert.alert('Permission Required', 'Please grant media library permissions');
+                            return;
+                          }
+                          
+                          const result = await ImagePicker.launchImageLibraryAsync({
+                            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+                            allowsEditing: false,
+                            quality: 0.8,
+                          });
+                          
+                          if (!result.canceled && result.assets[0]) {
+                            setWhatsappMediaUri(result.assets[0].uri);
+                            setWhatsappMediaType('video');
+                          }
+                        } catch {
+                          Alert.alert('Error', 'Failed to pick video');
+                        }
+                      }}
+                    >
+                      <Video size={24} color={Colors.light.tint} />
+                      <Text style={styles.mediaButtonText}>Video</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      style={styles.mediaButton}
+                      onPress={async () => {
+                        try {
+                          const result = await DocumentPicker.getDocumentAsync({
+                            type: '*/*',
+                            copyToCacheDirectory: true,
+                          });
+                          
+                          if (result.assets && result.assets[0]) {
+                            setWhatsappMediaUri(result.assets[0].uri);
+                            const mimeType = result.assets[0].mimeType || '';
+                            if (mimeType.startsWith('audio/')) {
+                              setWhatsappMediaType('audio');
+                            } else {
+                              setWhatsappMediaType('document');
+                            }
+                          }
+                        } catch {
+                          Alert.alert('Error', 'Failed to pick document');
+                        }
+                      }}
+                    >
+                      <FileText size={24} color={Colors.light.tint} />
+                      <Text style={styles.mediaButtonText}>File</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                
+                {whatsappMediaUri && (
+                  <View>
+                    <Text style={styles.label}>Caption</Text>
+                    <TextInput
+                      style={[styles.input, styles.captionInput]}
+                      value={whatsappCaption}
+                      onChangeText={setWhatsappCaption}
+                      placeholder="Add a caption for your media..."
+                      multiline
+                      numberOfLines={3}
+                      textAlignVertical="top"
+                    />
+                  </View>
+                )}
+                
+                <View style={styles.mediaTip}>
+                  <Text style={styles.mediaTipText}>
+                    💡 Tip: Media URLs must be publicly accessible. Supported: Images (JPG, PNG), Videos (MP4), Documents (PDF, etc.)
+                  </Text>
+                </View>
+              </View>
+              
+              {!whatsappMediaUri && (
+                <>
+                  <Text style={styles.label}>Message *</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={message}
+                    onChangeText={setMessage}
+                    placeholder="Your WhatsApp message..."
+                    multiline
+                    numberOfLines={6}
+                    textAlignVertical="top"
+                  />
+                  <Text style={styles.charCount}>{message.length} characters</Text>
+                </>
+              )}
             </View>
           </>
         )}
@@ -2001,5 +2166,83 @@ const styles = StyleSheet.create({
   },
   messageListContainer: {
     gap: 8,
+  },
+  mediaSection: {
+    marginVertical: 12,
+  },
+  mediaButtonsRow: {
+    flexDirection: 'row' as const,
+    gap: 12,
+    marginTop: 8,
+  },
+  mediaButton: {
+    flex: 1,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    paddingVertical: 16,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    gap: 6,
+  },
+  mediaButtonText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
+  },
+  mediaPreviewContainer: {
+    position: 'relative' as const,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  mediaPreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    backgroundColor: Colors.light.background,
+  },
+  mediaPlaceholder: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+  },
+  mediaPlaceholderText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.light.tint,
+  },
+  removeMediaButton: {
+    position: 'absolute' as const,
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  captionInput: {
+    minHeight: 80,
+  },
+  mediaTip: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  mediaTipText: {
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 18,
   },
 });
