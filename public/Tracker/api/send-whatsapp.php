@@ -40,6 +40,15 @@ $mediaUrl = isset($body['mediaUrl']) ? trim($body['mediaUrl']) : '';
 $mediaType = isset($body['mediaType']) ? trim($body['mediaType']) : 'image';
 $caption = isset($body['caption']) ? trim($body['caption']) : '';
 
+if (!empty($mediaUrl)) {
+  if (!filter_var($mediaUrl, FILTER_VALIDATE_URL)) {
+    respond(['success' => false, 'error' => 'Invalid media URL format'], 400);
+  }
+  if (strpos($mediaUrl, 'https://') !== 0) {
+    respond(['success' => false, 'error' => 'Media URL must use HTTPS'], 400);
+  }
+}
+
 if (empty($accessToken) || empty($phoneNumberId) || empty($recipients)) {
   respond(['success' => false, 'error' => 'Missing required fields'], 400);
 }
