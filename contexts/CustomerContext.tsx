@@ -109,6 +109,15 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const importCustomers = useCallback(async (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
     if (!currentUser) return 0;
 
+    console.log('[CustomerContext] importCustomers: Starting import of', customerDataList.length, 'customers');
+    console.log('[CustomerContext] importCustomers: Current customers count before import:', customers.length);
+
+    const allCustomers = await AsyncStorage.getItem(CUSTOMERS_KEY);
+    const existingCustomers: Customer[] = allCustomers ? JSON.parse(allCustomers) : [];
+    const activeExisting = existingCustomers.filter((c: Customer) => c.deleted !== true);
+    
+    console.log('[CustomerContext] importCustomers: Active existing customers from storage:', activeExisting.length);
+
     const now = Date.now();
     const newCustomers: Customer[] = customerDataList.map((customerData, index) => ({
       ...customerData,
@@ -118,8 +127,12 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       createdBy: currentUser.id,
     }));
 
-    const updated = [...customers, ...newCustomers];
+    const updated = [...activeExisting, ...newCustomers];
+    console.log('[CustomerContext] importCustomers: Total customers after merge:', updated.length);
+    
     await saveCustomers(updated);
+    console.log('[CustomerContext] importCustomers: Save complete, state should be updated');
+    
     return newCustomers.length;
   }, [currentUser, customers, saveCustomers]);
 

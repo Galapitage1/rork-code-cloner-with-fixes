@@ -152,7 +152,34 @@ export default function CustomersScreen() {
         return;
       }
 
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+      const parseCSVLine = (line: string): string[] => {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          const nextChar = line[i + 1];
+          
+          if (char === '"') {
+            if (inQuotes && nextChar === '"') {
+              current += '"';
+              i++;
+            } else {
+              inQuotes = !inQuotes;
+            }
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      };
+
+      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''));
       const nameIndex = headers.findIndex(h => h.includes('name'));
       const emailIndex = headers.findIndex(h => h.includes('email'));
       const phoneIndex = headers.findIndex(h => h.includes('phone'));
@@ -167,28 +194,32 @@ export default function CustomersScreen() {
         return;
       }
 
+      console.log('Starting to parse', lines.length - 1, 'customer rows...');
       const customersToImport: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
       
       for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-        const name = values[nameIndex];
+        const values = parseCSVLine(lines[i]);
+        const name = values[nameIndex]?.replace(/^"|"$/g, '').trim();
         
         if (!name) continue;
 
         const customerData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'> = {
           name,
-          email: emailIndex !== -1 ? values[emailIndex] : undefined,
-          phone: phoneIndex !== -1 ? values[phoneIndex] : undefined,
-          company: companyIndex !== -1 ? values[companyIndex] : undefined,
-          address: addressIndex !== -1 ? values[addressIndex] : undefined,
-          points: pointsIndex !== -1 && values[pointsIndex] ? parseFloat(values[pointsIndex]) || 0 : 0,
-          idNumber: idNumberIndex !== -1 ? values[idNumberIndex] : undefined,
+          email: emailIndex !== -1 && values[emailIndex] ? values[emailIndex].replace(/^"|"$/g, '').trim() : undefined,
+          phone: phoneIndex !== -1 && values[phoneIndex] ? values[phoneIndex].replace(/^"|"$/g, '').trim() : undefined,
+          company: companyIndex !== -1 && values[companyIndex] ? values[companyIndex].replace(/^"|"$/g, '').trim() : undefined,
+          address: addressIndex !== -1 && values[addressIndex] ? values[addressIndex].replace(/^"|"$/g, '').trim() : undefined,
+          points: pointsIndex !== -1 && values[pointsIndex] ? parseFloat(values[pointsIndex].replace(/^"|"$/g, '')) || 0 : 0,
+          idNumber: idNumberIndex !== -1 && values[idNumberIndex] ? values[idNumberIndex].replace(/^"|"$/g, '').trim() : undefined,
         };
 
         customersToImport.push(customerData);
       }
 
+      console.log('Parsed', customersToImport.length, 'customers, importing...');
       const imported = await importCustomers(customersToImport);
+      console.log('Import complete, imported', imported, 'customers');
+      console.log('Current customers count:', customers.length);
       Alert.alert('Success', `Imported ${imported} customer(s) successfully!`);
     } catch (error) {
       console.error('Import error:', error);
@@ -297,6 +328,16 @@ export default function CustomersScreen() {
         renderItem={renderCustomerCard}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={20}
+        initialNumToRender={20}
+        windowSize={10}
+        updateCellsBatchingPeriod={50}
+        getItemLayout={(data, index) => ({
+          length: 120,
+          offset: 120 * index,
+          index,
+        })}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <User size={64} color={Colors.light.icon} />
