@@ -43,7 +43,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 
 export default function CustomersScreen() {
-  const { customers, addCustomer, updateCustomer, deleteCustomer, searchCustomers } = useCustomers();
+  const { customers, addCustomer, importCustomers, updateCustomer, deleteCustomer, searchCustomers } = useCustomers();
   const { isAdmin, isSuperAdmin } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -167,7 +167,8 @@ export default function CustomersScreen() {
         return;
       }
 
-      let imported = 0;
+      const customersToImport: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
+      
       for (let i = 1; i < lines.length; i++) {
         const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
         const name = values[nameIndex];
@@ -184,10 +185,10 @@ export default function CustomersScreen() {
           idNumber: idNumberIndex !== -1 ? values[idNumberIndex] : undefined,
         };
 
-        await addCustomer(customerData);
-        imported++;
+        customersToImport.push(customerData);
       }
 
+      const imported = await importCustomers(customersToImport);
       Alert.alert('Success', `Imported ${imported} customer(s) successfully!`);
     } catch (error) {
       console.error('Import error:', error);

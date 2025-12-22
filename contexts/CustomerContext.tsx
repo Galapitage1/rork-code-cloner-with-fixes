@@ -11,6 +11,7 @@ type CustomerContextType = {
   isSyncing: boolean;
   lastSyncTime: number;
   addCustomer: (customerData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => Promise<void>;
+  importCustomers: (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => Promise<number>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<void>;
   deleteCustomer: (id: string) => Promise<void>;
   searchCustomers: (query: string) => Customer[];
@@ -103,6 +104,23 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
     const updated = [...customers, newCustomer];
     await saveCustomers(updated);
+  }, [currentUser, customers, saveCustomers]);
+
+  const importCustomers = useCallback(async (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
+    if (!currentUser) return 0;
+
+    const now = Date.now();
+    const newCustomers: Customer[] = customerDataList.map((customerData, index) => ({
+      ...customerData,
+      id: `customer_${now + index}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: now + index,
+      updatedAt: now + index,
+      createdBy: currentUser.id,
+    }));
+
+    const updated = [...customers, ...newCustomers];
+    await saveCustomers(updated);
+    return newCustomers.length;
   }, [currentUser, customers, saveCustomers]);
 
   const updateCustomer = useCallback(async (id: string, updates: Partial<Customer>) => {
@@ -218,12 +236,13 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     isSyncing,
     lastSyncTime,
     addCustomer,
+    importCustomers,
     updateCustomer,
     deleteCustomer,
     searchCustomers,
     syncCustomers,
     clearAllCustomers,
-  }), [customers, isLoading, isSyncing, lastSyncTime, addCustomer, updateCustomer, deleteCustomer, searchCustomers, syncCustomers, clearAllCustomers]);
+  }), [customers, isLoading, isSyncing, lastSyncTime, addCustomer, importCustomers, updateCustomer, deleteCustomer, searchCustomers, syncCustomers, clearAllCustomers]);
 
   return <CustomerCtx.Provider value={value}>{children}</CustomerCtx.Provider>;
 }
