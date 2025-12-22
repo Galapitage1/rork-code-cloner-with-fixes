@@ -80,7 +80,7 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
     console.log('[InitialDataLoader] Loading critical data first (users, outlets)...');
     onProgress?.('Loading users and outlets...');
     
-    for (const dataType of priorityTypes) {
+    await Promise.all(priorityTypes.map(async (dataType) => {
       try {
         console.log(`[InitialDataLoader] Loading ${dataType}...`);
         const data = await getFromServer({ userId, dataType });
@@ -93,30 +93,34 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
       } catch (error) {
         console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
       }
-    }
+    }));
 
     console.log('[InitialDataLoader] Loading remaining data in background...');
     const remainingTypes = DATA_TYPES_TO_LOAD.filter(t => !priorityTypes.includes(t));
     
-    let loaded = 0;
     const total = remainingTypes.length;
+    const batchSize = 5;
     
-    for (const dataType of remainingTypes) {
-      try {
-        loaded++;
-        onProgress?.(`Loading data... (${loaded}/${total})`);
-        console.log(`[InitialDataLoader] Loading ${dataType}... (${loaded}/${total})`);
-        
-        const data = await getFromServer({ userId, dataType });
-        
-        const storageKey = STORAGE_KEY_MAP[dataType];
-        if (storageKey) {
-          await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-          console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
+    for (let i = 0; i < remainingTypes.length; i += batchSize) {
+      const batch = remainingTypes.slice(i, i + batchSize);
+      const loaded = i + batch.length;
+      onProgress?.(`Loading data... (${loaded}/${total})`);
+      
+      await Promise.all(batch.map(async (dataType) => {
+        try {
+          console.log(`[InitialDataLoader] Loading ${dataType}... (${loaded}/${total})`);
+          
+          const data = await getFromServer({ userId, dataType });
+          
+          const storageKey = STORAGE_KEY_MAP[dataType];
+          if (storageKey) {
+            await AsyncStorage.setItem(storageKey, JSON.stringify(data));
+            console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
+          }
+        } catch (error) {
+          console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
         }
-      } catch (error) {
-        console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
-      }
+      }));
     }
 
     console.log('[InitialDataLoader] ✓ Initial data load complete');

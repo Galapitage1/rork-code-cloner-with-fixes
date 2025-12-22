@@ -67,6 +67,7 @@ function UserSync({ children }: { children: React.ReactNode }) {
   const { setUser: setActivityLogUser } = useActivityLog();
   const [isLoadingInitialData, setIsLoadingInitialData] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState<string>('Loading...');
+  const loadingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   
   useEffect(() => {
     if (currentUser) {
@@ -84,36 +85,65 @@ function UserSync({ children }: { children: React.ReactNode }) {
         setIsLoadingInitialData(true);
         console.log('[UserSync] → Loading initial data for user:', currentUser.username);
         
-        await loadInitialDataIfNeeded(currentUser.id, (status) => {
+        loadingTimeoutRef.current = setTimeout(() => {
+          console.log('[UserSync] → Loading taking too long, showing UI anyway');
+          setIsLoadingInitialData(false);
+        }, 3000);
+        
+        const loadPromise = loadInitialDataIfNeeded(currentUser.id, (status) => {
           console.log('[UserSync] →', status);
           setLoadingStatus(status);
         });
         
-        console.log('[UserSync] → Reloading data from storage...');
-        setLoadingStatus('Refreshing...');
-        await reloadStoresFromStorage();
+        const reloadPromise = loadPromise.then(async () => {
+          console.log('[UserSync] → Reloading data from storage...');
+          setLoadingStatus('Refreshing...');
+          await reloadStoresFromStorage();
+        });
         
-        console.log('[UserSync] → Performing cleanup...');
-        setLoadingStatus('Cleaning up...');
-        await performCleanupOnLogin();
-        
-        setHasLoadedInitialData(true);
-        setLoadingStatus('Complete!');
-        console.log('[UserSync] ✓ Initial data load complete');
-        
-        setTimeout(() => {
-          setIsLoadingInitialData(false);
-        }, 500);
+        Promise.all([loadPromise, reloadPromise]).then(() => {
+          console.log('[UserSync] → Performing cleanup...');
+          performCleanupOnLogin().catch(e => console.log('[UserSync] Cleanup error:', e));
+          
+          setHasLoadedInitialData(true);
+          setLoadingStatus('Complete!');
+          console.log('[UserSync] ✓ Initial data load complete');
+          
+          if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+          }
+          setTimeout(() => {
+            setIsLoadingInitialData(false);
+          }, 300);
+        }).catch(error => {
+          console.error('[UserSync] ✗ Failed to load initial data:', error);
+          setLoadingStatus('Error loading data');
+          if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+          }
+          setTimeout(() => {
+            setIsLoadingInitialData(false);
+          }, 1000);
+        });
       } catch (error) {
         console.error('[UserSync] ✗ Failed to load initial data:', error);
         setLoadingStatus('Error loading data');
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+        }
         setTimeout(() => {
           setIsLoadingInitialData(false);
-        }, 2000);
+        }, 1000);
       }
     }
 
     loadData();
+    
+    return () => {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+      }
+    };
   }, [currentUser, hasLoadedInitialData, setHasLoadedInitialData, reloadStoresFromStorage]);
 
   if (currentUser && isLoadingInitialData) {
