@@ -817,6 +817,49 @@ export default function CampaignsScreen() {
           setIsSending(true);
 
           const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+          
+          let publicMediaUrl = '';
+          if (whatsappMediaUri) {
+            console.log('[WhatsApp CAMPAIGN] Uploading media file first...');
+            const uploadEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/upload-media.php` : `${apiUrl}/api/upload-media`;
+            
+            const formData = new FormData();
+            
+            if (Platform.OS === 'web') {
+              const response = await fetch(whatsappMediaUri);
+              const blob = await response.blob();
+              const filename = whatsappMediaUri.split('/').pop() || 'media.jpg';
+              formData.append('file', blob, filename);
+            } else {
+              const filename = whatsappMediaUri.split('/').pop() || 'media.jpg';
+              const fileType = whatsappMediaType === 'image' ? 'image/jpeg' : 
+                              whatsappMediaType === 'video' ? 'video/mp4' : 
+                              whatsappMediaType === 'audio' ? 'audio/mpeg' : 
+                              'application/pdf';
+              
+              formData.append('file', {
+                uri: whatsappMediaUri,
+                name: filename,
+                type: fileType,
+              } as any);
+            }
+            
+            const uploadResponse = await fetch(uploadEndpoint, {
+              method: 'POST',
+              body: formData,
+            });
+            
+            const uploadResult = await uploadResponse.json();
+            console.log('[WhatsApp CAMPAIGN] Upload response:', uploadResult);
+            
+            if (!uploadResponse.ok || !uploadResult.success) {
+              throw new Error(uploadResult.error || 'Failed to upload media');
+            }
+            
+            publicMediaUrl = uploadResult.url;
+            console.log('[WhatsApp CAMPAIGN] Media uploaded to:', publicMediaUrl);
+          }
+          
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
           console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
           
@@ -828,8 +871,8 @@ export default function CampaignsScreen() {
             body: JSON.stringify({
               accessToken: whatsappAccessToken,
               phoneNumberId: whatsappPhoneNumberId,
-              message: whatsappMediaUri ? whatsappCaption : message,
-              mediaUrl: whatsappMediaUri,
+              message: publicMediaUrl ? whatsappCaption : message,
+              mediaUrl: publicMediaUrl,
               mediaType: whatsappMediaType,
               caption: whatsappCaption,
               recipients: selectedCustomers.map(c => ({
