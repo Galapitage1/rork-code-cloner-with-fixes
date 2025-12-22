@@ -4,6 +4,7 @@ import { Customer } from '@/types';
 import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
 
 const CUSTOMERS_KEY = '@stock_app_customers';
+const CUSTOMERS_META_KEY = '@stock_app_customers_meta';
 
 type CustomerContextType = {
   customers: Customer[];
@@ -36,39 +37,44 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const [lastSyncTime, setLastSyncTime] = useState<number>(0);
 
   const loadCustomers = useCallback(async () => {
+    if (!currentUser) {
+      setIsLoading(false);
+      return;
+    }
+    
     try {
-      const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
-      if (stored) {
-        try {
-          const trimmed = stored.trim();
-          if (trimmed && (trimmed.startsWith('[') || trimmed.startsWith('{'))) {
-            const parsed = JSON.parse(trimmed);
-            if (Array.isArray(parsed)) {
-              const activeCustomers = parsed.filter((customer: Customer) => customer.deleted !== true);
-              setCustomers(activeCustomers);
-            } else {
-              console.error('Customers data is not an array');
-              await AsyncStorage.removeItem(CUSTOMERS_KEY);
-              setCustomers([]);
-            }
-          } else {
-            console.error('Customers data is not valid JSON:', stored);
-            await AsyncStorage.removeItem(CUSTOMERS_KEY);
-            setCustomers([]);
-          }
-        } catch (parseError) {
-          console.error('Failed to parse customers data:', parseError);
-          console.error('Raw data:', stored);
-          await AsyncStorage.removeItem(CUSTOMERS_KEY);
-          setCustomers([]);
-        }
-      }
+      console.log('[CustomerContext] Loading customers from server...');
+      const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
+      const activeCustomers = remoteData.filter((customer: Customer) => customer.deleted !== true);
+      setCustomers(activeCustomers);
+      console.log('[CustomerContext] Loaded', activeCustomers.length, 'customers from server');
+      
+      const meta = {
+        count: activeCustomers.length,
+        lastLoaded: Date.now()
+      };
+      await AsyncStorage.setItem(CUSTOMERS_META_KEY, JSON.stringify(meta));
+      
+      await AsyncStorage.removeItem(CUSTOMERS_KEY);
     } catch (error) {
-      console.error('Error loading customers:', error);
+      console.error('Error loading customers from server:', error);
+      try {
+        const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            const activeCustomers = parsed.filter((customer: Customer) => customer.deleted !== true);
+            setCustomers(activeCustomers);
+            console.log('[CustomerContext] Loaded', activeCustomers.length, 'customers from legacy cache');
+          }
+        }
+      } catch (cacheError) {
+        console.error('Error loading from cache:', cacheError);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     loadCustomers();
@@ -78,14 +84,8 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
   const saveCustomers = useCallback(async (newCustomers: Customer[]) => {
     try {
-      const allCustomers = await AsyncStorage.getItem(CUSTOMERS_KEY);
-      const existingCustomers = allCustomers ? JSON.parse(allCustomers) : [];
-      const deletedCustomers = existingCustomers.filter((c: Customer) => c.deleted === true);
-      const customersWithDeleted = [...newCustomers, ...deletedCustomers];
-      
-      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customersWithDeleted));
       setCustomers(newCustomers);
-      console.log('saveCustomers: Saved locally, will sync on next interval');
+      console.log('saveCustomers: Updated state with', newCustomers.length, 'customers');
     } catch (error) {
       console.error('Error saving customers:', error);
     }
@@ -112,12 +112,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     console.log('[CustomerContext] importCustomers: Starting import of', customerDataList.length, 'customers');
     console.log('[CustomerContext] importCustomers: Current customers count before import:', customers.length);
 
-    const allCustomers = await AsyncStorage.getItem(CUSTOMERS_KEY);
-    const existingCustomers: Customer[] = allCustomers ? JSON.parse(allCustomers) : [];
-    const activeExisting = existingCustomers.filter((c: Customer) => c.deleted !== true);
-    
-    console.log('[CustomerContext] importCustomers: Active existing customers from storage:', activeExisting.length);
-
     const now = Date.now();
     const newCustomers: Customer[] = customerDataList.map((customerData, index) => ({
       ...customerData,
@@ -127,11 +121,18 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       createdBy: currentUser.id,
     }));
 
-    const updated = [...activeExisting, ...newCustomers];
+    const updated = [...customers, ...newCustomers];
     console.log('[CustomerContext] importCustomers: Total customers after merge:', updated.length);
     
-    await saveCustomers(updated);
-    console.log('[CustomerContext] importCustomers: Save complete, state should be updated');
+    console.log('[CustomerContext] importCustomers: Syncing to server...');
+    try {
+      const synced = await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
+      setCustomers(synced.filter(c => c.deleted !== true));
+      console.log('[CustomerContext] importCustomers: Synced to server successfully');
+    } catch (error) {
+      console.error('[CustomerContext] importCustomers: Failed to sync to server:', error);
+      await saveCustomers(updated);
+    }
     
     return newCustomers.length;
   }, [currentUser, customers, saveCustomers]);
@@ -156,14 +157,14 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     console.log('CustomerContext deleteCustomer: Customers after marking deleted', activeCustomers.length);
     
     try {
-      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(updated));
       setCustomers(activeCustomers);
-      console.log('CustomerContext deleteCustomer: Saved locally, will sync on next interval');
+      await saveToServer(updated, { userId: currentUser?.id || '', dataType: 'customers' });
+      console.log('CustomerContext deleteCustomer: Synced to server');
     } catch (error) {
       console.error('CustomerContext deleteCustomer: Failed', error);
       throw error;
     }
-  }, [customers]);
+  }, [customers, currentUser]);
 
   const searchCustomers = useCallback((query: string): Customer[] => {
     if (!query.trim()) return customers;
@@ -193,15 +194,12 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       if (!silent) {
         setIsSyncing(true);
       }
-      const allCustomers = await AsyncStorage.getItem(CUSTOMERS_KEY);
-      const customersToSync: Customer[] = allCustomers ? JSON.parse(allCustomers) : customers;
       
       console.log('[CustomerContext] Starting sync for customers...');
       const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
-      const merged = mergeData(customersToSync, remoteData);
+      const merged = mergeData(customers, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'customers' });
       
-      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(synced));
       const activeCustomers = synced.filter(customer => customer.deleted !== true);
       setCustomers(activeCustomers);
       setLastSyncTime(Date.now());
@@ -236,6 +234,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const clearAllCustomers = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(CUSTOMERS_KEY);
+      await AsyncStorage.removeItem(CUSTOMERS_META_KEY);
       setCustomers([]);
     } catch (error) {
       console.error('Failed to clear customers:', error);
