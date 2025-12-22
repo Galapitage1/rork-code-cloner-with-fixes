@@ -9,13 +9,15 @@ export async function exportCustomersToExcel(customers: Customer[]): Promise<voi
     const XLSX = await import('xlsx');
 
     const worksheetData = [
-      ['Name', 'Email', 'Phone', 'Company', 'Address', 'Notes', 'Created At', 'Last Updated'],
+      ['Name', 'Email', 'Phone', 'Company', 'Address', 'Points', 'ID Number', 'Notes', 'Created At', 'Last Updated'],
       ...customers.map((customer) => [
         customer.name,
         customer.email || '',
         customer.phone || '',
         customer.company || '',
         customer.address || '',
+        customer.points || 0,
+        customer.idNumber || '',
         customer.notes || '',
         new Date(customer.createdAt).toLocaleDateString(),
         new Date(customer.updatedAt).toLocaleDateString(),
@@ -30,6 +32,8 @@ export async function exportCustomersToExcel(customers: Customer[]): Promise<voi
       { wch: 15 },
       { wch: 20 },
       { wch: 30 },
+      { wch: 10 },
+      { wch: 20 },
       { wch: 30 },
       { wch: 15 },
       { wch: 15 },

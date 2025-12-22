@@ -28,6 +28,7 @@ import {
   CameraOff,
   Upload,
   Award,
+  CreditCard,
 } from 'lucide-react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Colors from '@/constants/colors';
@@ -158,6 +159,7 @@ export default function CustomersScreen() {
       const companyIndex = headers.findIndex(h => h.includes('company'));
       const addressIndex = headers.findIndex(h => h.includes('address'));
       const pointsIndex = headers.findIndex(h => h.includes('point'));
+      const idNumberIndex = headers.findIndex(h => h.includes('id') && h.includes('number'));
 
       if (nameIndex === -1) {
         Alert.alert('Error', 'CSV must contain a "Name" column');
@@ -179,6 +181,7 @@ export default function CustomersScreen() {
           company: companyIndex !== -1 ? values[companyIndex] : undefined,
           address: addressIndex !== -1 ? values[addressIndex] : undefined,
           points: pointsIndex !== -1 && values[pointsIndex] ? parseFloat(values[pointsIndex]) || 0 : 0,
+          idNumber: idNumberIndex !== -1 ? values[idNumberIndex] : undefined,
         };
 
         await addCustomer(customerData);
@@ -367,6 +370,7 @@ function CustomerFormModal({ visible, onClose, onSave, initialData }: CustomerFo
   const [address, setAddress] = useState(initialData?.address || '');
   const [notes, setNotes] = useState(initialData?.notes || '');
   const [points, setPoints] = useState(initialData?.points?.toString() || '0');
+  const [idNumber, setIdNumber] = useState(initialData?.idNumber || '');
 
   useEffect(() => {
     if (initialData) {
@@ -377,6 +381,7 @@ function CustomerFormModal({ visible, onClose, onSave, initialData }: CustomerFo
       setAddress(initialData.address || '');
       setNotes(initialData.notes || '');
       setPoints(initialData.points?.toString() || '0');
+      setIdNumber(initialData.idNumber || '');
     }
   }, [initialData]);
 
@@ -396,6 +401,7 @@ function CustomerFormModal({ visible, onClose, onSave, initialData }: CustomerFo
       address: address.trim() || undefined,
       notes: notes.trim() || undefined,
       points: pointsValue,
+      idNumber: idNumber.trim() || undefined,
     });
 
     setName('');
@@ -405,6 +411,7 @@ function CustomerFormModal({ visible, onClose, onSave, initialData }: CustomerFo
     setAddress('');
     setNotes('');
     setPoints('0');
+    setIdNumber('');
     onClose();
   };
 
@@ -515,6 +522,20 @@ function CustomerFormModal({ visible, onClose, onSave, initialData }: CustomerFo
 
           <View style={styles.formGroup}>
             <View style={styles.inputHeader}>
+              <CreditCard size={18} color={Colors.light.icon} />
+              <Text style={styles.inputLabel}>ID Number</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="Customer ID number"
+              value={idNumber}
+              onChangeText={setIdNumber}
+              placeholderTextColor={Colors.light.icon}
+            />
+          </View>
+
+          <View style={styles.formGroup}>
+            <View style={styles.inputHeader}>
               <FileText size={18} color={Colors.light.icon} />
               <Text style={styles.inputLabel}>Notes</Text>
             </View>
@@ -552,7 +573,7 @@ function ScanCardModal({ visible, onClose, onSave }: ScanCardModalProps) {
       console.log('Requesting camera permission...');
       requestPermission();
     }
-  }, [visible]);
+  }, [visible, permission, requestPermission]);
 
   const handleStartCamera = async () => {
     if (!permission?.granted) {

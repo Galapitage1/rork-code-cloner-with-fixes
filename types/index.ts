@@ -122,6 +122,7 @@ export interface Customer {
   address?: string;
   notes?: string;
   points?: number;
+  idNumber?: string;
   createdAt: number;
   updatedAt: number;
   createdBy: string;
