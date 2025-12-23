@@ -151,7 +151,7 @@ function LiveInventoryScreen() {
     });
 
     // Group 1: Products WITH unit conversions (General Inventory)
-    const conversionPairs: Array<{ wholeId: string; slicesId: string; factor: number }> = [];
+    const conversionPairs: { wholeId: string; slicesId: string; factor: number }[] = [];
     productConversions.forEach(c => {
       if (!conversionPairs.some(p => p.wholeId === c.fromProductId)) {
         conversionPairs.push({
@@ -297,11 +297,6 @@ function LiveInventoryScreen() {
         // STEP 4: Sold/Transferred
         let soldWhole = 0;
         let soldSlices = 0;
-        
-        // STEP 4.1: Check if this product is a raw material that should show consumption from menu sales
-        // If a menu product has "Calculate raw materials based on sales" enabled, show the raw material usage here
-        let rawMaterialUsageWhole = 0;
-        let rawMaterialUsageSlices = 0;
 
         if (outlet.outletType === 'production') {
           // Production: Get approved OUT requests FROM this outlet
@@ -941,8 +936,6 @@ function LiveInventoryScreen() {
         alert('No data to export');
         return;
       }
-
-      const outlet = outlets.find(o => o.name === selectedOutlet);
       const workbook = XLSX.utils.book_new();
       
       const dateRangeStart = getDateRange(selectedDate, dateRange)[0];
