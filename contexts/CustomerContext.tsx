@@ -15,6 +15,7 @@ type CustomerContextType = {
   importCustomers: (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => Promise<number>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<void>;
   deleteCustomer: (id: string) => Promise<void>;
+  deleteDuplicatesByPhone: () => Promise<{ duplicatesFound: number; duplicatesDeleted: number }>;
   searchCustomers: (query: string) => Customer[];
   syncCustomers: (silent?: boolean) => Promise<void>;
   clearAllCustomers: () => Promise<void>;
@@ -231,6 +232,61 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     };
   }, [currentUser, syncCustomers]);
 
+  const deleteDuplicatesByPhone = useCallback(async () => {
+    if (!currentUser) {
+      return { duplicatesFound: 0, duplicatesDeleted: 0 };
+    }
+
+    console.log('[CustomerContext] Finding duplicates by phone number...');
+    
+    const phoneMap = new Map<string, Customer[]>();
+    
+    customers.forEach(customer => {
+      if (customer.phone && customer.phone.trim()) {
+        const normalizedPhone = customer.phone.trim();
+        if (!phoneMap.has(normalizedPhone)) {
+          phoneMap.set(normalizedPhone, []);
+        }
+        phoneMap.get(normalizedPhone)!.push(customer);
+      }
+    });
+
+    const duplicateGroups = Array.from(phoneMap.values()).filter(group => group.length > 1);
+    const duplicatesFound = duplicateGroups.reduce((sum, group) => sum + group.length - 1, 0);
+    
+    console.log('[CustomerContext] Found', duplicatesFound, 'duplicates across', duplicateGroups.length, 'phone numbers');
+
+    if (duplicatesFound === 0) {
+      return { duplicatesFound: 0, duplicatesDeleted: 0 };
+    }
+
+    const idsToDelete = new Set<string>();
+    duplicateGroups.forEach(group => {
+      const sorted = [...group].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      sorted.slice(1).forEach(customer => idsToDelete.add(customer.id));
+    });
+
+    const updated = customers.map(customer =>
+      idsToDelete.has(customer.id)
+        ? { ...customer, deleted: true, updatedAt: Date.now() }
+        : customer
+    );
+
+    const activeCustomers = updated.filter(c => c.deleted !== true);
+    console.log('[CustomerContext] Deleting', idsToDelete.size, 'duplicate customers');
+    console.log('[CustomerContext] Remaining customers:', activeCustomers.length);
+
+    try {
+      setCustomers(activeCustomers);
+      await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
+      console.log('[CustomerContext] Duplicates deleted and synced to server');
+      return { duplicatesFound, duplicatesDeleted: idsToDelete.size };
+    } catch (error) {
+      console.error('[CustomerContext] Failed to delete duplicates:', error);
+      throw error;
+    }
+  }, [customers, currentUser]);
+
   const clearAllCustomers = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(CUSTOMERS_KEY);
@@ -251,10 +307,11 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     importCustomers,
     updateCustomer,
     deleteCustomer,
+    deleteDuplicatesByPhone,
     searchCustomers,
     syncCustomers,
     clearAllCustomers,
-  }), [customers, isLoading, isSyncing, lastSyncTime, addCustomer, importCustomers, updateCustomer, deleteCustomer, searchCustomers, syncCustomers, clearAllCustomers]);
+  }), [customers, isLoading, isSyncing, lastSyncTime, addCustomer, importCustomers, updateCustomer, deleteCustomer, deleteDuplicatesByPhone, searchCustomers, syncCustomers, clearAllCustomers]);
 
   return <CustomerCtx.Provider value={value}>{children}</CustomerCtx.Provider>;
 }

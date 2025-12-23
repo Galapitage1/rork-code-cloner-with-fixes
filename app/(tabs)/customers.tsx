@@ -29,6 +29,7 @@ import {
   Upload,
   Award,
   CreditCard,
+  UserMinus,
 } from 'lucide-react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Colors from '@/constants/colors';
@@ -43,7 +44,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 
 export default function CustomersScreen() {
-  const { customers, addCustomer, importCustomers, updateCustomer, deleteCustomer, searchCustomers } = useCustomers();
+  const { customers, addCustomer, importCustomers, updateCustomer, deleteCustomer, deleteDuplicatesByPhone, searchCustomers } = useCustomers();
   const { isAdmin, isSuperAdmin } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -53,6 +54,9 @@ export default function CustomersScreen() {
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [duplicateConfirmVisible, setDuplicateConfirmVisible] = useState(false);
+  const [duplicateStats, setDuplicateStats] = useState<{ count: number } | null>(null);
+  const [isDeletingDuplicates, setIsDeletingDuplicates] = useState(false);
 
   const displayedCustomers = searchQuery ? searchCustomers(searchQuery) : customers;
 
@@ -110,6 +114,53 @@ export default function CustomersScreen() {
     } catch (error) {
       console.error('Export error:', error);
       Alert.alert('Error', 'Failed to export customers');
+    }
+  };
+
+  const handleDeleteDuplicates = async () => {
+    if (Platform.OS !== 'web') {
+      Haptics.selectionAsync();
+    }
+
+    const phoneMap = new Map<string, Customer[]>();
+    customers.forEach(customer => {
+      if (customer.phone && customer.phone.trim()) {
+        const normalizedPhone = customer.phone.trim();
+        if (!phoneMap.has(normalizedPhone)) {
+          phoneMap.set(normalizedPhone, []);
+        }
+        phoneMap.get(normalizedPhone)!.push(customer);
+      }
+    });
+
+    const duplicateCount = Array.from(phoneMap.values())
+      .filter(group => group.length > 1)
+      .reduce((sum, group) => sum + group.length - 1, 0);
+
+    if (duplicateCount === 0) {
+      Alert.alert('No Duplicates', 'No duplicate phone numbers found.');
+      return;
+    }
+
+    setDuplicateStats({ count: duplicateCount });
+    setDuplicateConfirmVisible(true);
+  };
+
+  const confirmDeleteDuplicates = async () => {
+    setIsDeletingDuplicates(true);
+    try {
+      const result = await deleteDuplicatesByPhone();
+      setDuplicateConfirmVisible(false);
+      setDuplicateStats(null);
+      Alert.alert(
+        'Success', 
+        `Deleted ${result.duplicatesDeleted} duplicate customer(s). Kept the oldest entry for each phone number.`
+      );
+    } catch (error) {
+      console.error('Error deleting duplicates:', error);
+      Alert.alert('Error', 'Failed to delete duplicates');
+    } finally {
+      setIsDeletingDuplicates(false);
     }
   };
 
@@ -304,6 +355,11 @@ export default function CustomersScreen() {
           style={styles.searchBar}
           inputStyle={styles.searchInput}
         />
+        {(isAdmin || isSuperAdmin) && (
+          <TouchableOpacity style={styles.actionButton} onPress={handleDeleteDuplicates}>
+            <UserMinus size={20} color="#FF3B30" />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.actionButton} onPress={handleImport} disabled={isImporting}>
           {isImporting ? (
             <ActivityIndicator size="small" color={Colors.light.tint} />
@@ -391,6 +447,20 @@ export default function CustomersScreen() {
           setCustomerToDelete(null);
         }}
         onConfirm={confirmDelete}
+      />
+
+      <ConfirmDialog
+        visible={duplicateConfirmVisible}
+        title="Delete Duplicate Customers"
+        message={`Found ${duplicateStats?.count || 0} duplicate customer(s) with the same phone number.\n\nThis will keep the oldest entry for each phone number and delete the rest.\n\nThe changes will be synced to the server immediately to prevent old data from returning.\n\nContinue?`}
+        confirmText="Delete Duplicates"
+        destructive={true}
+        loading={isDeletingDuplicates}
+        onCancel={() => {
+          setDuplicateConfirmVisible(false);
+          setDuplicateStats(null);
+        }}
+        onConfirm={confirmDeleteDuplicates}
       />
     </View>
   );
