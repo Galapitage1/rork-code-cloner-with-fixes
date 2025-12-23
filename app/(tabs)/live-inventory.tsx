@@ -171,29 +171,38 @@ function LiveInventoryScreen() {
 
       const records: DailyInventoryRecord[] = [];
 
-      dates.forEach(date => {
-        // STEP 1: Opening = Current day's LATEST USER STOCK CHECK openingStock field (if set)
-        // This is set by manual stock checks on the SELECTED DATE
-        const todayChecksForOpening = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
-          .sort((a, b) => b.timestamp - a.timestamp);
-        
+      dates.forEach((date, dateIndex) => {
+        // STEP 1: Opening stock logic
+        // - For Day 1 (first date): Use openingStock from stock check if available
+        // - For Day 2+: Use previous day's closing (current) stock
         let openingWhole = 0;
         let openingSlices = 0;
 
-        if (todayChecksForOpening.length > 0) {
-          const latestTodayCheck = todayChecksForOpening[0];
-          const wholeCount = latestTodayCheck.counts.find(c => c.productId === pair.wholeId);
-          const slicesCount = latestTodayCheck.counts.find(c => c.productId === pair.slicesId);
+        if (dateIndex === 0) {
+          // First day: Use openingStock from stock check
+          const todayChecksForOpening = stockChecks
+            .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+            .sort((a, b) => b.timestamp - a.timestamp);
           
-          // Use openingStock if it's set (from stock check submission on THIS date)
-          if (wholeCount && wholeCount.openingStock !== undefined) {
-            openingWhole = wholeCount.openingStock;
+          if (todayChecksForOpening.length > 0) {
+            const latestTodayCheck = todayChecksForOpening[0];
+            const wholeCount = latestTodayCheck.counts.find(c => c.productId === pair.wholeId);
+            const slicesCount = latestTodayCheck.counts.find(c => c.productId === pair.slicesId);
+            
+            if (wholeCount && wholeCount.openingStock !== undefined) {
+              openingWhole = wholeCount.openingStock;
+            }
+            
+            if (slicesCount && slicesCount.openingStock !== undefined) {
+              openingSlices = slicesCount.openingStock;
+            }
           }
-          
-          if (slicesCount && slicesCount.openingStock !== undefined) {
-            openingSlices = slicesCount.openingStock;
-          }
+        } else if (records.length > 0) {
+          // Subsequent days: Use previous day's closing stock
+          const previousRecord = records[records.length - 1];
+          openingWhole = previousRecord.currentWhole;
+          openingSlices = previousRecord.currentSlices;
+          console.log(`Product ${wholeProduct.name} on ${date} - Opening from previous day's closing: ${openingWhole}W/${openingSlices}S`);
         }
 
         // STEP 2: Received calculation depends on outlet type
@@ -573,22 +582,31 @@ function LiveInventoryScreen() {
 
       const records: DailyInventoryRecord[] = [];
 
-      dates.forEach(date => {
-        // Opening = Current day's LATEST USER STOCK CHECK openingStock field (if set)
-        // This is set by manual stock checks on the SELECTED DATE
-        const todayChecksForOpening = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
-          .sort((a, b) => b.timestamp - a.timestamp);
-        
+      dates.forEach((date, dateIndex) => {
+        // Opening stock logic
+        // - For Day 1 (first date): Use openingStock from stock check if available
+        // - For Day 2+: Use previous day's closing (current) stock
         let opening = 0;
-        if (todayChecksForOpening.length > 0) {
-          const latestTodayCheck = todayChecksForOpening[0];
-          const count = latestTodayCheck.counts.find(c => c.productId === product.id);
+        
+        if (dateIndex === 0) {
+          // First day: Use openingStock from stock check
+          const todayChecksForOpening = stockChecks
+            .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+            .sort((a, b) => b.timestamp - a.timestamp);
           
-          // Use openingStock if it's set (from stock check submission on THIS date)
-          if (count && count.openingStock !== undefined) {
-            opening = count.openingStock;
+          if (todayChecksForOpening.length > 0) {
+            const latestTodayCheck = todayChecksForOpening[0];
+            const count = latestTodayCheck.counts.find(c => c.productId === product.id);
+            
+            if (count && count.openingStock !== undefined) {
+              opening = count.openingStock;
+            }
           }
+        } else if (records.length > 0) {
+          // Subsequent days: Use previous day's closing stock
+          const previousRecord = records[records.length - 1];
+          opening = previousRecord.currentWhole;
+          console.log(`Product ${product.name} on ${date} - Opening from previous day's closing: ${opening}`);
         }
 
         // Received from approved requests
