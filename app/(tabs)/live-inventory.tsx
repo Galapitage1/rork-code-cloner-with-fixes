@@ -173,36 +173,39 @@ function LiveInventoryScreen() {
 
       dates.forEach((date, dateIndex) => {
         // STEP 1: Opening stock logic
-        // - For Day 1 (first date): Use openingStock from stock check if available
-        // - For Day 2+: Use previous day's closing (current) stock
+        // NEW BEHAVIOR: Opening stock for ANY day = Previous calendar day's closing (current) stock
+        // This creates continuous flow: Day X Closing → Day X+1 Opening
         let openingWhole = 0;
         let openingSlices = 0;
 
-        if (dateIndex === 0) {
-          // First day: Use openingStock from stock check
-          const todayChecksForOpening = stockChecks
-            .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
-            .sort((a, b) => b.timestamp - a.timestamp);
+        // Get previous calendar day
+        const currentDate = new Date(date);
+        currentDate.setDate(currentDate.getDate() - 1);
+        const previousCalendarDate = currentDate.toISOString().split('T')[0];
+
+        // Find latest stock check from previous calendar day
+        const previousDayChecks = stockChecks
+          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .sort((a, b) => b.timestamp - a.timestamp);
+        
+        if (previousDayChecks.length > 0) {
+          // Use previous day's closing stock (quantity field) as today's opening
+          const latestPreviousDayCheck = previousDayChecks[0];
+          const wholeCount = latestPreviousDayCheck.counts.find(c => c.productId === pair.wholeId);
+          const slicesCount = latestPreviousDayCheck.counts.find(c => c.productId === pair.slicesId);
           
-          if (todayChecksForOpening.length > 0) {
-            const latestTodayCheck = todayChecksForOpening[0];
-            const wholeCount = latestTodayCheck.counts.find(c => c.productId === pair.wholeId);
-            const slicesCount = latestTodayCheck.counts.find(c => c.productId === pair.slicesId);
-            
-            if (wholeCount && wholeCount.openingStock !== undefined) {
-              openingWhole = wholeCount.openingStock;
-            }
-            
-            if (slicesCount && slicesCount.openingStock !== undefined) {
-              openingSlices = slicesCount.openingStock;
-            }
+          if (wholeCount) {
+            openingWhole = wholeCount.quantity || 0;
           }
-        } else if (records.length > 0) {
-          // Subsequent days: Use previous day's closing stock
-          const previousRecord = records[records.length - 1];
-          openingWhole = previousRecord.currentWhole;
-          openingSlices = previousRecord.currentSlices;
-          console.log(`Product ${wholeProduct.name} on ${date} - Opening from previous day's closing: ${openingWhole}W/${openingSlices}S`);
+          
+          if (slicesCount) {
+            openingSlices = slicesCount.quantity || 0;
+          }
+          
+          console.log(`Product ${wholeProduct.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${openingWhole}W/${openingSlices}S`);
+        } else {
+          // No previous day stock check - opening is 0
+          console.log(`Product ${wholeProduct.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
         }
 
         // STEP 2: Received calculation depends on outlet type
@@ -584,29 +587,33 @@ function LiveInventoryScreen() {
 
       dates.forEach((date, dateIndex) => {
         // Opening stock logic
-        // - For Day 1 (first date): Use openingStock from stock check if available
-        // - For Day 2+: Use previous day's closing (current) stock
+        // NEW BEHAVIOR: Opening stock for ANY day = Previous calendar day's closing (current) stock
+        // This creates continuous flow: Day X Closing → Day X+1 Opening
         let opening = 0;
         
-        if (dateIndex === 0) {
-          // First day: Use openingStock from stock check
-          const todayChecksForOpening = stockChecks
-            .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
-            .sort((a, b) => b.timestamp - a.timestamp);
+        // Get previous calendar day
+        const currentDate = new Date(date);
+        currentDate.setDate(currentDate.getDate() - 1);
+        const previousCalendarDate = currentDate.toISOString().split('T')[0];
+
+        // Find latest stock check from previous calendar day
+        const previousDayChecks = stockChecks
+          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .sort((a, b) => b.timestamp - a.timestamp);
+        
+        if (previousDayChecks.length > 0) {
+          // Use previous day's closing stock (quantity field) as today's opening
+          const latestPreviousDayCheck = previousDayChecks[0];
+          const count = latestPreviousDayCheck.counts.find(c => c.productId === product.id);
           
-          if (todayChecksForOpening.length > 0) {
-            const latestTodayCheck = todayChecksForOpening[0];
-            const count = latestTodayCheck.counts.find(c => c.productId === product.id);
-            
-            if (count && count.openingStock !== undefined) {
-              opening = count.openingStock;
-            }
+          if (count) {
+            opening = count.quantity || 0;
           }
-        } else if (records.length > 0) {
-          // Subsequent days: Use previous day's closing stock
-          const previousRecord = records[records.length - 1];
-          opening = previousRecord.currentWhole;
-          console.log(`Product ${product.name} on ${date} - Opening from previous day's closing: ${opening}`);
+          
+          console.log(`Product ${product.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${opening}`);
+        } else {
+          // No previous day stock check - opening is 0
+          console.log(`Product ${product.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
         }
 
         // Received from approved requests
