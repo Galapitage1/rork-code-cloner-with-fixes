@@ -882,8 +882,21 @@ export default function CampaignsScreen() {
             }),
           });
 
-          const result = await response.json();
-          console.log('[WhatsApp CAMPAIGN] Backend response:', result);
+          console.log('[WhatsApp CAMPAIGN] Response status:', response.status);
+          console.log('[WhatsApp CAMPAIGN] Response content-type:', response.headers.get('content-type'));
+          
+          const responseText = await response.text();
+          console.log('[WhatsApp CAMPAIGN] Response text (first 500 chars):', responseText.substring(0, 500));
+          
+          let result;
+          try {
+            result = JSON.parse(responseText);
+            console.log('[WhatsApp CAMPAIGN] Backend response:', result);
+          } catch (parseError) {
+            console.error('[WhatsApp CAMPAIGN] Failed to parse response as JSON:', parseError);
+            console.error('[WhatsApp CAMPAIGN] Response was:', responseText.substring(0, 1000));
+            throw new Error('Server returned invalid response. Please check if the backend is working correctly. Response: ' + responseText.substring(0, 200));
+          }
 
           if (!response.ok || !result.success) {
             throw new Error(result.error || 'Failed to send WhatsApp messages');

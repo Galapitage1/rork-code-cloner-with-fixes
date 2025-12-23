@@ -1,8 +1,9 @@
 <?php
-error_reporting(0);
-ini_set('display_errors', '0');
-set_time_limit(0);
-ini_set('max_execution_time', '0');
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+ini_set('log_errors', '1');
+set_time_limit(300);
+ini_set('max_execution_time', '300');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -16,9 +17,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 function respond($data, $status = 200) {
   http_response_code($status);
+  header('Content-Type: application/json; charset=utf-8');
   echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+  flush();
   exit;
 }
+
+function logError($message) {
+  error_log('[WhatsApp Send] ' . $message);
+}
+
+set_error_handler(function($errno, $errstr, $errfile, $errline) {
+  logError("PHP Error [$errno]: $errstr in $errfile:$errline");
+  respond(['success' => false, 'error' => 'Server error: ' . $errstr], 500);
+});
+
+set_exception_handler(function($e) {
+  logError('Uncaught exception: ' . $e->getMessage());
+  respond(['success' => false, 'error' => 'Server exception: ' . $e->getMessage()], 500);
+});
+
+register_shutdown_function(function() {
+  $error = error_get_last();
+  if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+    logError('Fatal error: ' . json_encode($error));
+    respond(['success' => false, 'error' => 'Server fatal error: ' . $error['message']], 500);
+  }
+});
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   respond(['success' => false, 'error' => 'Method not allowed'], 405);
@@ -63,13 +88,24 @@ $results = [
   'success' => 0,
   'failed' => 0,
   'errors' => [],
+  'skipped' => 0,
 ];
 
+logError('Starting to send to ' . count($recipients) . ' recipients');
+$batchStartTime = time();
+
 foreach ($recipients as $index => $recipient) {
+  if (time() - $batchStartTime > 280) {
+    logError('Approaching timeout limit, stopping at recipient ' . ($index + 1));
+    $results['errors'][] = 'Stopped early to avoid timeout. Sent to ' . ($index) . ' recipients.';
+    break;
+  }
   try {
     if (!isset($recipient['phone']) || empty($recipient['phone'])) {
-      $results['failed']++;
-      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': No phone number';
+      $results['skipped']++;
+      if (count($results['errors']) < 50) {
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': No phone number';
+      }
       continue;
     }
 
@@ -77,8 +113,10 @@ foreach ($recipients as $index => $recipient) {
     $phone = preg_replace('/[^0-9+]/', '', $phone);
     
     if (empty($phone)) {
-      $results['failed']++;
-      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
+      $results['skipped']++;
+      if (count($results['errors']) < 50) {
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
+      }
       continue;
     }
     
@@ -91,8 +129,10 @@ foreach ($recipients as $index => $recipient) {
     }
     
     if (strlen($phone) < 10) {
-      $results['failed']++;
-      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
+      $results['skipped']++;
+      if (count($results['errors']) < 50) {
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
+      }
       continue;
     }
 
@@ -146,7 +186,10 @@ foreach ($recipients as $index => $recipient) {
 
     if ($curlError) {
       $results['failed']++;
-      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$curlError}";
+      if (count($results['errors']) < 50) {
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$curlError}";
+      }
+      logError("CURL error for {$recipient['name']}: {$curlError}");
       continue;
     }
 
@@ -155,9 +198,15 @@ foreach ($recipients as $index => $recipient) {
     if ($httpCode !== 200 || isset($data['error'])) {
       $errorMsg = isset($data['error']['message']) ? $data['error']['message'] : 'Failed to send message';
       $results['failed']++;
-      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg}";
+      if (count($results['errors']) < 50) {
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg}";
+      }
+      logError("Failed for {$recipient['name']}: {$errorMsg}");
     } else {
       $results['success']++;
+      if (($index + 1) % 50 === 0) {
+        logError("Progress: Successfully sent to {$results['success']} recipients");
+      }
     }
 
     if (($index + 1) % 100 === 0) {
@@ -167,9 +216,18 @@ foreach ($recipients as $index => $recipient) {
     }
   } catch (Exception $e) {
     $results['failed']++;
-    $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": Unexpected error - " . $e->getMessage();
+    if (count($results['errors']) < 50) {
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": Unexpected error - " . $e->getMessage();
+    }
+    logError("Exception for {$recipient['name']}: " . $e->getMessage());
     continue;
   }
+}
+
+logError('Finished sending. Success: ' . $results['success'] . ', Failed: ' . $results['failed'] . ', Skipped: ' . $results['skipped']);
+
+if (count($results['errors']) >= 50) {
+  $results['errors'][] = '... and more errors (showing first 50)';
 }
 
 respond([
