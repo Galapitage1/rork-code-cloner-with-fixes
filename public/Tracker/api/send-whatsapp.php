@@ -1,6 +1,8 @@
 <?php
 error_reporting(0);
 ini_set('display_errors', '0');
+set_time_limit(0);
+ini_set('max_execution_time', '0');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -63,88 +65,111 @@ $results = [
   'errors' => [],
 ];
 
-foreach ($recipients as $recipient) {
-  if (!isset($recipient['phone']) || empty($recipient['phone'])) {
-    $results['failed']++;
-    $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': No phone number';
-    continue;
-  }
+foreach ($recipients as $index => $recipient) {
+  try {
+    if (!isset($recipient['phone']) || empty($recipient['phone'])) {
+      $results['failed']++;
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': No phone number';
+      continue;
+    }
 
-  $phone = trim($recipient['phone']);
-  $phone = preg_replace('/[^0-9+]/', '', $phone);
-  
-  if (substr($phone, 0, 1) === '0') {
-    $phone = '94' . substr($phone, 1);
-  } elseif (substr($phone, 0, 1) === '+') {
-    $phone = substr($phone, 1);
-  } elseif (substr($phone, 0, 2) !== '94') {
-    $phone = '94' . $phone;
-  }
-
-  $url = "https://graph.facebook.com/v21.0/{$phoneNumberId}/messages";
-  
-  if (!empty($mediaUrl)) {
-    $messageBody = [
-      'messaging_product' => 'whatsapp',
-      'recipient_type' => 'individual',
-      'to' => $phone,
-      'type' => $mediaType,
-    ];
+    $phone = trim($recipient['phone']);
+    $phone = preg_replace('/[^0-9+]/', '', $phone);
     
-    $messageBody[$mediaType] = ['link' => $mediaUrl];
-    
-    if (!empty($caption) && in_array($mediaType, ['image', 'video', 'document'])) {
-      $messageBody[$mediaType]['caption'] = $caption;
+    if (empty($phone)) {
+      $results['failed']++;
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
+      continue;
     }
     
-    $payload = json_encode($messageBody);
-  } else {
-    $payload = json_encode([
-      'messaging_product' => 'whatsapp',
-      'recipient_type' => 'individual',
-      'to' => $phone,
-      'type' => 'text',
-      'text' => [
-        'preview_url' => false,
-        'body' => $message,
-      ],
+    if (substr($phone, 0, 1) === '0') {
+      $phone = '94' . substr($phone, 1);
+    } elseif (substr($phone, 0, 1) === '+') {
+      $phone = substr($phone, 1);
+    } elseif (substr($phone, 0, 2) !== '94') {
+      $phone = '94' . $phone;
+    }
+    
+    if (strlen($phone) < 10) {
+      $results['failed']++;
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
+      continue;
+    }
+
+    $url = "https://graph.facebook.com/v21.0/{$phoneNumberId}/messages";
+    
+    if (!empty($mediaUrl)) {
+      $messageBody = [
+        'messaging_product' => 'whatsapp',
+        'recipient_type' => 'individual',
+        'to' => $phone,
+        'type' => $mediaType,
+      ];
+      
+      $messageBody[$mediaType] = ['link' => $mediaUrl];
+      
+      if (!empty($caption) && in_array($mediaType, ['image', 'video', 'document'])) {
+        $messageBody[$mediaType]['caption'] = $caption;
+      }
+      
+      $payload = json_encode($messageBody);
+    } else {
+      $payload = json_encode([
+        'messaging_product' => 'whatsapp',
+        'recipient_type' => 'individual',
+        'to' => $phone,
+        'type' => 'text',
+        'text' => [
+          'preview_url' => false,
+          'body' => $message,
+        ],
+      ]);
+    }
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+      "Authorization: Bearer {$accessToken}",
+      'Content-Type: application/json',
     ]);
-  }
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
 
-  $ch = curl_init();
-  curl_setopt($ch, CURLOPT_URL, $url);
-  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-  curl_setopt($ch, CURLOPT_POST, true);
-  curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-  curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    "Authorization: Bearer {$accessToken}",
-    'Content-Type: application/json',
-  ]);
-  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-  curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
 
-  $response = curl_exec($ch);
-  $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-  $curlError = curl_error($ch);
-  curl_close($ch);
+    if ($curlError) {
+      $results['failed']++;
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$curlError}";
+      continue;
+    }
 
-  if ($curlError) {
+    $data = json_decode($response, true);
+
+    if ($httpCode !== 200 || isset($data['error'])) {
+      $errorMsg = isset($data['error']['message']) ? $data['error']['message'] : 'Failed to send message';
+      $results['failed']++;
+      $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg}";
+    } else {
+      $results['success']++;
+    }
+
+    if (($index + 1) % 100 === 0) {
+      usleep(2000000);
+    } else {
+      usleep(500000);
+    }
+  } catch (Exception $e) {
     $results['failed']++;
-    $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$curlError}";
+    $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": Unexpected error - " . $e->getMessage();
     continue;
   }
-
-  $data = json_decode($response, true);
-
-  if ($httpCode !== 200 || isset($data['error'])) {
-    $errorMsg = isset($data['error']['message']) ? $data['error']['message'] : 'Failed to send message';
-    $results['failed']++;
-    $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg}";
-  } else {
-    $results['success']++;
-  }
-
-  usleep(1000000);
 }
 
 respond([
