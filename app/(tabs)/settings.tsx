@@ -828,7 +828,7 @@ export default function SettingsScreen() {
 
               <TouchableOpacity
                 style={[styles.button, styles.secondaryButton]}
-                onPress={() => router.push('/moir')}
+                onPress={() => router.push('/moir' as any)}
               >
                 <UsersIcon size={20} color={Colors.light.tint} />
                 <Text style={[styles.buttonText, styles.secondaryButtonText]}>Open Moir</Text>
@@ -1020,7 +1020,7 @@ export default function SettingsScreen() {
 
               <TouchableOpacity
                 style={[styles.button, styles.primaryButton]}
-                onPress={() => router.push('/campaigns')}
+                onPress={() => router.push('/campaigns' as any)}
               >
                 <Mail size={20} color={Colors.light.card} />
                 <Text style={styles.buttonText}>Open Campaign Manager</Text>
@@ -1256,7 +1256,7 @@ export default function SettingsScreen() {
 
         <TouchableOpacity
           style={[styles.button, styles.secondaryButton]}
-          onPress={() => router.push('/products')}
+          onPress={() => router.push('/products' as any)}
         >
           <Package size={20} color={Colors.light.tint} />
           <Text style={[styles.buttonText, styles.secondaryButtonText]}>Products</Text>
@@ -1289,7 +1289,7 @@ export default function SettingsScreen() {
               testID: 'confirm-logout',
               onConfirm: async () => {
                 await logout();
-                router.replace('/login');
+                router.replace('/login' as any);
               },
             });
           }}
