@@ -164,6 +164,21 @@ function LiveInventoryScreen() {
       const wholeProduct = products.find(p => p.id === pair.wholeId);
       if (!wholeProduct || processedProducts.has(pair.wholeId)) return;
 
+      // Filter: Only show products based on their type and settings
+      // Menu/Kitchen products: must have showInStock enabled
+      // Raw materials: must have salesBasedRawCalc enabled
+      if (wholeProduct.type === 'menu' || wholeProduct.type === 'kitchen') {
+        if (!wholeProduct.showInStock) {
+          console.log(`Skipping menu/kitchen product ${wholeProduct.name} - showInStock is disabled`);
+          return;
+        }
+      } else if (wholeProduct.type === 'raw') {
+        if (!wholeProduct.salesBasedRawCalc) {
+          console.log(`Skipping raw material ${wholeProduct.name} - salesBasedRawCalc is disabled`);
+          return;
+        }
+      }
+
       processedProducts.add(pair.wholeId);
       processedProducts.add(pair.slicesId);
 
@@ -574,6 +589,22 @@ function LiveInventoryScreen() {
     // Group 2: Products WITHOUT unit conversions (Other Units)
     products.forEach(product => {
       if (processedProducts.has(product.id) || productsWithConversions.has(product.id)) return;
+
+      // Filter: Only show products based on their type and settings
+      // Menu/Kitchen products: must have showInStock enabled
+      // Raw materials: must have salesBasedRawCalc enabled
+      if (product.type === 'menu' || product.type === 'kitchen') {
+        if (!product.showInStock) {
+          console.log(`Skipping menu/kitchen product (no conversion) ${product.name} - showInStock is disabled`);
+          return;
+        }
+      } else if (product.type === 'raw') {
+        if (!product.salesBasedRawCalc) {
+          console.log(`Skipping raw material (no conversion) ${product.name} - salesBasedRawCalc is disabled`);
+          return;
+        }
+      }
+
       processedProducts.add(product.id);
 
       const records: DailyInventoryRecord[] = [];
