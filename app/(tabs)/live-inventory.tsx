@@ -166,16 +166,28 @@ function LiveInventoryScreen() {
 
       // Filter: Only show products based on their type and settings
       // Menu/Kitchen products: must have showInStock enabled
-      // Raw materials: must have salesBasedRawCalc enabled
+      // Raw materials: show if salesBasedRawCalc enabled OR appears in any reconciliation rawConsumption
       if (wholeProduct.type === 'menu' || wholeProduct.type === 'kitchen') {
         if (!wholeProduct.showInStock) {
           console.log(`Skipping menu/kitchen product ${wholeProduct.name} - showInStock is disabled`);
           return;
         }
       } else if (wholeProduct.type === 'raw') {
-        if (!wholeProduct.salesBasedRawCalc) {
-          console.log(`Skipping raw material ${wholeProduct.name} - salesBasedRawCalc is disabled`);
+        // Check if this raw material appears in any reconciliation data for this outlet
+        const appearsInReconciliation = reconcileHistory.some(
+          r => r.outlet === selectedOutlet && 
+               !r.deleted && 
+               r.rawConsumption && 
+               r.rawConsumption.some(rc => rc.rawProductId === pair.wholeId)
+        );
+        
+        if (!wholeProduct.salesBasedRawCalc && !appearsInReconciliation) {
+          console.log(`Skipping raw material ${wholeProduct.name} - salesBasedRawCalc is disabled and doesn't appear in reconciliation`);
           return;
+        }
+        
+        if (appearsInReconciliation) {
+          console.log(`Including raw material ${wholeProduct.name} - appears in reconciliation rawConsumption`);
         }
       }
 
@@ -592,16 +604,28 @@ function LiveInventoryScreen() {
 
       // Filter: Only show products based on their type and settings
       // Menu/Kitchen products: must have showInStock enabled
-      // Raw materials: must have salesBasedRawCalc enabled
+      // Raw materials: show if salesBasedRawCalc enabled OR appears in any reconciliation rawConsumption
       if (product.type === 'menu' || product.type === 'kitchen') {
         if (!product.showInStock) {
           console.log(`Skipping menu/kitchen product (no conversion) ${product.name} - showInStock is disabled`);
           return;
         }
       } else if (product.type === 'raw') {
-        if (!product.salesBasedRawCalc) {
-          console.log(`Skipping raw material (no conversion) ${product.name} - salesBasedRawCalc is disabled`);
+        // Check if this raw material appears in any reconciliation data for this outlet
+        const appearsInReconciliation = reconcileHistory.some(
+          r => r.outlet === selectedOutlet && 
+               !r.deleted && 
+               r.rawConsumption && 
+               r.rawConsumption.some(rc => rc.rawProductId === product.id)
+        );
+        
+        if (!product.salesBasedRawCalc && !appearsInReconciliation) {
+          console.log(`Skipping raw material (no conversion) ${product.name} - salesBasedRawCalc is disabled and doesn't appear in reconciliation`);
           return;
+        }
+        
+        if (appearsInReconciliation) {
+          console.log(`Including raw material (no conversion) ${product.name} - appears in reconciliation rawConsumption`);
         }
       }
 
