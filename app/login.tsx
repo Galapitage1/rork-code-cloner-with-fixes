@@ -61,7 +61,7 @@ export default function LoginScreen() {
           console.error('handleLogin: Full data reload failed (non-critical):', syncError);
         }
         
-        router.replace('/home');
+        router.replace('/home' as any);
       } else {
         Alert.alert('Error', 'User not found. Please contact your administrator.');
       }

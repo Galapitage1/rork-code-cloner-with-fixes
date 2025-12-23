@@ -242,7 +242,7 @@ export default function MoirScreen() {
       setShowMapModal(false);
       setShowLogoutConfirm(false);
       
-      router.replace('/home');
+      router.replace('/home' as any);
     } catch (error) {
       console.error('Logout error:', error);
       setShowLogoutConfirm(false);

@@ -53,7 +53,7 @@ export default function LogsScreen() {
     console.log('[LogsScreen] Checking superadmin access, isSuperAdmin:', isSuperAdmin);
     if (!isSuperAdmin) {
       console.log('[LogsScreen] Not superadmin, redirecting to home');
-      router.replace('/home');
+      router.replace('/home' as any);
     }
   }, [isSuperAdmin, router]);
 

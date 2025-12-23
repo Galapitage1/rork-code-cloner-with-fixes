@@ -34,14 +34,14 @@ export default function Index() {
   }
 
   if (!currentUser) {
-    return <Redirect href="/login" />;
+    return <Redirect href={"/login" as any} />
   }
 
   if (redirectPath) {
     return <Redirect href={redirectPath as any} />;
   }
 
-  return <Redirect href="/home" />;
+  return <Redirect href={"/home" as any} />;
 }
 
 const styles = StyleSheet.create({
