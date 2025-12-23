@@ -857,13 +857,15 @@ export default function CampaignsScreen() {
           
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
           console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
-          console.log('[WhatsApp CAMPAIGN] Sending messages one by one to allow unticking...');
+          console.log('[WhatsApp CAMPAIGN] Sending messages in parallel batches...');
           
           let successCount = 0;
           let failCount = 0;
           const errors: string[] = [];
+          const successfulCustomerIds: string[] = [];
           
-          for (const customer of selectedCustomers) {
+          const BATCH_SIZE = 10;
+          const sendMessage = async (customer: typeof selectedCustomers[0]) => {
             try {
               console.log(`[WhatsApp CAMPAIGN] Sending to ${customer.name} (${customer.phone})...`);
               
@@ -898,22 +900,44 @@ export default function CampaignsScreen() {
 
               if (response.ok && result.success && result.results?.success > 0) {
                 console.log(`[WhatsApp CAMPAIGN] Successfully sent to ${customer.name}`);
-                successCount++;
-                
-                setSelectedCustomerIds(prev => {
-                  const newSet = new Set(prev);
-                  newSet.delete(customer.id);
-                  return newSet;
-                });
+                return { success: true, customerId: customer.id };
               } else {
                 console.error(`[WhatsApp CAMPAIGN] Failed to send to ${customer.name}:`, result.error);
-                failCount++;
-                errors.push(`${customer.name}: ${result.error || 'Unknown error'}`);
+                return { success: false, error: `${customer.name}: ${result.error || 'Unknown error'}` };
               }
             } catch (error) {
               console.error(`[WhatsApp CAMPAIGN] Error sending to ${customer.name}:`, error);
-              failCount++;
-              errors.push(`${customer.name}: ${(error as Error).message}`);
+              return { success: false, error: `${customer.name}: ${(error as Error).message}` };
+            }
+          };
+          
+          for (let i = 0; i < selectedCustomers.length; i += BATCH_SIZE) {
+            const batch = selectedCustomers.slice(i, i + BATCH_SIZE);
+            console.log(`[WhatsApp CAMPAIGN] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(selectedCustomers.length / BATCH_SIZE)}`);
+            
+            const results = await Promise.all(batch.map(sendMessage));
+            
+            results.forEach(result => {
+              if (result.success) {
+                successCount++;
+                if (result.customerId) {
+                  successfulCustomerIds.push(result.customerId);
+                }
+              } else {
+                failCount++;
+                if (result.error) {
+                  errors.push(result.error);
+                }
+              }
+            });
+            
+            if (successfulCustomerIds.length > 0) {
+              setSelectedCustomerIds(prev => {
+                const newSet = new Set(prev);
+                successfulCustomerIds.forEach(id => newSet.delete(id));
+                return newSet;
+              });
+              successfulCustomerIds.length = 0;
             }
           }
 
