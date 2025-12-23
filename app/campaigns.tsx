@@ -169,11 +169,6 @@ export default function CampaignsScreen() {
     console.log('[CAMPAIGNS] Component mounted, loading settings...');
     loadCampaignSettings().finally(() => {
       console.log('[CAMPAIGNS] Settings loaded, page ready');
-      console.log('[CAMPAIGNS] Loaded credentials:', {
-        hasWhatsAppToken: !!whatsappAccessToken,
-        hasPhoneId: !!whatsappPhoneNumberId,
-        hasSmtp: !!smtpHost
-      });
       setIsPageLoading(false);
     });
   }, []);
@@ -185,7 +180,7 @@ export default function CampaignsScreen() {
         console.log('[CAMPAIGNS] Settings reloaded after user change');
       });
     }
-  }, [currentUser?.id]);
+  }, [currentUser]);
 
   React.useEffect(() => {
     console.log('[CAMPAIGNS] WhatsApp credentials updated:', {
@@ -862,49 +857,68 @@ export default function CampaignsScreen() {
           
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
           console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
+          console.log('[WhatsApp CAMPAIGN] Sending messages one by one to allow unticking...');
           
-          const response = await fetch(phpEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              accessToken: whatsappAccessToken,
-              phoneNumberId: whatsappPhoneNumberId,
-              message: publicMediaUrl ? whatsappCaption : message,
-              mediaUrl: publicMediaUrl,
-              mediaType: whatsappMediaType,
-              caption: whatsappCaption,
-              recipients: selectedCustomers.map(c => ({
-                name: c.name,
-                phone: c.phone,
-              })),
-            }),
-          });
+          let successCount = 0;
+          let failCount = 0;
+          const errors: string[] = [];
+          
+          for (const customer of selectedCustomers) {
+            try {
+              console.log(`[WhatsApp CAMPAIGN] Sending to ${customer.name} (${customer.phone})...`);
+              
+              const response = await fetch(phpEndpoint, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  accessToken: whatsappAccessToken,
+                  phoneNumberId: whatsappPhoneNumberId,
+                  message: publicMediaUrl ? whatsappCaption : message,
+                  mediaUrl: publicMediaUrl,
+                  mediaType: whatsappMediaType,
+                  caption: whatsappCaption,
+                  recipients: [{
+                    name: customer.name,
+                    phone: customer.phone,
+                  }],
+                }),
+              });
 
-          console.log('[WhatsApp CAMPAIGN] Response status:', response.status);
-          console.log('[WhatsApp CAMPAIGN] Response content-type:', response.headers.get('content-type'));
-          
-          const responseText = await response.text();
-          console.log('[WhatsApp CAMPAIGN] Response text (first 500 chars):', responseText.substring(0, 500));
-          
-          let result;
-          try {
-            result = JSON.parse(responseText);
-            console.log('[WhatsApp CAMPAIGN] Backend response:', result);
-          } catch (parseError) {
-            console.error('[WhatsApp CAMPAIGN] Failed to parse response as JSON:', parseError);
-            console.error('[WhatsApp CAMPAIGN] Response was:', responseText.substring(0, 1000));
-            throw new Error('Server returned invalid response. Please check if the backend is working correctly. Response: ' + responseText.substring(0, 200));
+              const responseText = await response.text();
+              
+              let result;
+              try {
+                result = JSON.parse(responseText);
+              } catch (parseError) {
+                console.error(`[WhatsApp CAMPAIGN] Failed to parse response for ${customer.name}:`, parseError);
+                throw new Error('Invalid server response');
+              }
+
+              if (response.ok && result.success && result.results?.success > 0) {
+                console.log(`[WhatsApp CAMPAIGN] Successfully sent to ${customer.name}`);
+                successCount++;
+                
+                setSelectedCustomerIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(customer.id);
+                  return newSet;
+                });
+              } else {
+                console.error(`[WhatsApp CAMPAIGN] Failed to send to ${customer.name}:`, result.error);
+                failCount++;
+                errors.push(`${customer.name}: ${result.error || 'Unknown error'}`);
+              }
+            } catch (error) {
+              console.error(`[WhatsApp CAMPAIGN] Error sending to ${customer.name}:`, error);
+              failCount++;
+              errors.push(`${customer.name}: ${(error as Error).message}`);
+            }
           }
 
-          if (!response.ok || !result.success) {
-            throw new Error(result.error || 'Failed to send WhatsApp messages');
-          }
-
-          const { results } = result;
-          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
-            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+          const resultMessage = `Sent: ${successCount}\nFailed: ${failCount}${
+            errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
           }`;
 
           Alert.alert(
@@ -913,11 +927,10 @@ export default function CampaignsScreen() {
             [{ text: 'OK' }]
           );
 
-          if (results.success > 0) {
+          if (successCount > 0) {
             setMessage('');
             setWhatsappMediaUri('');
             setWhatsappCaption('');
-            setSelectedCustomerIds(new Set());
           }
 
         } catch (error) {
