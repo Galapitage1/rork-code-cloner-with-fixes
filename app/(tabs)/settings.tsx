@@ -1344,6 +1344,247 @@ export default function SettingsScreen() {
         </View>
       )}
 
+      {/* User Modal */}
+      <Modal
+        visible={showUserModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowUserModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingUser ? 'Edit User' : 'Add User'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowUserModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Username *</Text>
+              <TextInput
+                style={styles.input}
+                value={newUsername}
+                onChangeText={setNewUsername}
+                placeholder="Enter username"
+                placeholderTextColor={Colors.light.muted}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Role *</Text>
+              <View style={styles.pickerContainer}>
+                {Platform.OS === 'web' ? (
+                  <select
+                    value={newUserRole}
+                    onChange={(e: any) => setNewUserRole(e.target.value as UserRole)}
+                    style={{
+                      backgroundColor: Colors.light.background,
+                      borderWidth: 1,
+                      borderColor: Colors.light.border,
+                      borderRadius: 8,
+                      padding: 12,
+                      fontSize: 16,
+                      color: Colors.light.text,
+                      width: '100%',
+                    }}
+                  >
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                    {isSuperAdmin && <option value="superadmin">Super Admin</option>}
+                  </select>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.input}
+                    onPress={() => {
+                      const options = [
+                        { text: 'User', onPress: () => setNewUserRole('user') },
+                        { text: 'Admin', onPress: () => setNewUserRole('admin') },
+                      ];
+                      if (isSuperAdmin) {
+                        options.push({ text: 'Super Admin', onPress: () => setNewUserRole('superadmin') });
+                      }
+                      options.push({ text: 'Cancel', style: 'cancel' as const } as any);
+                      Alert.alert('Select Role', '', options);
+                    }}
+                  >
+                    <Text style={{ color: Colors.light.text }}>
+                      {newUserRole === 'user' ? 'User' : newUserRole === 'admin' ? 'Admin' : 'Super Admin'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowUserModal(false)}
+              >
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, { flex: 1 }]}
+                onPress={async () => {
+                  if (!newUsername.trim()) {
+                    Alert.alert('Error', 'Please enter a username');
+                    return;
+                  }
+                  try {
+                    if (editingUser) {
+                      await updateUser(editingUser.id, { username: newUsername, role: newUserRole });
+                      Alert.alert('Success', 'User updated successfully');
+                    } else {
+                      await addUser(newUsername, newUserRole);
+                      Alert.alert('Success', 'User added successfully. Default password is "password"');
+                    }
+                    setShowUserModal(false);
+                  } catch {
+                    Alert.alert('Error', 'Failed to save user');
+                  }
+                }}
+              >
+                <Text style={styles.buttonText}>{editingUser ? 'Update' : 'Add'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Outlet Modal */}
+      <Modal
+        visible={showOutletModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowOutletModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingOutlet ? 'Edit Outlet' : 'Add Outlet'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowOutletModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Outlet Name *</Text>
+              <TextInput
+                style={styles.input}
+                value={outletName}
+                onChangeText={setOutletName}
+                placeholder="Enter outlet name"
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Location</Text>
+              <TextInput
+                style={styles.input}
+                value={outletLocation}
+                onChangeText={setOutletLocation}
+                placeholder="Enter location"
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Type *</Text>
+              <View style={styles.pickerContainer}>
+                {Platform.OS === 'web' ? (
+                  <select
+                    value={outletType}
+                    onChange={(e: any) => setOutletType(e.target.value as 'sales' | 'production')}
+                    style={{
+                      backgroundColor: Colors.light.background,
+                      borderWidth: 1,
+                      borderColor: Colors.light.border,
+                      borderRadius: 8,
+                      padding: 12,
+                      fontSize: 16,
+                      color: Colors.light.text,
+                      width: '100%',
+                    }}
+                  >
+                    <option value="sales">Sales</option>
+                    <option value="production">Production</option>
+                  </select>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.input}
+                    onPress={() => {
+                      Alert.alert(
+                        'Select Type',
+                        '',
+                        [
+                          { text: 'Sales', onPress: () => setOutletType('sales') },
+                          { text: 'Production', onPress: () => setOutletType('production') },
+                          { text: 'Cancel', style: 'cancel' as const }
+                        ]
+                      );
+                    }}
+                  >
+                    <Text style={{ color: Colors.light.text }}>
+                      {outletType === 'sales' ? 'Sales' : 'Production'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowOutletModal(false)}
+              >
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, { flex: 1 }]}
+                onPress={async () => {
+                  if (!outletName.trim()) {
+                    Alert.alert('Error', 'Please enter an outlet name');
+                    return;
+                  }
+                  try {
+                    if (editingOutlet) {
+                      await updateOutlet(editingOutlet.id, {
+                        name: outletName,
+                        location: outletLocation,
+                        outletType: outletType
+                      });
+                      Alert.alert('Success', 'Outlet updated successfully');
+                    } else {
+                      const newOutlet: Outlet = {
+                        id: `outlet-${Date.now()}`,
+                        name: outletName,
+                        location: outletLocation,
+                        outletType: outletType,
+                        createdAt: Date.now(),
+                        updatedAt: Date.now(),
+                      };
+                      await addOutlet(newOutlet);
+                      Alert.alert('Success', 'Outlet added successfully');
+                    }
+                    setShowOutletModal(false);
+                  } catch {
+                    Alert.alert('Error', 'Failed to save outlet');
+                  }
+                }}
+              >
+                <Text style={styles.buttonText}>{editingOutlet ? 'Update' : 'Add'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ConfirmDialog
         visible={!!confirmVisible}
         title={confirmState?.title ?? ''}
@@ -1573,5 +1814,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.light.muted,
     lineHeight: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    padding: 16,
+  },
+  modalContent: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  modalActions: {
+    flexDirection: 'row' as const,
+    gap: 12,
+    marginTop: 24,
   },
 });
