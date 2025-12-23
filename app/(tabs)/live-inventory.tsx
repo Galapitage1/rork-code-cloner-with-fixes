@@ -5,7 +5,6 @@ import { StockCount, StockCheck } from '@/types';
 import { Stack } from 'expo-router';
 import { Calendar, Download, ChevronLeft, ChevronRight, TrendingUp, AlertTriangle } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
-import { useProduction } from '@/contexts/ProductionContext';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useStores } from '@/contexts/StoresContext';
 import { CalendarModal } from '@/components/CalendarModal';
@@ -43,7 +42,6 @@ type ProductInventoryHistory = {
 
 function LiveInventoryScreen() {
   const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll, reconcileHistory } = useStock();
-  const { approvedProductions } = useProduction();
   const { recipes } = useRecipes();
   const { storeProducts } = useStores();
   const [selectedOutlet, setSelectedOutlet] = useState<string>('');
@@ -113,7 +111,7 @@ function LiveInventoryScreen() {
       console.error('[LIVE INVENTORY] Sync failed:', error);
     }).finally(() => {      setIsLoadingData(false);
     });
-  }, [selectedOutlet, selectedDate, dateRange, outlets, getDateRange]);
+  }, [selectedOutlet, selectedDate, dateRange, outlets, getDateRange, syncAll]);
 
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
     console.log('\n========================================');
@@ -832,7 +830,7 @@ function LiveInventoryScreen() {
     console.log('========================================\n');
 
     return history.sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, approvedProductions, reconcileHistory]);
+  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, reconcileHistory, kitchenStockReports, salesReports]);
 
   console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
