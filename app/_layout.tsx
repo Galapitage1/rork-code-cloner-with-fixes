@@ -16,6 +16,7 @@ import { StoresProvider, useStores } from '@/contexts/StoresContext';
 import { ProductionProvider, useProduction } from '@/contexts/ProductionContext';
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { MoirProvider } from '@/contexts/MoirContext';
+import { SMSCampaignContext } from '@/contexts/SMSCampaignContext';
 import { ProductTrackerProvider } from '@/contexts/ProductTrackerContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { loadInitialDataIfNeeded } from '@/utils/initialDataLoader';
@@ -205,6 +206,7 @@ export default function RootLayout() {
         <AuthProvider>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <MoirProvider>
+              <SMSCampaignContext>
               <StoresProvider>
                 <ProductionProvider>
                   <ActivityLogProvider>
@@ -217,6 +219,7 @@ export default function RootLayout() {
                   </ActivityLogProvider>
                 </ProductionProvider>
               </StoresProvider>
+              </SMSCampaignContext>
             </MoirProvider>
           </GestureHandlerRootView>
         </AuthProvider>
