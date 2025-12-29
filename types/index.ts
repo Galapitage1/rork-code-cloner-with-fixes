@@ -408,3 +408,76 @@ export interface ProductTrackerSnapshot {
   deviceId?: string;
   deleted?: boolean;
 }
+
+export interface SMSProviderSettings {
+  id: string;
+  provider: 'dialog_esms';
+  esms_username: string;
+  esms_password_encrypted: string;
+  default_source_address?: string;
+  default_payment_method: 0 | 4;
+  push_notification_url?: string;
+  createdAt: number;
+  updatedAt: number;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface SMSAuthToken {
+  id: string;
+  provider_settings_id: string;
+  access_token: string;
+  expires_at: number;
+  last_refresh_at: number;
+  status: 'active' | 'expired' | 'invalid';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type SMSCampaignStatus = 'pending' | 'sending' | 'completed' | 'running' | 'failed';
+
+export interface SMSCampaign {
+  id: string;
+  provider_settings_id: string;
+  transaction_id: number;
+  message: string;
+  source_address?: string;
+  payment_method: 0 | 4;
+  recipient_count: number;
+  campaign_id?: string;
+  campaign_cost?: number;
+  wallet_balance?: number;
+  duplicates_removed?: number;
+  invalid_numbers?: number;
+  mask_blocked_numbers?: number;
+  status: SMSCampaignStatus;
+  comment?: string;
+  errCode?: number;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export type SMSDeliveryStatus = 'submitted' | 'submission_failed' | 'delivered' | 'delivery_failed' | 'pending';
+
+export interface SMSRecipient {
+  id: string;
+  campaign_id: string;
+  mobile_original: string;
+  mobile_normalized: string;
+  delivery_status: SMSDeliveryStatus;
+  last_status_code?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SMSDeliveryEvent {
+  id: string;
+  campaign_id: string;
+  msisdn: string;
+  status_code: number;
+  raw_querystring: string;
+  received_at: number;
+}
