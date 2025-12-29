@@ -1,15 +1,13 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Image, Switch, Clipboard as RNClipboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Switch } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as ImagePicker from 'expo-image-picker';
-import { Upload, Trash2, Settings as SettingsIcon, FileSpreadsheet, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, Camera, ImageIcon, RefreshCw, CloudOff, Cloud, Share2, Link, Pause, Play, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle } from 'lucide-react-native';
+import { Upload, Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle, MessageSquare } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { useActivityLog } from '@/contexts/ActivityLogContext';
 import { useMoir } from '@/contexts/MoirContext';
 
 import { useCustomers } from '@/contexts/CustomerContext';
@@ -21,28 +19,27 @@ import { syncData } from '@/utils/syncData';
 import { testServerConnection, testWriteToServer } from '@/utils/testSync';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
-import { Outlet, Product, ProductType, UserRole, ProductConversion } from '@/types';
+import { useSMSCampaign } from '@/contexts/SMSCampaignContext';
+import { SMSProviderSettings } from '@/components/SMSProviderSettings';
+import { Outlet, UserRole } from '@/types';
 import { hasPermission } from '@/utils/permissions';
 import { useBackendStatus } from '@/utils/backendStatus';
-import { parseExcelFile, generateSampleExcelBase64 } from '@/utils/excelParser';
 import Colors from '@/constants/colors';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import * as XLSX from 'xlsx';
-import { CURRENCIES } from '@/utils/currencyHelper';
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 
 export default function SettingsScreen() {
-  const { products, outlets, productConversions, addProduct, updateProduct, deleteProduct, addOutlet, updateOutlet, deleteOutlet, addProductConversion, updateProductConversion, deleteProductConversion, clearAllProducts, clearAllOutlets, deleteUserStockChecks, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, isSyncPaused, toggleSyncPause, viewMode, setViewMode } = useStock();
+  const { outlets, addOutlet, updateOutlet, deleteOutlet, clearAllProducts, clearAllOutlets, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, isSyncPaused } = useStock();
 
-  const { currentUser, users, logout, addUser, updateUser, deleteUser, isSyncing: isUserSyncing, lastSyncTime: userLastSync, syncUsers, clearAllUsers, isSuperAdmin, showPageTabs, toggleShowPageTabs, currency, updateCurrency, enableReceivedAutoLoad, toggleEnableReceivedAutoLoad } = useAuth();
+  const { currentUser, users, logout, addUser, updateUser, deleteUser, isSyncing: isUserSyncing, lastSyncTime: userLastSync, syncUsers, clearAllUsers, isSuperAdmin, enableReceivedAutoLoad, toggleEnableReceivedAutoLoad } = useAuth();
   const { isSyncing: isCustomerSyncing, lastSyncTime: customerLastSync, syncCustomers } = useCustomers();
   const { isSyncing: isRecipeSyncing, lastSyncTime: recipeLastSync, syncRecipes } = useRecipes();
   const { isSyncing: isOrderSyncing, lastSyncTime: orderLastSync, syncOrders } = useOrders();
   const { isSyncing: isStoresSyncing, lastSyncTime: storesLastSync, syncAll: syncStores, setUser: setStoresUser } = useStores();
   const { isSyncing: isProductionSyncing, lastSyncTime: productionLastSync, syncAll: syncProduction, setUser: setProductionUser } = useProduction();
   const { deleteUserData } = useProductUsage();
-  const { clearAllLogs } = useActivityLog();
   const { users: moirUsers, importUsersFromExcel: importMoirUsers, clearAllUsers: clearAllMoirUsers, syncAllData: syncMoirData } = useMoir();
   const router = useRouter();
   const [showOutletModal, setShowOutletModal] = useState<boolean>(false);
@@ -50,17 +47,6 @@ export default function SettingsScreen() {
   const [outletName, setOutletName] = useState<string>('');
   const [outletLocation, setOutletLocation] = useState<string>('');
   const [outletType, setOutletType] = useState<'sales' | 'production'>('sales');
-  const [showProductModal, setShowProductModal] = useState<boolean>(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [productName, setProductName] = useState<string>('');
-  const [productType, setProductType] = useState<ProductType>('menu');
-  const [productUnit, setProductUnit] = useState<string>('');
-  const [productCategory, setProductCategory] = useState<string>('');
-  const [productMinStock, setProductMinStock] = useState<string>('');
-  const [productSellingPrice, setProductSellingPrice] = useState<string>('');
-  const [productImageUri, setProductImageUri] = useState<string>('');
-  const [productShowInStock, setProductShowInStock] = useState<boolean>(true);
-  const [productSalesBasedRawCalc, setProductSalesBasedRawCalc] = useState<boolean>(false);
   const [showUserModal, setShowUserModal] = useState<boolean>(false);
   const [confirmVisible, setConfirmVisible] = useState<boolean>(false);
   const [confirmState, setConfirmState] = useState<{
@@ -73,28 +59,10 @@ export default function SettingsScreen() {
   const [editingUser, setEditingUser] = useState<{ id: string; username: string; role: UserRole } | null>(null);
   const [newUsername, setNewUsername] = useState<string>('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('user');
-  const [showSyncCodeModal, setShowSyncCodeModal] = useState<boolean>(false);
-  const [syncCode, setSyncCode] = useState<string>('');
-  const [importSyncCode, setImportSyncCode] = useState<string>('');
-  const [showConversionModal, setShowConversionModal] = useState<boolean>(false);
-  const [editingConversion, setEditingConversion] = useState<ProductConversion | null>(null);
-  const [conversionFromProductId, setConversionFromProductId] = useState<string>('');
-  const [conversionToProductId, setConversionToProductId] = useState<string>('');
-  const [conversionFactor, setConversionFactor] = useState<string>('');
   const [usersExpanded, setUsersExpanded] = useState<boolean>(true);
   const [outletsExpanded, setOutletsExpanded] = useState<boolean>(true);
-  const [standardsExpanded, setStandardsExpanded] = useState<boolean>(false);
-  const [showCategoryModal, setShowCategoryModal] = useState<boolean>(false);
-  const [showUnitModal, setShowUnitModal] = useState<boolean>(false);
-  const [showProductTypeModal, setShowProductTypeModal] = useState<boolean>(false);
   const [moirExpanded, setMoirExpanded] = useState<boolean>(false);
   const [isImportingMoir, setIsImportingMoir] = useState<boolean>(false);
-  const [editingCategory, setEditingCategory] = useState<string | null>(null);
-  const [editingUnit, setEditingUnit] = useState<string | null>(null);
-  const [editingProductType, setEditingProductType] = useState<string | null>(null);
-  const [categoryName, setCategoryName] = useState<string>('');
-  const [unitName, setUnitName] = useState<string>('');
-  const [productTypeName, setProductTypeName] = useState<string>('');
   const [campaignsExpanded, setCampaignsExpanded] = useState<boolean>(false);
   const [emailApiKey, setEmailApiKey] = useState<string>('');
   const [emailApiProvider, setEmailApiProvider] = useState<'sendgrid' | 'aws-ses' | 'smtp'>('smtp');
@@ -109,16 +77,15 @@ export default function SettingsScreen() {
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [isSavingPermanentSettings, setIsSavingPermanentSettings] = useState<boolean>(false);
+  const [showSMSSettings, setShowSMSSettings] = useState<boolean>(false);
+  
+  const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
 
   const backendStatus = useBackendStatus();
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
-  useEffect(() => {
-    loadCampaignSettings();
-  }, [currentUser]);
-
-  const loadCampaignSettings = async () => {
+  const loadCampaignSettings = useCallback(async () => {
     try {
       console.log('[SETTINGS] Loading campaign settings from local storage...');
       const settings = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
@@ -161,7 +128,11 @@ export default function SettingsScreen() {
     } catch (error) {
       console.error('[SETTINGS] Failed to load campaign settings:', error);
     }
-  };
+  }, [currentUser]);
+
+  useEffect(() => {
+    loadCampaignSettings();
+  }, [loadCampaignSettings]);
 
   const saveCampaignSettings = async () => {
     try {
@@ -300,12 +271,8 @@ export default function SettingsScreen() {
       onConfirm: async () => {
         try {
           await clearAllProducts();
-          const conversionIds = productConversions.map(c => c.id);
-          for (const id of conversionIds) {
-            await deleteProductConversion(id);
-          }
           Alert.alert('Success', 'All products and Product Unit Conversions have been cleared from this device and the server.');
-        } catch (error) {
+        } catch {
           Alert.alert('Error', 'Failed to clear products. Please try again.');
         }
       },
@@ -323,7 +290,7 @@ export default function SettingsScreen() {
         try {
           await clearAllUsers();
           Alert.alert('Success', 'All users have been cleared from this device and the server.');
-        } catch (error) {
+        } catch {
           Alert.alert('Error', 'Failed to clear users. Please try again.');
         }
       },
@@ -341,7 +308,7 @@ export default function SettingsScreen() {
         try {
           await clearAllOutlets();
           Alert.alert('Success', 'All outlets have been cleared from this device and the server.');
-        } catch (error) {
+        } catch {
           Alert.alert('Error', 'Failed to clear outlets. Please try again.');
         }
       },
@@ -675,7 +642,7 @@ export default function SettingsScreen() {
                                 await deleteUser(user.id);
                                 await deleteUserData(user.id);
                                 Alert.alert('Success', 'User deleted successfully');
-                              } catch (error) {
+                              } catch {
                                 Alert.alert('Error', 'Failed to delete user');
                               }
                             },
@@ -766,7 +733,7 @@ export default function SettingsScreen() {
                               try {
                                 await deleteOutlet(outlet.id);
                                 Alert.alert('Success', 'Outlet deleted successfully');
-                              } catch (error) {
+                              } catch {
                                 Alert.alert('Error', 'Failed to delete outlet');
                               }
                             },
@@ -945,7 +912,7 @@ export default function SettingsScreen() {
                       await importMoirUsers(usersData);
                       Alert.alert('Success', 'MOIR users imported/updated successfully');
                     }
-                  } catch (error) {
+                  } catch {
                     Alert.alert('Error', 'Failed to import MOIR users');
                   } finally {
                     setIsImportingMoir(false);
@@ -976,7 +943,7 @@ export default function SettingsScreen() {
                         try {
                           await clearAllMoirUsers();
                           Alert.alert('Success', 'All MOIR users have been cleared');
-                        } catch (error) {
+                        } catch {
                           Alert.alert('Error', 'Failed to clear MOIR users');
                         }
                       },
@@ -1240,6 +1207,35 @@ export default function SettingsScreen() {
                   ]}>
                     {connectionStatus.message}
                   </Text>
+                </View>
+              )}
+
+              <View style={styles.divider} />
+
+              <TouchableOpacity
+                style={styles.sectionHeader}
+                onPress={() => setShowSMSSettings(!showSMSSettings)}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                  <MessageSquare size={24} color={Colors.light.tint} />
+                  <Text style={styles.sectionTitle}>Dialog eSMS Settings</Text>
+                </View>
+                {showSMSSettings ? (
+                  <ChevronUp size={20} color={Colors.light.tint} />
+                ) : (
+                  <ChevronDown size={20} color={Colors.light.tint} />
+                )}
+              </TouchableOpacity>
+
+              {showSMSSettings && (
+                <View style={styles.nestedSection}>
+                  <SMSProviderSettings
+                    settings={smsSettings}
+                    onSave={saveSMSSettings}
+                    onTestLogin={testSMSLogin}
+                    onSendTest={sendTestSMS}
+                    isSaving={isSavingSMS}
+                  />
                 </View>
               )}
             </>
@@ -1773,6 +1769,19 @@ const styles = StyleSheet.create({
   },
   errorMessageText: {
     color: '#EF4444',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: Colors.light.border,
+    marginVertical: 24,
+  },
+  nestedSection: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
   listItem: {
     backgroundColor: Colors.light.card,
