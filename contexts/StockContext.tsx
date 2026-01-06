@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
 import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory } from '@/types';
 import { syncData } from '@/utils/syncData';
+import { addToPendingQueue, processPendingQueue, hasPendingOperations, PendingOperation } from '@/utils/pendingSync';
+import { Alert } from 'react-native';
 
 const STORAGE_KEYS = {
   PRODUCTS: '@stock_app_products',
