@@ -121,7 +121,7 @@ export default function SalesUploadScreen() {
     console.log(`SalesUpload: Processing raw material deductions for ${outletName} on ${salesDate}`);
 
     try {
-      const rawConsumption = computeRawConsumptionFromSales(base64Data, stockChecks, products, recipes);
+      const rawConsumption = await computeRawConsumptionFromSales(base64Data, stockChecks, products, recipes);
       
       if (!rawConsumption.rows || rawConsumption.rows.length === 0) {
         console.log('SalesUpload: No raw materials consumed from sales');
@@ -717,7 +717,7 @@ export default function SalesUploadScreen() {
       let requestsMap: Map<string, number> | undefined;
       if (manualMode && requestBase64) {
         try {
-          const temp = reconcileSalesFromExcelBase64(base64, stockChecks, products);
+          const temp = await reconcileSalesFromExcelBase64(base64, stockChecks, products);
           const outlet = temp.matchedOutletName ?? temp.outletFromSheet ?? null;
           const date = temp.sheetDate ?? null;
           requestsMap = parseRequestsReceivedFromExcelBase64(requestBase64, products, outlet, date);
@@ -728,7 +728,7 @@ export default function SalesUploadScreen() {
       updateStep(3, 'complete');
       
       updateStep(4, 'active');
-      const reconciled = reconcileSalesFromExcelBase64(base64, stockChecks, products, { requestsReceivedByProductId: requestsMap, productConversions });
+      const reconciled = await reconcileSalesFromExcelBase64(base64, stockChecks, products, { requestsReceivedByProductId: requestsMap, productConversions });
       console.log('SalesUpload: reconciled', reconciled);
       updateStep(4, 'complete');
       
@@ -826,9 +826,9 @@ export default function SalesUploadScreen() {
       
       let raw: RawConsumptionResult | null = null;
       try {
-        raw = computeRawConsumptionFromSales(base64, stockChecks, products, recipes);
+        raw = await computeRawConsumptionFromSales(base64, stockChecks, products, recipes);
         setRawResult(raw);
-        console.log('SalesUpload: Raw consumption computed:', raw.rows.length, 'raw materials');
+        console.log('SalesUpload: Raw consumption computed:', raw?.rows?.length || 0, 'raw materials');
       } catch (e) {
         console.log('SalesUpload: raw compute failed', e);
         setRawResult(null);

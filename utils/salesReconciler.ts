@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Product, StockCheck, Recipe, ProductConversion } from '@/types';
+import { findMappingForTruncatedName, findPossibleMatches } from './productNameMapping';
 
 export type ReconciledRow = {
   name: string;
@@ -14,6 +15,8 @@ export type ReconciledRow = {
   productId?: string;
   notes?: string;
   rowIndex?: number;
+  needsMapping?: boolean;
+  possibleMatches?: { id: string; name: string; score: number }[];
   splitUnits?: {
     unit: string;
     opening: number;
@@ -69,12 +72,12 @@ function getCellNumber(worksheet: XLSX.WorkSheet, addr: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function reconcileSalesFromExcelBase64(
+export async function reconcileSalesFromExcelBase64(
   base64Data: string,
   stockChecks: StockCheck[],
   products: Product[],
-  options?: { requestsReceivedByProductId?: Map<string, number>; productConversions?: ProductConversion[] }
-): SalesReconcileResult {
+  options?: { requestsReceivedByProductId?: Map<string, number>; productConversions?: ProductConversion[]; useSavedMappings?: boolean }
+): Promise<SalesReconcileResult> {
   const errors: string[] = [];
   const rows: ReconciledRow[] = [];
 
@@ -274,9 +277,20 @@ export function reconcileSalesFromExcelBase64(
       }
 
       const key = `${name.toLowerCase()}__${unit.toLowerCase()}`;
-      const product = productByNameUnit.get(key);
+      let product = productByNameUnit.get(key);
+
+      if (!product && options?.useSavedMappings !== false) {
+        const mapping = await findMappingForTruncatedName(name);
+        if (mapping) {
+          product = products.find(p => p.id === mapping.fullProductId);
+          console.log(`Using saved mapping: "${name}" -> "${mapping.fullProductName}" (${mapping.fullProductId})`);
+        }
+      }
 
       if (!product) {
+        const possibleMatches = findPossibleMatches(name, products.filter(p => p.unit.toLowerCase() === unit.toLowerCase()));
+        const needsMapping = possibleMatches.length > 0;
+        
         rows.push({
           name,
           unit,
@@ -287,7 +301,9 @@ export function reconcileSalesFromExcelBase64(
           closing: null,
           expectedClosing: null,
           discrepancy: null,
-          notes: 'Product not found in master list',
+          notes: needsMapping ? 'Product name may be truncated - needs confirmation' : 'Product not found in master list',
+          needsMapping,
+          possibleMatches: needsMapping ? possibleMatches : undefined,
         });
         continue;
       }
@@ -445,13 +461,13 @@ export type RawConsumptionResult = {
   rows: RawConsumptionRow[];
 };
 
-export function computeRawConsumptionFromSales(
+export async function computeRawConsumptionFromSales(
   base64Data: string,
   stockChecks: StockCheck[],
   products: Product[],
   recipes: Recipe[],
-): RawConsumptionResult {
-  const sales = reconcileSalesFromExcelBase64(base64Data, stockChecks, products);
+): Promise<RawConsumptionResult> {
+  const sales = await reconcileSalesFromExcelBase64(base64Data, stockChecks, products);
   const outlet = sales.matchedOutletName ?? sales.outletFromSheet ?? null;
   const date = sales.stockCheckDate ?? sales.sheetDate ?? null;
 
