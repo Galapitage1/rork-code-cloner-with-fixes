@@ -16,7 +16,7 @@ import { formatCurrency } from '@/utils/currencyHelper';
 export default function RecipesScreen() {
   const { isAdmin, currency } = useAuth();
   const { products, productConversions } = useStock();
-  const { recipes, addOrUpdateRecipe, deleteRecipe, getRecipeFor } = useRecipes();
+  const { recipes, addOrUpdateRecipe, getRecipeFor } = useRecipes();
   const { storeProducts } = useStores();
 
   const menuItems = useMemo(() => products.filter(p => p.type === 'menu'), [products]);
@@ -189,7 +189,7 @@ export default function RecipesScreen() {
         });
       }
 
-      const parsed = parseRecipeExcelFile(base64Data, products, productConversions);
+      const parsed = parseRecipeExcelFile(base64Data, products, productConversions, recipes);
       
       if (parsed.errors.length > 0) {
         setImportResults({ success: 0, warnings: parsed.warnings, errors: parsed.errors });
