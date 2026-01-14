@@ -3184,33 +3184,55 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
       
       // CLEANUP: Remove old requests during sync
-      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
+      // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
+      // Keep pending/rejected requests for 7 days only
+      // Keep deleted items for 30 days to prevent resurrection by old devices
       if (requestsToSync.length > 0 && silent) {
-        const RETENTION_DAYS = 7;
-        const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
-        const retentionDaysAgo = new Date();
-        retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
-        const retentionDaysAgoTime = retentionDaysAgo.getTime();
+        const PENDING_RETENTION_DAYS = 7;
+        const APPROVED_RETENTION_DAYS = 90; // Keep approved requests longer for Live Inventory
+        const DELETED_RETENTION_DAYS = 30;
         
+        const pendingRetentionTime = Date.now() - (PENDING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        const approvedRetentionTime = Date.now() - (APPROVED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
         const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
         
         const originalCount = requestsToSync.length;
+        let approvedKept = 0;
+        let pendingRemoved = 0;
+        
         requestsToSync = requestsToSync.filter((request: any) => {
           // Keep deleted items for 30 days to prevent old devices from resurrecting them
           if (request.deleted) {
             const deletedAt = request.updatedAt || 0;
             if (deletedAt > deletedRetentionTime) {
-              console.log('StockContext syncAll: Keeping deleted request', request.id, 'for sync (prevents resurrection)');
               return true;
             }
             return false;
           }
           if (!request.requestedAt) return true;
-          return request.requestedAt >= retentionDaysAgoTime;
+          
+          // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory "Received" column)
+          if (request.status === 'approved') {
+            if (request.requestedAt >= approvedRetentionTime) {
+              approvedKept++;
+              return true;
+            }
+            console.log('StockContext syncAll: Removing approved request older than 90 days:', request.id);
+            return false;
+          }
+          
+          // Pending/rejected requests: keep for 7 days only
+          if (request.requestedAt < pendingRetentionTime) {
+            pendingRemoved++;
+            return false;
+          }
+          return true;
         });
         
         if (originalCount > requestsToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - requestsToSync.length, 'old requests (older than', RETENTION_DAYS, 'days active OR', DELETED_RETENTION_DAYS, 'days deleted) from local storage');
+          console.log('StockContext syncAll: Cleaned up', originalCount - requestsToSync.length, 'old requests from local storage');
+          console.log('StockContext syncAll: Kept', approvedKept, 'approved requests (90 day retention for Live Inventory)');
+          console.log('StockContext syncAll: Removed', pendingRemoved, 'old pending/rejected requests (7 day retention)');
           console.log('StockContext syncAll: Server still has all historical data');
         }
       }
@@ -3262,17 +3284,20 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.log('StockContext syncAll: Keeping local requests:', requestsToSync.length);
       }
       
-      // CLEANUP: After sync, keep only recent data locally (7 days)
-      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
+      // CLEANUP: After sync, keep only recent data locally
+      // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
+      // Keep pending/rejected requests for 7 days only
+      // Keep deleted items for 30 days to prevent resurrection by old devices
       if (silent) {
-        const RETENTION_DAYS = 7;
+        const PENDING_RETENTION_DAYS = 7;
+        const APPROVED_RETENTION_DAYS = 90;
         const DELETED_RETENTION_DAYS = 30;
-        const retentionDaysAgo = new Date();
-        retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
-        const retentionDaysAgoTime = retentionDaysAgo.getTime();
         
+        const pendingRetentionTime = Date.now() - (PENDING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        const approvedRetentionTime = Date.now() - (APPROVED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
         const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
         
+        const beforeCount = (syncedRequests as any[]).length;
         syncedRequests = (syncedRequests as any[]).filter((request: any) => {
           // Keep deleted items for 30 days
           if (request.deleted) {
@@ -3280,8 +3305,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
             return deletedAt > deletedRetentionTime;
           }
           if (!request.requestedAt) return true;
-          return request.requestedAt >= retentionDaysAgoTime;
+          
+          // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory "Received" column)
+          if (request.status === 'approved') {
+            return request.requestedAt >= approvedRetentionTime;
+          }
+          
+          // Pending/rejected requests: keep for 7 days only
+          return request.requestedAt >= pendingRetentionTime;
         });
+        
+        if (beforeCount > (syncedRequests as any[]).length) {
+          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeCount - (syncedRequests as any[]).length, 'old requests');
+        }
       }
       const syncedOutlets = syncResults[3].status === 'fulfilled' ? syncResults[3].value : outletsToSync;
       const syncedConversions = syncResults[4].status === 'fulfilled' ? syncResults[4].value : conversionsToSync;
