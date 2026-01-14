@@ -116,7 +116,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
           setStoreProducts((synced as any[]).filter(p => !p?.deleted));
           console.log('[StoresContext] Sync complete');
         }
-      } catch (e) {
+      } catch {
         console.log('[StoresContext] Sync failed, will retry later');
       }
     } catch (error) {
@@ -250,7 +250,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
           await AsyncStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify(synced));
           setSuppliers((synced as any[]).filter(s => !s?.deleted));
         }
-      } catch (e) {
+      } catch {
         console.log('[StoresContext] Suppliers sync failed, will retry later');
       }
     } catch (error) {
@@ -326,7 +326,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
           await AsyncStorage.setItem(STORAGE_KEYS.GRNS, JSON.stringify(synced));
           setGRNs((synced as any[]).filter(g => !g?.deleted));
         }
-      } catch (e) {
+      } catch {
         console.log('[StoresContext] GRNs sync failed, will retry later');
       }
     } catch (error) {
@@ -435,7 +435,7 @@ export const [StoresProvider, useStores] = createContextHook(() => {
     if (currentUser) {
       interval = setInterval(() => {
         syncAll(true).catch((e) => console.log('[StoresContext] Auto-sync error', e));
-      }, 10000);
+      }, 300000);
     }
     return () => {
       if (interval) clearInterval(interval);
