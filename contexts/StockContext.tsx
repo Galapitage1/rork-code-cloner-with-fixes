@@ -76,6 +76,8 @@ type StockContextType = {
   toggleShowProductList: (value: boolean) => Promise<void>;
   setViewMode: (mode: 'search' | 'button') => Promise<void>;
   syncAll: (silent?: boolean) => Promise<void>;
+  getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
+  restoreRequests: (requestIds: string[]) => Promise<number>;
 };
 
 const StockContext = createContext<StockContextType | null>(null);
@@ -1620,6 +1622,58 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.error('========================================');
       console.error('StockContext deleteRequest: ❌ FAILED - Error:', error);
       console.error('========================================');
+      throw error;
+    }
+  }, [currentUser]);
+
+  const getDeletedRequests = useCallback(async (startDate?: string, endDate?: string): Promise<ProductRequest[]> => {
+    try {
+      const allRequests = await AsyncStorage.getItem(STORAGE_KEYS.REQUESTS);
+      const existingRequests: ProductRequest[] = allRequests ? JSON.parse(allRequests) : [];
+      
+      let deletedRequests = existingRequests.filter(r => r.deleted === true);
+      
+      if (startDate || endDate) {
+        deletedRequests = deletedRequests.filter(r => {
+          const reqDate = r.requestDate || new Date(r.requestedAt).toISOString().split('T')[0];
+          if (startDate && reqDate < startDate) return false;
+          if (endDate && reqDate > endDate) return false;
+          return true;
+        });
+      }
+      
+      return deletedRequests.sort((a, b) => b.requestedAt - a.requestedAt);
+    } catch (error) {
+      console.error('Failed to get deleted requests:', error);
+      return [];
+    }
+  }, []);
+
+  const restoreRequests = useCallback(async (requestIds: string[]): Promise<number> => {
+    try {
+      const allRequests = await AsyncStorage.getItem(STORAGE_KEYS.REQUESTS);
+      const existingRequests: ProductRequest[] = allRequests ? JSON.parse(allRequests) : [];
+      
+      let restoredCount = 0;
+      const updatedRequests = existingRequests.map(r => {
+        if (requestIds.includes(r.id) && r.deleted) {
+          restoredCount++;
+          return { ...r, deleted: undefined, updatedAt: Date.now() };
+        }
+        return r;
+      });
+      
+      await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
+      const activeRequests = updatedRequests.filter(r => !r.deleted);
+      setRequests(activeRequests);
+      
+      if (currentUser && syncAllRef.current && !syncInProgressRef.current) {
+        syncAllRef.current().catch(e => console.error('Restore sync error:', e));
+      }
+      
+      return restoredCount;
+    } catch (error) {
+      console.error('Failed to restore requests:', error);
       throw error;
     }
   }, [currentUser]);
@@ -3929,6 +3983,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     syncAll,
     isSyncPaused,
     toggleSyncPause,
+    getDeletedRequests,
+    restoreRequests,
   }), [
     products,
     stockChecks,
@@ -3986,6 +4042,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     isSyncPaused,
     toggleSyncPause,
     syncAll,
+    getDeletedRequests,
+    restoreRequests,
   ]);
 
   return <StockContext.Provider value={value}>{children}</StockContext.Provider>;

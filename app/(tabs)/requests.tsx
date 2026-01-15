@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput,
 import { Picker } from '@react-native-picker/picker';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ShoppingCart, Plus, X, Download, Edit2, CalendarDays, ChevronDown, ChevronUp, Trash2 } from 'lucide-react-native';
+import { ShoppingCart, Plus, X, Download, Edit2, CalendarDays, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useStores } from '@/contexts/StoresContext';
 import { Product, ProductRequest, StockCheck } from '@/types';
@@ -16,7 +16,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ButtonViewMode } from '@/components/ButtonViewMode';
 
 export default function RequestsScreen() {
-  const { products, requests, addRequest, updateRequestStatus, deleteRequest, updateRequest, outlets, isLoading, deductInventoryFromApproval, productConversions, viewMode, inventoryStocks, updateInventoryStock, stockChecks, updateStockCheck, saveStockCheck } = useStock();
+  const { products, requests, addRequest, updateRequestStatus, deleteRequest, updateRequest, outlets, isLoading, deductInventoryFromApproval, productConversions, viewMode, inventoryStocks, updateInventoryStock, stockChecks, updateStockCheck, saveStockCheck, getDeletedRequests, restoreRequests } = useStock();
   const { storeProducts, updateStoreProduct } = useStores();
   const { isAdmin, isSuperAdmin, currentUser } = useAuth();
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -47,6 +47,13 @@ export default function RequestsScreen() {
   const [showAllRequestsModal, setShowAllRequestsModal] = useState<boolean>(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ id: string; productName: string } | null>(null);
   const [approvalInProgress, setApprovalInProgress] = useState<boolean>(false);
+  const [showRestoreModal, setShowRestoreModal] = useState<boolean>(false);
+  const [restoreStartDate, setRestoreStartDate] = useState<string>('2026-01-01');
+  const [restoreEndDate, setRestoreEndDate] = useState<string>('2026-01-13');
+  const [deletedRequestsList, setDeletedRequestsList] = useState<ProductRequest[]>([]);
+  const [selectedForRestore, setSelectedForRestore] = useState<Set<string>>(new Set());
+  const [isLoadingDeleted, setIsLoadingDeleted] = useState<boolean>(false);
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
 
   useEffect(() => {
     const loadOutletSelection = async () => {
@@ -610,6 +617,76 @@ export default function RequestsScreen() {
     }
   };
 
+  const handleOpenRestoreModal = async () => {
+    setShowRestoreModal(true);
+    setIsLoadingDeleted(true);
+    setSelectedForRestore(new Set());
+    try {
+      const deleted = await getDeletedRequests(restoreStartDate, restoreEndDate);
+      setDeletedRequestsList(deleted);
+    } catch (error) {
+      console.error('Failed to load deleted requests:', error);
+      Alert.alert('Error', 'Failed to load deleted requests');
+    } finally {
+      setIsLoadingDeleted(false);
+    }
+  };
+
+  const handleSearchDeleted = async () => {
+    setIsLoadingDeleted(true);
+    try {
+      const deleted = await getDeletedRequests(restoreStartDate, restoreEndDate);
+      setDeletedRequestsList(deleted);
+      setSelectedForRestore(new Set());
+    } catch (error) {
+      console.error('Failed to search deleted requests:', error);
+      Alert.alert('Error', 'Failed to search deleted requests');
+    } finally {
+      setIsLoadingDeleted(false);
+    }
+  };
+
+  const handleToggleSelectForRestore = (requestId: string) => {
+    setSelectedForRestore(prev => {
+      const next = new Set(prev);
+      if (next.has(requestId)) {
+        next.delete(requestId);
+      } else {
+        next.add(requestId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllDeleted = () => {
+    if (selectedForRestore.size === deletedRequestsList.length) {
+      setSelectedForRestore(new Set());
+    } else {
+      setSelectedForRestore(new Set(deletedRequestsList.map(r => r.id)));
+    }
+  };
+
+  const handleRestoreSelected = async () => {
+    if (selectedForRestore.size === 0) {
+      Alert.alert('No Selection', 'Please select requests to restore');
+      return;
+    }
+
+    setIsRestoring(true);
+    try {
+      const count = await restoreRequests(Array.from(selectedForRestore));
+      Alert.alert('Success', `Restored ${count} request(s) successfully`);
+      setShowRestoreModal(false);
+      setDeletedRequestsList([]);
+      setSelectedForRestore(new Set());
+    } catch (error) {
+      console.error('Failed to restore requests:', error);
+      Alert.alert('Error', 'Failed to restore requests');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -649,6 +726,15 @@ export default function RequestsScreen() {
                 >
                   <Trash2 size={18} color={Colors.light.danger} />
                   <Text style={styles.deleteAllButtonTopText}>Delete All</Text>
+                </TouchableOpacity>
+              )}
+              {isSuperAdmin && (
+                <TouchableOpacity 
+                  style={styles.restoreButtonTop}
+                  onPress={handleOpenRestoreModal}
+                >
+                  <RotateCcw size={18} color={Colors.light.success} />
+                  <Text style={styles.restoreButtonTopText}>Restore</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1482,6 +1568,119 @@ export default function RequestsScreen() {
           testID="delete-request-confirm"
         />
 
+        <Modal
+          visible={showRestoreModal}
+          animationType="slide"
+          transparent={false}
+          onRequestClose={() => setShowRestoreModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Restore Deleted Requests</Text>
+                <TouchableOpacity onPress={() => setShowRestoreModal(false)}>
+                  <X size={24} color={Colors.light.text} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.restoreDateRow}>
+                <View style={styles.restoreDateCol}>
+                  <Text style={styles.restoreDateLabel}>From Date</Text>
+                  <TextInput
+                    style={styles.restoreDateInput}
+                    value={restoreStartDate}
+                    onChangeText={setRestoreStartDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                </View>
+                <View style={styles.restoreDateCol}>
+                  <Text style={styles.restoreDateLabel}>To Date</Text>
+                  <TextInput
+                    style={styles.restoreDateInput}
+                    value={restoreEndDate}
+                    onChangeText={setRestoreEndDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                </View>
+                <TouchableOpacity 
+                  style={styles.searchDeletedButton}
+                  onPress={handleSearchDeleted}
+                >
+                  <Text style={styles.searchDeletedButtonText}>Search</Text>
+                </TouchableOpacity>
+              </View>
+
+              {isLoadingDeleted ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={Colors.light.tint} />
+                  <Text style={styles.loadingText}>Loading deleted requests...</Text>
+                </View>
+              ) : deletedRequestsList.length === 0 ? (
+                <View style={styles.emptyRestoreContainer}>
+                  <RotateCcw size={48} color={Colors.light.muted} />
+                  <Text style={styles.emptyRestoreText}>No deleted requests found for this date range</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.restoreSelectAllRow}>
+                    <TouchableOpacity 
+                      style={styles.selectAllButton}
+                      onPress={handleSelectAllDeleted}
+                    >
+                      <View style={[styles.restoreCheckbox, selectedForRestore.size === deletedRequestsList.length && styles.restoreCheckboxSelected]} />
+                      <Text style={styles.selectAllText}>
+                        {selectedForRestore.size === deletedRequestsList.length ? 'Deselect All' : 'Select All'} ({deletedRequestsList.length})
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <ScrollView style={styles.deletedRequestsList}>
+                    {deletedRequestsList.map((request) => {
+                      const product = products.find(p => p.id === request.productId);
+                      const isSelected = selectedForRestore.has(request.id);
+                      const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
+
+                      return (
+                        <TouchableOpacity 
+                          key={request.id} 
+                          style={[styles.deletedRequestItem, isSelected && styles.deletedRequestItemSelected]}
+                          onPress={() => handleToggleSelectForRestore(request.id)}
+                        >
+                          <View style={[styles.restoreCheckbox, isSelected && styles.restoreCheckboxSelected]} />
+                          <View style={styles.deletedRequestInfo}>
+                            <Text style={styles.deletedRequestProduct}>{product?.name || 'Unknown'}</Text>
+                            <Text style={styles.deletedRequestDetails}>
+                              {request.quantity} {product?.unit || ''} • {reqDate} • {request.status}
+                            </Text>
+                            <Text style={styles.deletedRequestRoute}>
+                              {request.fromOutlet} → {request.toOutlet}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={[styles.restoreButton, (isRestoring || selectedForRestore.size === 0) && styles.restoreButtonDisabled]}
+                    onPress={handleRestoreSelected}
+                    disabled={isRestoring || selectedForRestore.size === 0}
+                  >
+                    {isRestoring ? (
+                      <ActivityIndicator color={Colors.light.card} />
+                    ) : (
+                      <Text style={styles.restoreButtonText}>
+                        Restore {selectedForRestore.size} Request{selectedForRestore.size !== 1 ? 's' : ''}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
 
         </>
         )}
@@ -2552,6 +2751,155 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   typeTabTextSelected: {
+    color: Colors.light.card,
+  },
+  restoreButtonTop: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    backgroundColor: Colors.light.success + '15',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.success,
+  },
+  restoreButtonTopText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.success,
+  },
+  restoreDateRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-end' as const,
+    gap: 12,
+    marginBottom: 16,
+  },
+  restoreDateCol: {
+    flex: 1,
+  },
+  restoreDateLabel: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.muted,
+    marginBottom: 6,
+  },
+  restoreDateInput: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: Colors.light.text,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  searchDeletedButton: {
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  searchDeletedButtonText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.card,
+  },
+  emptyRestoreContainer: {
+    flex: 1,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    padding: 32,
+  },
+  emptyRestoreText: {
+    fontSize: 16,
+    color: Colors.light.muted,
+    textAlign: 'center' as const,
+    marginTop: 16,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: Colors.light.muted,
+    marginTop: 12,
+  },
+  restoreSelectAllRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  selectAllButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+  },
+  selectAllText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  restoreCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.card,
+  },
+  restoreCheckboxSelected: {
+    backgroundColor: Colors.light.success,
+    borderColor: Colors.light.success,
+  },
+  deletedRequestsList: {
+    flex: 1,
+  },
+  deletedRequestItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 12,
+    padding: 14,
+    backgroundColor: Colors.light.background,
+    borderRadius: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  deletedRequestItemSelected: {
+    backgroundColor: Colors.light.success + '15',
+    borderColor: Colors.light.success,
+  },
+  deletedRequestInfo: {
+    flex: 1,
+  },
+  deletedRequestProduct: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 4,
+  },
+  deletedRequestDetails: {
+    fontSize: 13,
+    color: Colors.light.muted,
+    marginBottom: 2,
+  },
+  deletedRequestRoute: {
+    fontSize: 12,
+    color: Colors.light.accent,
+  },
+  restoreButton: {
+    backgroundColor: Colors.light.success,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center' as const,
+    marginTop: 16,
+  },
+  restoreButtonDisabled: {
+    opacity: 0.5,
+  },
+  restoreButtonText: {
+    fontSize: 16,
+    fontWeight: '700' as const,
     color: Colors.light.card,
   },
 });
