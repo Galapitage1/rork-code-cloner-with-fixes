@@ -32,7 +32,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       try {
         setIsLoading(true);
         
-        performDailyCleanup().catch(e => console.log('[AUTH] Daily cleanup error:', e));
+        performDailyCleanup().catch(() => {});
         
         const [currentUserData, usersData, showPageTabsData, currencyData, enableReceivedAutoLoadData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.CURRENT_USER),
@@ -76,11 +76,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
               const parsed = JSON.parse(trimmed);
               setCurrentUser(parsed);
             } else {
-              console.error('Current user data is not valid JSON:', currentUserData);
               await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
             }
-          } catch (parseError) {
-            console.error('Failed to parse current user data:', parseError);
+          } catch {
             await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
           }
         }
@@ -93,7 +91,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
               if (Array.isArray(parsed)) {
                 setUsers(parsed.filter((u: any) => !u?.deleted));
               } else {
-                console.error('Users data is not an array');
                 const defaultAdmin: User = {
                   id: 'admin-1',
                   username: 'admin',
@@ -112,7 +109,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
                 setUsers([defaultAdmin, tempUser]);
               }
             } else {
-              console.error('Users data is not valid JSON:', usersData);
               const defaultAdmin: User = {
                 id: 'admin-1',
                 username: 'admin',
@@ -130,8 +126,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
               await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([defaultAdmin, tempUser]));
               setUsers([defaultAdmin, tempUser]);
             }
-          } catch (parseError) {
-            console.error('Failed to parse users data:', parseError);
+          } catch {
             const defaultAdmin: User = {
               id: 'admin-1',
               username: 'admin',
@@ -167,8 +162,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
           await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([defaultAdmin, tempUser]));
           setUsers([defaultAdmin, tempUser]);
         }
-      } catch (error) {
-        console.error('Failed to load auth data:', error);
+      } catch {
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -195,8 +189,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       setUsers((synced as any[]).filter(u => !u?.deleted));
       setLastSyncTime(Date.now());
       setInitialUsersSynced(true);
-    } catch (error) {
-      console.error('AuthContext: Background users sync failed:', error);
+    } catch {
     } finally {
       syncInProgressRef.current = false;
     }
@@ -204,18 +197,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   useEffect(() => {
     if (!isLoading && !currentUser) {
-      backgroundSyncUsers().catch(e => console.log('AuthContext: Background users sync error', e));
+      backgroundSyncUsers().catch(() => {});
     }
   }, [isLoading, currentUser, backgroundSyncUsers]);
 
   const login = useCallback(async (username: string): Promise<User | null> => {
     try {
-      console.log('Login attempt for username:', username);
-      console.log('Available users:', users.map(u => ({ username: u.username, role: u.role })));
       const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
       
       if (user) {
-        console.log('User found:', user.username, 'Role:', user.role);
         await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
         setCurrentUser(user);
         setInitialSyncComplete(false);
@@ -223,23 +213,17 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         return user;
       }
       
-      console.log('User not found for username:', username);
       return null;
     } catch (error) {
-      console.error('Failed to login:', error);
       throw error;
     }
   }, [users]);
 
   const logout = useCallback(async () => {
     try {
-      console.log('AuthContext: Logout starting...');
       await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-      console.log('AuthContext: Removed current user from storage');
       setCurrentUser(null);
-      console.log('AuthContext: State updated to null');
     } catch (error) {
-      console.error('AuthContext: Logout error:', error);
       throw error;
     }
   }, []);
@@ -249,7 +233,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       return;
     }
     if (syncInProgressRef.current) {
-      console.log('[AuthContext] Sync already in progress, skipping...');
       return;
     }
     try {
@@ -265,7 +248,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       const hasChanges = JSON.stringify(users) !== JSON.stringify(activeUsers);
       
       if (hasChanges) {
-        console.log(silent ? '[AuthContext] Silent sync: Updates detected, applying changes' : '[AuthContext] Sync: Updates detected, applying changes');
         await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(synced));
         setUsers(activeUsers);
         
@@ -279,13 +261,10 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
             }
           }
         }
-      } else {
-        console.log(silent ? '[AuthContext] Silent sync: No changes detected' : '[AuthContext] Sync: No changes detected');
       }
       
       setLastSyncTime(Date.now());
     } catch (error) {
-      console.error('Sync users failed:', error);
       if (!silent) {
         throw error;
       }
@@ -298,7 +277,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   }, [currentUser, users]);
   const addUser = useCallback(async (username: string, role: UserRole) => {
     try {
-      console.log('addUser: Starting, current users count:', users.length);
       const existingUser = users.find(u => u.username.toLowerCase() === username.toLowerCase());
       if (existingUser) {
         throw new Error('User already exists');
@@ -312,26 +290,17 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         updatedAt: Date.now(),
       };
 
-      console.log('addUser: Created new user:', newUser);
       const updatedUsers = [...users, newUser];
-      console.log('addUser: Updated users array length:', updatedUsers.length);
       await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updatedUsers));
-      console.log('addUser: Saved to AsyncStorage');
       setUsers(updatedUsers);
-      console.log('addUser: Updated state');
 
       try {
-        console.log('addUser: Starting sync with updated users...');
         await syncUsers(updatedUsers);
-        console.log('addUser: Sync complete');
-      } catch (e) {
-        console.log('addUser: syncUsers failed, will retry later', e);
+      } catch {
       }
 
-      console.log('addUser: Returning new user');
       return newUser;
     } catch (error) {
-      console.error('Failed to add user:', error);
       throw error;
     }
   }, [users, syncUsers]);
@@ -352,11 +321,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
       try {
         await syncUsers(updatedUsers);
-      } catch (e) {
-        console.log('updateUser: syncUsers failed, will retry later');
+      } catch {
       }
     } catch (error) {
-      console.error('Failed to update user:', error);
       throw error;
     }
   }, [users, currentUser, syncUsers]);
@@ -373,11 +340,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
       try {
         await syncUsers(updatedUsers);
-      } catch (e) {
-        console.log('deleteUser: syncUsers failed, will retry later');
+      } catch {
       }
     } catch (error) {
-      console.error('Failed to delete user:', error);
       throw error;
     }
   }, [users, currentUser, syncUsers]);
@@ -388,10 +353,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
-        console.log('[AuthContext] Running silent 60-second sync...');
-        syncUsers(undefined, true).catch((error) => {
-          console.log('[AuthContext] Silent sync failed (this is normal):', error?.message || 'Unknown error');
-        });
+        syncUsers(undefined, true).catch(() => {});
       }, 60000);
     }
     return () => {
@@ -401,7 +363,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const clearAllAuthData = useCallback(async () => {
     try {
-      console.log('clearAllAuthData: Starting...');
       await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       
       const defaultAdmin: User = {
@@ -423,16 +384,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       setCurrentUser(null);
       setUsers([defaultAdmin, tempUser]);
       setInitialUsersSynced(false);
-      console.log('clearAllAuthData: Complete, admin user preserved');
     } catch (error) {
-      console.error('Failed to clear auth data:', error);
       throw error;
     }
   }, []);
 
   const clearAllUsers = useCallback(async () => {
     try {
-      console.log('clearAllUsers: Starting...');
       const allDeletedUsers = users
         .filter(u => u.id !== 'admin-1' && u.id !== 'temp-1')
         .map(u => ({ ...u, deleted: true as const, updatedAt: Date.now() }));
@@ -459,15 +417,12 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       if (currentUser?.id) {
         try {
           await syncData('users', finalUsers, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' });
-        } catch (syncError) {
-          console.error('clearAllUsers: Sync failed', syncError);
+        } catch {
         }
       }
 
       await AsyncStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([defaultAdmin, tempUser]));
-      console.log('clearAllUsers: Complete, admin and temp users preserved');
     } catch (error) {
-      console.error('Failed to clear all users:', error);
       throw error;
     }
   }, [users, currentUser]);
@@ -480,7 +435,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       await AsyncStorage.setItem(STORAGE_KEYS.SHOW_PAGE_TABS, JSON.stringify(value));
       setShowPageTabs(value);
     } catch (error) {
-      console.error('Failed to update show page tabs setting:', error);
       throw error;
     }
   }, []);
@@ -490,7 +444,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       await AsyncStorage.setItem(STORAGE_KEYS.CURRENCY, JSON.stringify(currencyCode));
       setCurrency(currencyCode);
     } catch (error) {
-      console.error('Failed to update currency setting:', error);
       throw error;
     }
   }, []);
@@ -500,7 +453,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       await AsyncStorage.setItem(STORAGE_KEYS.ENABLE_RECEIVED_AUTO_LOAD, JSON.stringify(value));
       setEnableReceivedAutoLoad(value);
     } catch (error) {
-      console.error('Failed to update enable received auto load setting:', error);
       throw error;
     }
   }, []);

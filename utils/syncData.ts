@@ -15,8 +15,7 @@ async function setLastSyncTimestamp(dataType: string, userId: string, timestamp:
   try {
     const key = `@last_sync_${dataType}_${userId}`;
     await AsyncStorage.setItem(key, timestamp.toString());
-  } catch (error) {
-    console.error(`[syncData] ${dataType}: Failed to save lastSync timestamp:`, error);
+  } catch {
   }
 }
 
@@ -75,8 +74,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
       await setLastSyncTimestamp(dataType, userId, now);
       return localData;
     }
-  } catch (error) {
-    console.error(`[syncData] ${dataType}: Sync failed:`, error);
+  } catch {
     return localData;
   }
 }

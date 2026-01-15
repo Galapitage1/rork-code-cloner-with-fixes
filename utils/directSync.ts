@@ -21,7 +21,6 @@ function shouldAttemptSync(): boolean {
   if (Date.now() > pauseUntil) {
     isPaused = false;
     syncFailureCount = 0;
-    console.log('[DirectSync] Resuming sync after pause');
     return true;
   }
   
@@ -34,14 +33,12 @@ function recordFailure(): void {
   if (syncFailureCount >= MAX_FAILURES_BEFORE_PAUSE) {
     isPaused = true;
     pauseUntil = Date.now() + 60000;
-    console.warn(`[DirectSync] Too many failures (${syncFailureCount}), pausing sync for 60 seconds`);
+
   }
 }
 
 function recordSuccess(): void {
-  if (syncFailureCount > 0) {
-    console.log('[DirectSync] Sync successful, resetting failure count');
-  }
+
   syncFailureCount = 0;
   isPaused = false;
 }
@@ -71,18 +68,16 @@ async function checkBackendHealth(): Promise<boolean> {
     if (response.ok) {
       backendAvailable = true;
       lastHealthCheck = now;
-      console.log('[DirectSync] Backend health check: healthy');
       return true;
     }
     
     backendAvailable = false;
     lastHealthCheck = now;
-    console.warn('[DirectSync] Backend health check failed:', response.status);
+
     return false;
-  } catch (error) {
+  } catch {
     backendAvailable = false;
     lastHealthCheck = now;
-    console.warn('[DirectSync] Backend not available:', error instanceof Error ? error.message : 'Unknown error');
     return false;
   }
 }
@@ -130,17 +125,8 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
     } catch (error: any) {
       lastError = error;
       
-      if (error.name === 'AbortError') {
-        console.log(`[DirectSync] Request timeout on attempt ${attempt + 1}`);
-      } else if (error.message?.includes('ERR_HTTP2')) {
-        console.log(`[DirectSync] HTTP/2 protocol error on attempt ${attempt + 1}`);
-      } else {
-        console.log(`[DirectSync] Attempt ${attempt + 1} failed:`, error.message);
-      }
-      
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
-        console.log(`[DirectSync] Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -186,9 +172,7 @@ export async function saveToServer<T extends { id: string; updatedAt?: number }>
     
     recordSuccess();
     return result as T[];
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    console.error(`[DirectSync] Failed to save ${options.dataType}: ${errorMsg}`);
+  } catch {
     recordFailure();
     return data;
   }
@@ -229,9 +213,7 @@ export async function getFromServer<T>(
     
     recordSuccess();
     return result as T[];
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    console.error(`[DirectSync] Failed to fetch ${options.dataType}: ${errorMsg}`);
+  } catch {
     recordFailure();
     return [];
   }
@@ -273,15 +255,9 @@ export async function getDeltaFromServer<T extends { updatedAt?: number }>(
     
     const filtered = result.filter((item: T) => (item.updatedAt || 0) > since);
     
-    if (filtered.length > 0) {
-      console.log(`[DirectSync] ${options.dataType}: ${filtered.length} changes (${(JSON.stringify(filtered).length / 1024).toFixed(1)}KB)`);
-    }
-    
     recordSuccess();
     return filtered as T[];
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    console.error(`[DirectSync] ${options.dataType} delta failed: ${errorMsg}`);
+  } catch {
     recordFailure();
     return [];
   }
@@ -292,7 +268,6 @@ export async function saveDeltaToServer<T extends { id: string; updatedAt?: numb
   options: SyncOptions
 ): Promise<T[]> {
   if (data.length === 0) {
-    console.log(`[DirectSync] No delta changes to save for ${options.dataType}`);
     return data;
   }
   
@@ -309,7 +284,7 @@ export async function saveDeltaToServer<T extends { id: string; updatedAt?: numb
     const baseUrl = getBaseUrl();
     const url = `${baseUrl}/Tracker/api/sync.php?endpoint=${encodeURIComponent(options.dataType)}&delta=true`;
     
-    console.log(`[DirectSync] Saving delta for ${options.dataType}: ${data.length} changed items`);
+
     
     const response = await fetchWithRetry(url, {
       method: 'POST',
@@ -329,12 +304,9 @@ export async function saveDeltaToServer<T extends { id: string; updatedAt?: numb
       throw new Error('Invalid response format');
     }
     
-    console.log(`[DirectSync] Delta save successful for ${options.dataType}`);
     recordSuccess();
     return result as T[];
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    console.error(`[DirectSync] Failed to save delta ${options.dataType}: ${errorMsg}`);
+  } catch {
     recordFailure();
     return data;
   }
@@ -367,19 +339,13 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
     merged.set(item.id, normalized as T);
   });
   
-  let remoteNewer = 0;
-  let remoteNew = 0;
-  let deletionWins = 0;
-  let staleDataBlocked = 0;
-  let deletionResurrectionBlocked = 0;
-  let duplicatesByNameBlocked = 0;
+
   
   remote.forEach(item => {
     const itemName = (item as any).name;
     if (itemName) {
       const normalizedName = itemName.toLowerCase().trim();
       if (seenNames.has(normalizedName) && !seenIds.has(item.id)) {
-        duplicatesByNameBlocked++;
         return;
       }
       seenNames.add(normalizedName);
@@ -417,16 +383,13 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
           const normalized = { ...item, updatedAt: remoteTime };
           merged.set(item.id, normalized as T);
         }
-        deletionWins++;
         return;
       } else {
         const RESURRECTION_THRESHOLD = 5 * 60 * 1000;
         if (remoteTime > localTime + RESURRECTION_THRESHOLD) {
           const normalized = { ...item, updatedAt: remoteTime };
           merged.set(item.id, normalized as T);
-          remoteNewer++;
-        } else {
-          deletionResurrectionBlocked++;
+
         }
         return;
       }
@@ -436,32 +399,24 @@ export function mergeData<T extends { id: string; updatedAt?: number; deleted?: 
       if (remoteTime >= localTime) {
         const normalized = { ...item, updatedAt: remoteTime };
         merged.set(item.id, normalized as T);
-        deletionWins++;
       }
       return;
     }
     
     if (remoteTime === 0 && localTime > 0) {
-      staleDataBlocked++;
       return;
     }
     
     if (!existing) {
       const normalized = { ...item, updatedAt: remoteTime };
       merged.set(item.id, normalized as T);
-      remoteNew++;
     } else if (remoteTime > localTime) {
       const normalized = { ...item, updatedAt: remoteTime };
       merged.set(item.id, normalized as T);
-      remoteNewer++;
     }
   });
   
   const result = Array.from(merged.values());
-  
-  if (remoteNew + remoteNewer + deletionWins + staleDataBlocked + deletionResurrectionBlocked + duplicatesByNameBlocked > 0) {
-    console.log(`[mergeData] Merged ${local.length}L+${remote.length}R → ${result.length} (new:${remoteNew} updated:${remoteNewer} del:${deletionWins} blocked:${staleDataBlocked + deletionResurrectionBlocked + duplicatesByNameBlocked})`);
-  }
   
   return result as T[];
 }

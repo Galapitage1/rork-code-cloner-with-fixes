@@ -31,7 +31,7 @@ interface PendingQueueItem {
 
 export async function addToPendingQueue(operation: PendingOperation): Promise<void> {
   try {
-    console.log('[PendingSync] Adding operation to queue:', operation.type);
+
     
     const queue = await getPendingQueue();
     const newItem: PendingQueueItem = {
@@ -44,9 +44,8 @@ export async function addToPendingQueue(operation: PendingOperation): Promise<vo
     queue.push(newItem);
     await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(queue));
     
-    console.log('[PendingSync] Operation queued successfully. Queue size:', queue.length);
-  } catch (error) {
-    console.error('[PendingSync] Failed to add to queue:', error);
+
+  } catch {
   }
 }
 
@@ -57,8 +56,7 @@ export async function getPendingQueue(): Promise<PendingQueueItem[]> {
     
     const queue = JSON.parse(stored);
     return Array.isArray(queue) ? queue : [];
-  } catch (error) {
-    console.error('[PendingSync] Failed to get queue:', error);
+  } catch {
     return [];
   }
 }
@@ -68,9 +66,8 @@ export async function removeFromQueue(itemId: string): Promise<void> {
     const queue = await getPendingQueue();
     const filtered = queue.filter(item => item.id !== itemId);
     await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(filtered));
-    console.log('[PendingSync] Removed item from queue. Remaining:', filtered.length);
-  } catch (error) {
-    console.error('[PendingSync] Failed to remove from queue:', error);
+
+  } catch {
   }
 }
 
@@ -82,17 +79,15 @@ export async function updateRetryCount(itemId: string): Promise<void> {
       item.retryCount += 1;
       await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(queue));
     }
-  } catch (error) {
-    console.error('[PendingSync] Failed to update retry count:', error);
+  } catch {
   }
 }
 
 export async function clearPendingQueue(): Promise<void> {
   try {
     await AsyncStorage.removeItem(PENDING_SYNC_KEY);
-    console.log('[PendingSync] Queue cleared');
-  } catch (error) {
-    console.error('[PendingSync] Failed to clear queue:', error);
+
+  } catch {
   }
 }
 
@@ -102,38 +97,34 @@ export async function processPendingQueue(
   const queue = await getPendingQueue();
   
   if (queue.length === 0) {
-    console.log('[PendingSync] No pending operations to process');
     return { success: 0, failed: 0, total: 0 };
   }
-  
-  console.log(`[PendingSync] Processing ${queue.length} pending operations...`);
   
   let success = 0;
   let failed = 0;
   
   for (const item of queue) {
     try {
-      console.log(`[PendingSync] Processing operation: ${item.operation.type} (retry: ${item.retryCount})`);
+
       
       const result = await executor(item.operation);
       
       if (result) {
         await removeFromQueue(item.id);
         success++;
-        console.log(`[PendingSync] ✓ Operation completed: ${item.operation.type}`);
+
       } else {
         if (item.retryCount < 3) {
           await updateRetryCount(item.id);
           failed++;
-          console.log(`[PendingSync] ✗ Operation failed, will retry: ${item.operation.type}`);
+
         } else {
           await removeFromQueue(item.id);
           failed++;
-          console.log(`[PendingSync] ✗ Operation failed after max retries, removed: ${item.operation.type}`);
+
         }
       }
-    } catch (error) {
-      console.error(`[PendingSync] Error processing operation:`, error);
+    } catch {
       if (item.retryCount < 3) {
         await updateRetryCount(item.id);
       } else {
@@ -142,8 +133,6 @@ export async function processPendingQueue(
       failed++;
     }
   }
-  
-  console.log(`[PendingSync] Processing complete - Success: ${success}, Failed: ${failed}, Total: ${queue.length}`);
   
   return { success, failed, total: queue.length };
 }
