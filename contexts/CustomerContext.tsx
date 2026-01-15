@@ -44,11 +44,9 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     }
     
     try {
-      console.log('[CustomerContext] Loading customers from server...');
       const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
       const activeCustomers = remoteData.filter((customer: Customer) => customer.deleted !== true);
       setCustomers(activeCustomers);
-      console.log('[CustomerContext] Loaded', activeCustomers.length, 'customers from server');
       
       const meta = {
         count: activeCustomers.length,
@@ -66,7 +64,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
           if (Array.isArray(parsed)) {
             const activeCustomers = parsed.filter((customer: Customer) => customer.deleted !== true);
             setCustomers(activeCustomers);
-            console.log('[CustomerContext] Loaded', activeCustomers.length, 'customers from legacy cache');
           }
         }
       } catch (cacheError) {
@@ -86,7 +83,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const saveCustomers = useCallback(async (newCustomers: Customer[]) => {
     try {
       setCustomers(newCustomers);
-      console.log('saveCustomers: Updated state with', newCustomers.length, 'customers');
     } catch (error) {
       console.error('Error saving customers:', error);
     }
@@ -110,9 +106,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const importCustomers = useCallback(async (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
     if (!currentUser) return 0;
 
-    console.log('[CustomerContext] importCustomers: Starting import of', customerDataList.length, 'customers');
-    console.log('[CustomerContext] importCustomers: Current customers count before import:', customers.length);
-
     const now = Date.now();
     const newCustomers: Customer[] = customerDataList.map((customerData, index) => ({
       ...customerData,
@@ -123,13 +116,9 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     }));
 
     const updated = [...customers, ...newCustomers];
-    console.log('[CustomerContext] importCustomers: Total customers after merge:', updated.length);
-    
-    console.log('[CustomerContext] importCustomers: Syncing to server...');
     try {
       const synced = await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
       setCustomers(synced.filter(c => c.deleted !== true));
-      console.log('[CustomerContext] importCustomers: Synced to server successfully');
     } catch (error) {
       console.error('[CustomerContext] importCustomers: Failed to sync to server:', error);
       await saveCustomers(updated);
@@ -148,19 +137,15 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   }, [customers, saveCustomers]);
 
   const deleteCustomer = useCallback(async (id: string) => {
-    console.log('CustomerContext deleteCustomer: Marking customer as deleted', id);
     const updated = customers.map(customer =>
       customer.id === id
         ? { ...customer, deleted: true, updatedAt: Date.now() }
         : customer
     );
     const activeCustomers = updated.filter(c => c.deleted !== true);
-    console.log('CustomerContext deleteCustomer: Customers after marking deleted', activeCustomers.length);
-    
     try {
       setCustomers(activeCustomers);
       await saveToServer(updated, { userId: currentUser?.id || '', dataType: 'customers' });
-      console.log('CustomerContext deleteCustomer: Synced to server');
     } catch (error) {
       console.error('CustomerContext deleteCustomer: Failed', error);
       throw error;
@@ -196,7 +181,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
         setIsSyncing(true);
       }
       
-      console.log('[CustomerContext] Starting sync for customers...');
       const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
       const merged = mergeData(customers, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'customers' });
@@ -204,7 +188,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       const activeCustomers = synced.filter(customer => customer.deleted !== true);
       setCustomers(activeCustomers);
       setLastSyncTime(Date.now());
-      console.log('[CustomerContext] Sync complete. Synced', activeCustomers.length, 'customers');
     } catch (error) {
       console.error('CustomerContext syncCustomers: Failed:', error);
       if (!silent) {
@@ -222,7 +205,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
-        syncCustomers(true).catch((e) => console.log('Customers auto-sync error', e));
+        syncCustomers(true).catch(() => {});
       }, 10000);
     }
     return () => {
@@ -237,8 +220,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       return { duplicatesFound: 0, duplicatesDeleted: 0 };
     }
 
-    console.log('[CustomerContext] Finding duplicates by phone number...');
-    
     const phoneMap = new Map<string, Customer[]>();
     
     customers.forEach(customer => {
@@ -253,8 +234,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
     const duplicateGroups = Array.from(phoneMap.values()).filter(group => group.length > 1);
     const duplicatesFound = duplicateGroups.reduce((sum, group) => sum + group.length - 1, 0);
-    
-    console.log('[CustomerContext] Found', duplicatesFound, 'duplicates across', duplicateGroups.length, 'phone numbers');
 
     if (duplicatesFound === 0) {
       return { duplicatesFound: 0, duplicatesDeleted: 0 };
@@ -273,13 +252,9 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     );
 
     const activeCustomers = updated.filter(c => c.deleted !== true);
-    console.log('[CustomerContext] Deleting', idsToDelete.size, 'duplicate customers');
-    console.log('[CustomerContext] Remaining customers:', activeCustomers.length);
-
     try {
       setCustomers(activeCustomers);
       await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
-      console.log('[CustomerContext] Duplicates deleted and synced to server');
       return { duplicatesFound, duplicatesDeleted: idsToDelete.size };
     } catch (error) {
       console.error('[CustomerContext] Failed to delete duplicates:', error);
