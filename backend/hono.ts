@@ -8,7 +8,6 @@ const dataStore = new Map<string, any[]>();
 
 app.use("*", cors({
   origin: (origin) => {
-    console.log('[CORS] Request from origin:', origin);
     return origin;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -19,70 +18,51 @@ app.use("*", cors({
 }));
 
 app.use("*", async (c, next) => {
-  console.log(`[${new Date().toISOString()}] ${c.req.method} ${c.req.url}`);
   await next();
-  console.log(`[${new Date().toISOString()}] Response: ${c.res.status}`);
 });
 
 app.post("/api/sync", async (c) => {
   try {
-    console.log('[Sync POST] Starting request processing...');
-    
     let body;
     try {
       body = await c.req.json();
-      console.log('[Sync POST] Body parsed:', { userId: body?.userId, dataType: body?.dataType, itemCount: body?.data?.length });
-    } catch (parseError: any) {
-      console.error('[Sync POST] JSON parse error:', parseError.message);
+    } catch {
       return c.json({ success: false, error: 'Invalid JSON payload' }, 400);
     }
     
     const { userId, dataType, data } = body;
     
     if (!userId || !dataType) {
-      console.error('[Sync POST] Missing required fields');
       return c.json({ success: false, error: 'Missing userId or dataType' }, 400);
     }
     
     const key = `${userId}:${dataType}`;
-    console.log(`[Sync POST] Saving ${dataType} for user ${userId}, items: ${data?.length || 0}`);
     
     if (data && Array.isArray(data)) {
       dataStore.set(key, data);
-      console.log(`[Sync POST] Successfully stored ${data.length} items for ${key}`);
-    } else {
-      console.log(`[Sync POST] No data provided, returning existing data`);
     }
     
     const stored = dataStore.get(key) || [];
-    console.log(`[Sync POST] Returning ${stored.length} items`);
     return c.json({ success: true, data: stored });
   } catch (error: any) {
-    console.error('[Sync POST] Unexpected error:', error);
     return c.json({ success: false, error: error?.message || 'Sync failed' }, 500);
   }
 });
 
 app.get("/api/sync", async (c) => {
   try {
-    console.log('[Sync GET] Starting request processing...');
     const userId = c.req.query('userId');
     const dataType = c.req.query('dataType');
     
-    console.log('[Sync GET] Query params:', { userId, dataType });
-    
     if (!userId || !dataType) {
-      console.error('[Sync GET] Missing required query params');
       return c.json({ success: false, error: 'Missing userId or dataType' }, 400);
     }
     
     const key = `${userId}:${dataType}`;
     const data = dataStore.get(key) || [];
-    console.log(`[Sync GET] Getting ${dataType} for user ${userId}, items: ${data.length}`);
     
     return c.json({ success: true, data });
   } catch (error: any) {
-    console.error('[Sync GET] Unexpected error:', error);
     return c.json({ success: false, error: error?.message || 'Get failed' }, 500);
   }
 });
@@ -103,7 +83,6 @@ app.get("/api/health", (c) => {
 
 app.post("/api/test-email-connection", async (c) => {
   try {
-    console.log('[Email Test] Starting connection test...');
     const body = await c.req.json();
     const { smtpConfig } = body;
 
@@ -113,7 +92,6 @@ app.post("/api/test-email-connection", async (c) => {
 
     if (smtpConfig && smtpConfig.host && smtpConfig.username && smtpConfig.password) {
       try {
-        console.log('[Email Test] Testing SMTP connection...');
         const transporter = nodemailer.createTransport({
           host: smtpConfig.host,
           port: parseInt(smtpConfig.port),
@@ -127,11 +105,9 @@ app.post("/api/test-email-connection", async (c) => {
         await transporter.verify();
         results.smtp.success = true;
         results.smtp.message = 'SMTP connection successful';
-        console.log('[Email Test] SMTP connection verified');
       } catch (error: any) {
         results.smtp.success = false;
         results.smtp.message = `SMTP Error: ${error.message}`;
-        console.error('[Email Test] SMTP error:', error);
       }
     } else {
       results.smtp.message = 'SMTP settings incomplete';
@@ -139,14 +115,12 @@ app.post("/api/test-email-connection", async (c) => {
 
     return c.json({ success: true, results });
   } catch (error: any) {
-    console.error('[Email Test] Unexpected error:', error);
     return c.json({ success: false, error: error?.message || 'Connection test failed' }, 500);
   }
 });
 
 app.post("/api/send-email", async (c) => {
   try {
-    console.log('[Email] Starting send email request...');
     const body = await c.req.json();
     const { smtpConfig, emailData, recipients } = body;
 
@@ -183,37 +157,30 @@ app.post("/api/send-email", async (c) => {
 
         await transporter.sendMail(mailOptions);
         results.success++;
-        console.log(`[Email] Sent to ${recipient.email}`);
       } catch (error: any) {
         results.failed++;
         results.errors.push(`${recipient.name}: ${error.message}`);
-        console.error(`[Email] Failed to send to ${recipient.email}:`, error);
       }
     }
 
     return c.json({ success: true, results });
   } catch (error: any) {
-    console.error('[Email] Unexpected error:', error);
     return c.json({ success: false, error: error?.message || 'Email send failed' }, 500);
   }
 });
 
 app.notFound((c) => {
-  console.log('[Hono] 404 Not Found:', c.req.url);
   return c.json({ error: 'Not Found', path: c.req.url }, 404);
 });
 
 app.post("/api/test-whatsapp-connection", async (c) => {
   try {
-    console.log('[WhatsApp Test] Starting connection test...');
     const body = await c.req.json();
     const { accessToken, phoneNumberId } = body;
 
     if (!accessToken || !phoneNumberId) {
       return c.json({ success: false, error: 'Missing access token or phone number ID' }, 400);
     }
-
-    console.log('[WhatsApp Test] Testing with phoneNumberId:', phoneNumberId);
     
     const response = await fetch(
       `https://graph.facebook.com/v21.0/${phoneNumberId}`,
@@ -226,12 +193,9 @@ app.post("/api/test-whatsapp-connection", async (c) => {
     );
 
     const data = await response.json();
-    console.log('[WhatsApp Test] API Response Status:', response.status);
-    console.log('[WhatsApp Test] API Response Data:', JSON.stringify(data, null, 2));
 
     if (!response.ok) {
       const errorMsg = data.error?.message || data.error?.error_user_msg || 'Failed to verify WhatsApp configuration';
-      console.error('[WhatsApp Test] API Error:', errorMsg);
       throw new Error(errorMsg);
     }
 
@@ -241,14 +205,12 @@ app.post("/api/test-whatsapp-connection", async (c) => {
       data,
     });
   } catch (error: any) {
-    console.error('[WhatsApp Test] Error:', error);
     return c.json({ success: false, error: error?.message || 'WhatsApp connection test failed' }, 500);
   }
 });
 
 app.post("/api/send-whatsapp", async (c) => {
   try {
-    console.log('[WhatsApp] Starting send whatsapp request...');
     const body = await c.req.json();
     const { accessToken, phoneNumberId, message, recipients } = body;
 
@@ -282,8 +244,6 @@ app.post("/api/send-whatsapp", async (c) => {
           phone = '94' + phone;
         }
 
-        console.log(`[WhatsApp] Sending to ${recipient.name} (${phone})...`);
-
         const response = await fetch(
           `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
           {
@@ -312,19 +272,16 @@ app.post("/api/send-whatsapp", async (c) => {
         }
 
         results.success++;
-        console.log(`[WhatsApp] Sent to ${recipient.name}:`, data);
 
         await new Promise(resolve => setTimeout(resolve, 1000));
       } catch (error: any) {
         results.failed++;
         results.errors.push(`${recipient.name}: ${error.message}`);
-        console.error(`[WhatsApp] Failed to send to ${recipient.name}:`, error);
       }
     }
 
     return c.json({ success: true, results });
   } catch (error: any) {
-    console.error('[WhatsApp] Unexpected error:', error);
     return c.json({ success: false, error: error?.message || 'WhatsApp send failed' }, 500);
   }
 });
@@ -336,11 +293,9 @@ async function getOrRefreshSMSToken(settings: { esms_username: string; esms_pass
   const cached = smsTokenStore.get(tokenKey);
   
   if (cached && cached.expires_at > Date.now()) {
-    console.log('[SMS] Using cached token');
     return cached.access_token;
   }
 
-  console.log('[SMS] Refreshing token...');
   const response = await fetch('https://e-sms.dialog.lk/api/v2/user/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -353,7 +308,6 @@ async function getOrRefreshSMSToken(settings: { esms_username: string; esms_pass
   const data = await response.json();
   
   if (!response.ok || !data.token) {
-    console.error('[SMS] Token refresh failed:', data);
     throw new Error(data.message || 'Failed to authenticate with eSMS');
   }
 
@@ -363,7 +317,6 @@ async function getOrRefreshSMSToken(settings: { esms_username: string; esms_pass
     expires_at,
   });
 
-  console.log('[SMS] Token refreshed successfully');
   return data.token;
 }
 
@@ -385,7 +338,6 @@ function normalizeMobile(mobile: string): string {
 
 app.post("/api/sms/test-login", async (c) => {
   try {
-    console.log('[SMS Test] Starting login test...');
     const body = await c.req.json();
     const { esms_username, esms_password } = body;
 
@@ -401,14 +353,12 @@ app.post("/api/sms/test-login", async (c) => {
       token_length: token.length,
     });
   } catch (error: any) {
-    console.error('[SMS Test] Error:', error);
     return c.json({ success: false, error: error?.message || 'Login test failed' }, 500);
   }
 });
 
 app.post("/api/sms/send-test", async (c) => {
   try {
-    console.log('[SMS Test] Starting test SMS send...');
     const body = await c.req.json();
     const { settings, mobile, message } = body;
 
@@ -431,8 +381,6 @@ app.post("/api/sms/send-test", async (c) => {
       payload.sourceAddress = settings.default_source_address;
     }
 
-    console.log('[SMS Test] Sending with payload:', JSON.stringify(payload, null, 2));
-
     const response = await fetch('https://e-sms.dialog.lk/api/v2/sms', {
       method: 'POST',
       headers: {
@@ -443,7 +391,6 @@ app.post("/api/sms/send-test", async (c) => {
     });
 
     const data = await response.json();
-    console.log('[SMS Test] Response:', JSON.stringify(data, null, 2));
 
     if (!response.ok) {
       throw new Error(data.comment || data.message || 'Failed to send test SMS');
@@ -455,14 +402,12 @@ app.post("/api/sms/send-test", async (c) => {
       data,
     });
   } catch (error: any) {
-    console.error('[SMS Test] Error:', error);
     return c.json({ success: false, error: error?.message || 'Test SMS send failed' }, 500);
   }
 });
 
 app.post("/api/sms/send-campaign", async (c) => {
   try {
-    console.log('[SMS Campaign] Starting campaign send...');
     const body = await c.req.json();
     const { settings, message, recipients, source_address, payment_method } = body;
 
@@ -508,8 +453,6 @@ app.post("/api/sms/send-campaign", async (c) => {
       payload.push_notification_url = settings.push_notification_url;
     }
 
-    console.log('[SMS Campaign] Sending to', normalizedRecipients.length, 'recipients');
-
     let response = await fetch('https://e-sms.dialog.lk/api/v2/sms', {
       method: 'POST',
       headers: {
@@ -522,7 +465,6 @@ app.post("/api/sms/send-campaign", async (c) => {
     let data = await response.json();
 
     if (data.errCode === 104 || (data.comment && data.comment.includes('already used'))) {
-      console.log('[SMS Campaign] Transaction ID already used, retrying with new ID...');
       payload.transaction_id = Date.now() + Math.floor(Math.random() * 10000);
       
       response = await fetch('https://e-sms.dialog.lk/api/v2/sms', {
@@ -538,7 +480,6 @@ app.post("/api/sms/send-campaign", async (c) => {
     }
 
     if (data.errCode === 401 || (data.comment && data.comment.toLowerCase().includes('token'))) {
-      console.log('[SMS Campaign] Token expired, refreshing and retrying...');
       token = await getOrRefreshSMSToken(settings);
       
       response = await fetch('https://e-sms.dialog.lk/api/v2/sms', {
@@ -552,8 +493,6 @@ app.post("/api/sms/send-campaign", async (c) => {
       
       data = await response.json();
     }
-
-    console.log('[SMS Campaign] Response:', JSON.stringify(data, null, 2));
 
     return c.json({
       success: response.ok && !data.errCode,
@@ -573,14 +512,12 @@ app.post("/api/sms/send-campaign", async (c) => {
       },
     });
   } catch (error: any) {
-    console.error('[SMS Campaign] Error:', error);
     return c.json({ success: false, error: error?.message || 'Campaign send failed' }, 500);
   }
 });
 
 app.post("/api/sms/check-status", async (c) => {
   try {
-    console.log('[SMS Status] Checking campaign status...');
     const body = await c.req.json();
     const { settings, transaction_id } = body;
 
@@ -600,14 +537,12 @@ app.post("/api/sms/check-status", async (c) => {
     });
 
     const data = await response.json();
-    console.log('[SMS Status] Response:', JSON.stringify(data, null, 2));
 
     return c.json({
       success: true,
       data,
     });
   } catch (error: any) {
-    console.error('[SMS Status] Error:', error);
     return c.json({ success: false, error: error?.message || 'Status check failed' }, 500);
   }
 });
@@ -617,8 +552,6 @@ app.get("/api/sms/dlr", async (c) => {
     const campaignId = c.req.query('campaignId');
     const msisdn = c.req.query('msisdn');
     const status = c.req.query('status');
-
-    console.log('[SMS DLR] Delivery report:', { campaignId, msisdn, status });
 
     if (!campaignId || !msisdn || !status) {
       return c.json({ success: false, error: 'Missing required parameters' }, 400);
@@ -637,11 +570,8 @@ app.get("/api/sms/dlr", async (c) => {
     events.push(event);
     dataStore.set(dlrKey, events);
 
-    console.log('[SMS DLR] Event stored:', event);
-
     return c.text('OK', 200);
-  } catch (error: any) {
-    console.error('[SMS DLR] Error:', error);
+  } catch {
     return c.text('ERROR', 500);
   }
 });
@@ -658,13 +588,11 @@ app.get("/api/sms/dlr-events", async (c) => {
 
     return c.json({ success: true, events });
   } catch (error: any) {
-    console.error('[SMS DLR Events] Error:', error);
     return c.json({ success: false, error: error?.message }, 500);
   }
 });
 
 app.onError((err, c) => {
-  console.error('[Hono] Server Error:', err);
   return c.json({ error: 'Internal Server Error', message: err.message }, 500);
 });
 

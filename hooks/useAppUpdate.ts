@@ -28,7 +28,6 @@ export function useAppUpdate() {
         clearTimeout(timeoutId);
         
         if (!response.ok) {
-          console.warn('Update check failed with status:', response.status);
           return;
         }
         
@@ -38,17 +37,12 @@ export function useAppUpdate() {
         const storedHash = localStorage.getItem('app-version-hash');
         
         if (storedHash && storedHash !== currentHash) {
-          console.log('App update detected:', { storedHash, currentHash });
           setUpdateAvailable(true);
         } else if (!storedHash) {
           localStorage.setItem('app-version-hash', currentHash);
         }
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
-          console.log('Update check timed out');
-        } else {
-          console.error('Error checking for updates:', error);
-        }
+      } catch {
+        // Silently handle update check errors
       } finally {
         setIsChecking(false);
         checkInProgressRef.current = false;
@@ -107,8 +101,7 @@ export function useAppUpdate() {
         });
         
         window.location.reload();
-      } catch (error) {
-        console.error('Error updating app:', error);
+      } catch {
         window.location.reload();
       }
     }
