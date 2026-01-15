@@ -54,7 +54,7 @@ export function parseRecipeExcelFile(
     });
 
     for (const sheetName of workbook.SheetNames) {
-      console.log(`[RecipeParser] Processing sheet: ${sheetName}`);
+      
       const sheet = workbook.Sheets[sheetName];
       const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
       
@@ -91,7 +91,7 @@ export function parseRecipeExcelFile(
 
         const existingRecipe = existingRecipes.find(r => r.menuProductId === matchedProduct.id);
         if (existingRecipe) {
-          console.log(`[RecipeParser] Skipping ${matchedProduct.name} - recipe already exists`);
+          
           continue;
         }
 
@@ -154,7 +154,7 @@ export function parseRecipeExcelFile(
     const recipesWithConversions: Recipe[] = [];
     for (const recipe of recipes) {
       recipesWithConversions.push(recipe);
-      console.log(`[RecipeParser] Created recipe for product ID ${recipe.menuProductId} with ${recipe.components.length} ingredients`);
+      
       
       const conversion = conversionsByFromId.get(recipe.menuProductId);
       if (conversion) {
@@ -174,9 +174,9 @@ export function parseRecipeExcelFile(
               updatedAt: Date.now()
             };
             recipesWithConversions.push(convertedRecipe);
-            console.log(`[RecipeParser] Auto-created converted recipe for ${convertedProduct.name} (${convertedProduct.unit}) by dividing by ${conversion.factor}`);
+            
           } else {
-            console.log(`[RecipeParser] Skipping converted recipe for ${convertedProduct.name} - recipe already exists`);
+            
           }
         }
       }

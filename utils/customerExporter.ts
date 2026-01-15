@@ -73,12 +73,9 @@ export async function exportCustomersToExcel(customers: Customer[]): Promise<voi
           dialogTitle: 'Export Customers',
           UTI: 'com.microsoft.excel.xlsx',
         });
-      } else {
-        console.log('Sharing is not available on this device');
       }
     }
   } catch (error) {
-    console.error('Error exporting customers to Excel:', error);
     throw error;
   }
 }

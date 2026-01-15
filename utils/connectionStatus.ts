@@ -26,11 +26,11 @@ export async function checkServerHealth(): Promise<boolean> {
     isServerAvailable = response.ok;
     lastCheckTime = now;
     
-    console.log('[ConnectionStatus] Server health check:', isServerAvailable ? 'OK' : 'Failed');
+    
     
     return isServerAvailable;
-  } catch (error) {
-    console.log('[ConnectionStatus] Server health check failed:', error);
+  } catch {
+    
     isServerAvailable = false;
     lastCheckTime = now;
     return false;

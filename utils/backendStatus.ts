@@ -56,9 +56,8 @@ export async function checkBackendStatus(): Promise<boolean> {
     } else {
       globalBackendStatus.isAvailable = false;
     }
-  } catch (error) {
+  } catch {
     globalBackendStatus.isAvailable = false;
-    console.log('[BackendStatus] Backend check failed:', error instanceof Error ? error.message : 'Unknown error');
   } finally {
     globalBackendStatus.lastChecked = Date.now();
     globalBackendStatus.checking = false;
@@ -75,7 +74,7 @@ export function useBackendStatus() {
     statusListeners.add(setStatus);
     
     if (globalBackendStatus.lastChecked === null && !globalBackendStatus.checking) {
-      checkBackendStatus().catch(console.error);
+      checkBackendStatus().catch(() => {});
     }
 
     return () => {

@@ -24,7 +24,6 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
       }
 
       const headers = jsonData[0].map((h: any) => String(h).toLowerCase().trim());
-      console.log('[ExcelParser] Sheet headers:', headers);
       
       const nameIndex = headers.findIndex((h: string) => h.includes('name') || h.includes('product'));
       const typeIndex = headers.findIndex((h: string) => h.includes('type'));
@@ -35,7 +34,7 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
       const showInStockIndex = headers.findIndex((h: string) => h.includes('show') && (h.includes('stock') || h.includes('requests')));
       const salesBasedIndex = headers.findIndex((h: string) => h.includes('sales') && h.includes('raw'));
       
-      console.log('[ExcelParser] Column indices - name:', nameIndex, 'type:', typeIndex, 'unit:', unitIndex, 'category:', categoryIndex, 'minStock:', minStockIndex, 'sellingPrice:', sellingPriceIndex, 'showInStock:', showInStockIndex, 'salesBased:', salesBasedIndex);
+      
 
       if (nameIndex === -1) {
         errors.push(`Sheet "${sheetName}" missing required "Name" column`);
@@ -71,7 +70,7 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
         const rawSellingPrice = sellingPriceIndex !== -1 ? row[sellingPriceIndex] : undefined;
         const parsedSellingPrice = type === 'menu' && rawSellingPrice !== undefined && rawSellingPrice !== null && String(rawSellingPrice).trim() !== '' ? Number(rawSellingPrice) : undefined;
         
-        console.log('[ExcelParser] Row', i, '- Name:', parsedName, 'Type:', type, 'Unit:', parsedUnit, 'rawSellingPrice:', rawSellingPrice, 'parsedSellingPrice:', parsedSellingPrice);
+        
 
         const existingProduct = existingProducts?.find(
           p => p.name.toLowerCase().trim() === parsedName.toLowerCase() &&
@@ -88,7 +87,7 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
             showInStock,
             salesBasedRawCalc,
           };
-          console.log('[ExcelParser] Updating existing product:', parsedName, '- sellingPrice:', parsedSellingPrice, '(overwritten from Excel)');
+          
           products.push(updatedProduct);
         } else {
           const product: Product = {

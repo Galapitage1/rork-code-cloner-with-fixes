@@ -52,15 +52,13 @@ async function hasLocalData(dataType: string): Promise<boolean> {
 
     const parsed = JSON.parse(data);
     return Array.isArray(parsed) && parsed.length > 0;
-  } catch (error) {
-    console.error(`[InitialDataLoader] Error checking local data for ${dataType}:`, error);
+  } catch {
     return false;
   }
 }
 
 export async function loadInitialDataIfNeeded(userId: string, onProgress?: (status: string) => void): Promise<void> {
   try {
-    console.log('[InitialDataLoader] Starting initial data check...');
     onProgress?.('Checking local data...');
 
     const hasOutlets = await hasLocalData('outlets');
@@ -68,34 +66,24 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
     const hasUsers = await hasLocalData('users');
 
     if (hasOutlets && hasProducts && hasUsers) {
-      console.log('[InitialDataLoader] Device already has core data, skipping initial load');
       onProgress?.('Data already loaded');
       return;
     }
 
-    console.log('[InitialDataLoader] Missing local data, loading from server...');
-    
     const priorityTypes = ['users', 'outlets'];
-    
-    console.log('[InitialDataLoader] Loading critical data first (users, outlets)...');
     onProgress?.('Loading users and outlets...');
     
     await Promise.all(priorityTypes.map(async (dataType) => {
       try {
-        console.log(`[InitialDataLoader] Loading ${dataType}...`);
         const data = await getFromServer({ userId, dataType });
-        
         const storageKey = STORAGE_KEY_MAP[dataType];
         if (storageKey) {
           await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-          console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
         }
-      } catch (error) {
-        console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
+      } catch {
       }
     }));
 
-    console.log('[InitialDataLoader] Loading remaining data in background...');
     const remainingTypes = DATA_TYPES_TO_LOAD.filter(t => !priorityTypes.includes(t));
     
     const total = remainingTypes.length;
@@ -108,50 +96,34 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
       
       await Promise.all(batch.map(async (dataType) => {
         try {
-          console.log(`[InitialDataLoader] Loading ${dataType}... (${loaded}/${total})`);
-          
           const data = await getFromServer({ userId, dataType });
-          
           const storageKey = STORAGE_KEY_MAP[dataType];
           if (storageKey) {
             await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-            console.log(`[InitialDataLoader] ✓ Loaded ${data.length} ${dataType} items`);
           }
-        } catch (error) {
-          console.error(`[InitialDataLoader] ✗ Failed to load ${dataType}:`, error);
+        } catch {
         }
       }));
     }
 
-    console.log('[InitialDataLoader] ✓ Initial data load complete');
     onProgress?.('Complete!');
-  } catch (error) {
-    console.error('[InitialDataLoader] Error during initial data load:', error);
+  } catch {
     onProgress?.('Error loading data');
   }
 }
 
 export async function forceReloadAllData(userId: string): Promise<void> {
   try {
-    console.log('[InitialDataLoader] Force reloading all data from server...');
-
     for (const dataType of DATA_TYPES_TO_LOAD) {
       try {
-        console.log(`[InitialDataLoader] Reloading ${dataType}...`);
         const data = await getFromServer({ userId, dataType });
-        
         const storageKey = STORAGE_KEY_MAP[dataType];
         if (storageKey) {
           await AsyncStorage.setItem(storageKey, JSON.stringify(data));
-          console.log(`[InitialDataLoader] Reloaded ${data.length} ${dataType} items`);
         }
-      } catch (error) {
-        console.error(`[InitialDataLoader] Failed to reload ${dataType}:`, error);
+      } catch {
       }
     }
-
-    console.log('[InitialDataLoader] Force reload complete');
-  } catch (error) {
-    console.error('[InitialDataLoader] Error during force reload:', error);
+  } catch {
   }
 }

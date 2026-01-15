@@ -5,20 +5,13 @@ export async function testServerConnection(): Promise<{
 }> {
   const baseUrl = 'https://tracker.tecclk.com';
   
-  console.log('=== Testing Server Connection ===');
-  console.log('Base URL:', baseUrl);
-  
   try {
-    console.log('Test 1: Checking PHP API health...');
     const response = await fetch(`${baseUrl}/Tracker/api/get.php?endpoint=users`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
       },
     });
-    
-    console.log('Response status:', response.status);
-    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
     
     if (!response.ok) {
       return {
@@ -33,7 +26,6 @@ export async function testServerConnection(): Promise<{
     }
     
     const data = await response.json();
-    console.log('Response data:', data);
     
     return {
       success: true,
@@ -44,7 +36,6 @@ export async function testServerConnection(): Promise<{
       },
     };
   } catch (error: any) {
-    console.error('Connection test failed:', error);
     return {
       success: false,
       message: error.message || 'Failed to connect',
@@ -63,16 +54,12 @@ export async function testWriteToServer(): Promise<{
 }> {
   const baseUrl = 'https://tracker.tecclk.com';
   
-  console.log('=== Testing Server Write ===');
-  
   try {
     const testData = [{
       id: 'test-' + Date.now(),
       name: 'Test Item',
       updatedAt: Date.now(),
     }];
-    
-    console.log('Sending test data:', testData);
     
     const response = await fetch(`${baseUrl}/Tracker/api/sync.php?endpoint=test`, {
       method: 'POST',
@@ -81,8 +68,6 @@ export async function testWriteToServer(): Promise<{
       },
       body: JSON.stringify(testData),
     });
-    
-    console.log('Response status:', response.status);
     
     if (!response.ok) {
       const errorText = await response.text();
@@ -97,7 +82,6 @@ export async function testWriteToServer(): Promise<{
     }
     
     const result = await response.json();
-    console.log('Write result:', result);
     
     return {
       success: true,
@@ -107,7 +91,6 @@ export async function testWriteToServer(): Promise<{
       },
     };
   } catch (error: any) {
-    console.error('Write test failed:', error);
     return {
       success: false,
       message: error.message || 'Failed to write',

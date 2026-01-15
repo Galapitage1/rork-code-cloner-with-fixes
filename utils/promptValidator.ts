@@ -36,7 +36,7 @@ export function validatePromptLength(
   const maxCharacters = safeMaxTokens * TOKEN_ESTIMATE_DIVISOR;
   const truncatedPrompt = smartTruncate(safePrompt, maxCharacters);
 
-  console.log(`[PromptValidator] Truncated prompt from ${estimatedTokens} to ~${estimateTokenCount(truncatedPrompt)} tokens`);
+  
 
   return {
     isWithinLimit: false,
@@ -74,7 +74,7 @@ function truncateJsonData(jsonText: string, maxChars: number): string {
       return truncateObject(data, maxChars);
     }
   } catch {
-    console.log('[PromptValidator] Failed to parse as JSON, using simple truncation');
+    
   }
   
   return jsonText.slice(0, maxChars - 50) + '\n... [TRUNCATED]';

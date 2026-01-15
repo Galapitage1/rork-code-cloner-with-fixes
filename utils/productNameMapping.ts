@@ -15,8 +15,7 @@ export async function getProductNameMappings(): Promise<ProductNameMapping[]> {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    console.error('Failed to load product name mappings:', e);
+  } catch {
     return [];
   }
 }
@@ -44,9 +43,7 @@ export async function saveProductNameMapping(
     }
     
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
-    console.log(`Saved product name mapping: "${truncatedName}" -> "${productName}" (${productId})`);
-  } catch (e) {
-    console.error('Failed to save product name mapping:', e);
+  } catch {
   }
 }
 
