@@ -3,7 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
 const STORAGE_SIZE_LIMIT_MB = 4;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
-const RETENTION_DAYS = 3;
+const RETENTION_DAYS = 7;
+const APPROVED_REQUEST_RETENTION_DAYS = 90;
 const CLEANUP_INTERVAL_DAYS = 1;
 
 const DATA_LIMITS = {
@@ -127,16 +128,28 @@ export async function cleanupOldData(): Promise<void> {
         if (requestsData) {
           const requests = JSON.parse(requestsData);
           if (Array.isArray(requests)) {
+            const approvedRetentionDaysAgo = currentDate - (APPROVED_REQUEST_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+            
             const filtered = requests.filter((req: any) => {
               if (req.deleted) return false;
               if (!req.requestedAt && !req.date) return true;
               const itemDate = req.requestedAt || new Date(req.date).getTime();
+              
+              // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory Before/After columns)
+              if (req.status === 'approved') {
+                return itemDate >= approvedRetentionDaysAgo;
+              }
+              
+              // Pending/rejected requests: keep for standard retention period
               return itemDate >= retentionDaysAgo;
             });
             
             if (filtered.length !== requests.length) {
               await AsyncStorage.setItem(requestsKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${requests.length - filtered.length} old requests (older than ${RETENTION_DAYS} days)`);
+              const approvedKept = filtered.filter((r: any) => r.status === 'approved').length;
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${requests.length - filtered.length} old requests`);
+              console.log(`[STORAGE CLEANUP]   - Approved requests kept: ${approvedKept} (${APPROVED_REQUEST_RETENTION_DAYS} day retention for Live Inventory)`);
+              console.log(`[STORAGE CLEANUP]   - Other requests: ${RETENTION_DAYS} day retention`);
               totalItemsCleaned += requests.length - filtered.length;
             }
           }
@@ -328,13 +341,21 @@ export async function cleanupOldData(): Promise<void> {
         if (reqData) {
           const reqs = JSON.parse(reqData);
           if (Array.isArray(reqs) && reqs.length > DATA_LIMITS.MAX_REQUESTS) {
-            const sorted = reqs
-              .filter((r: any) => !r.deleted)
-              .sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0))
-              .slice(0, DATA_LIMITS.MAX_REQUESTS);
+            // CRITICAL: When limiting, prioritize keeping APPROVED requests (needed for Live Inventory)
+            const activeReqs = reqs.filter((r: any) => !r.deleted);
+            const approvedReqs = activeReqs.filter((r: any) => r.status === 'approved');
+            const otherReqs = activeReqs.filter((r: any) => r.status !== 'approved');
+            
+            // Sort each group by timestamp
+            approvedReqs.sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0));
+            otherReqs.sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0));
+            
+            // Keep all approved requests first, then fill remaining with other requests
+            const sorted = [...approvedReqs, ...otherReqs].slice(0, DATA_LIMITS.MAX_REQUESTS);
             
             await AsyncStorage.setItem(requestsKey, JSON.stringify(sorted));
             console.log(`[STORAGE CLEANUP] ✓ Limited requests to ${DATA_LIMITS.MAX_REQUESTS} (was ${reqs.length})`);
+            console.log(`[STORAGE CLEANUP]   - Approved requests preserved: ${Math.min(approvedReqs.length, DATA_LIMITS.MAX_REQUESTS)}`);
             totalItemsCleaned += reqs.length - sorted.length;
           }
         }
@@ -407,7 +428,8 @@ export async function cleanupOldData(): Promise<void> {
     console.log(`[STORAGE CLEANUP]   - Storage after: ${finalSizeMB}MB`);
     console.log(`[STORAGE CLEANUP]   - Space freed: ${savedMB}MB`);
     console.log(`[STORAGE CLEANUP]   - Next cleanup: in ${CLEANUP_INTERVAL_DAYS} days`);
-    console.log(`[STORAGE CLEANUP]   - Keeping data from: ${retentionDaysAgoStr} onwards`);
+    console.log(`[STORAGE CLEANUP]   - General data retention: ${RETENTION_DAYS} days`);
+    console.log(`[STORAGE CLEANUP]   - Approved requests retention: ${APPROVED_REQUEST_RETENTION_DAYS} days (for Live Inventory Before/After)`);
     
   } catch (error) {
     console.error('[STORAGE CLEANUP] ✗ Error during cleanup:', error);
