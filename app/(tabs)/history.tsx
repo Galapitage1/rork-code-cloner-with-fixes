@@ -1,12 +1,16 @@
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Modal, TextInput, Alert, Platform } from 'react-native';
 import { useMemo, useState } from 'react';
-import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar } from 'lucide-react-native';
+import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar, Upload } from 'lucide-react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useStores } from '@/contexts/StoresContext';
 import Colors from '@/constants/colors';
 import { exportStockCheckToExcel, exportRequestsToExcel } from '@/utils/excelExporter';
+import { parseStockCheckExcelFile } from '@/utils/excelParser';
 import { StockCheck, StockCount, ProductRequest } from '@/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
@@ -44,6 +48,13 @@ export default function HistoryScreen() {
   const [newWastages, setNewWastages] = useState<Map<string, string>>(new Map());
   const [replaceAllInventoryEdit, setReplaceAllInventoryEdit] = useState<boolean>(false);
   const [editingStockCheckDate, setEditingStockCheckDate] = useState<string>('');
+  
+  const [showImportStockModal, setShowImportStockModal] = useState<boolean>(false);
+  const [importStockDate, setImportStockDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [importStockOutlet, setImportStockOutlet] = useState<string>('');
+  const [importStockDoneBy, setImportStockDoneBy] = useState<string>('');
+  const [isImportingStock, setIsImportingStock] = useState<boolean>(false);
+  const [importStockPreview, setImportStockPreview] = useState<{ counts: any[]; errors: string[]; summaryInfo?: any } | null>(null);
 
   const sortedChecks = useMemo(() => 
     [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
@@ -530,6 +541,133 @@ export default function HistoryScreen() {
     return date.toISOString().split('T')[0];
   };
 
+  const handleOpenImportStockModal = () => {
+    if (outlets.length === 0) {
+      Alert.alert('No Outlets', 'Please add at least 1 outlet in Settings first.');
+      return;
+    }
+    setImportStockDate(new Date().toISOString().split('T')[0]);
+    setImportStockOutlet(outlets[0]?.name || '');
+    setImportStockDoneBy('');
+    setImportStockPreview(null);
+    setShowImportStockModal(true);
+  };
+
+  const handlePickImportStockFile = async () => {
+    try {
+      console.log('Opening document picker for stock check import...');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        copyToCacheDirectory: true,
+      });
+
+      console.log('Document picker result:', result);
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        console.log('Document picking cancelled');
+        return;
+      }
+
+      const asset = result.assets[0];
+      console.log('Selected file:', asset.name, asset.uri);
+
+      setIsImportingStock(true);
+
+      let base64Data: string;
+      if (Platform.OS === 'web') {
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+        base64Data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64 = (reader.result as string).split(',')[1];
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+          encoding: 'base64',
+        });
+      }
+
+      console.log('Parsing stock check Excel file...');
+      const parseResult = parseStockCheckExcelFile(base64Data, products);
+      console.log('Parse result:', parseResult.counts.length, 'counts,', parseResult.errors.length, 'errors');
+
+      if (parseResult.summaryInfo?.date) {
+        setImportStockDate(parseResult.summaryInfo.date);
+      }
+      if (parseResult.summaryInfo?.outlet && outlets.find(o => o.name === parseResult.summaryInfo?.outlet)) {
+        setImportStockOutlet(parseResult.summaryInfo.outlet);
+      }
+
+      setImportStockPreview(parseResult);
+
+      if (parseResult.errors.length > 0 && parseResult.counts.length === 0) {
+        Alert.alert('Import Error', parseResult.errors.join('\n'));
+      }
+    } catch (error) {
+      console.error('Import error:', error);
+      Alert.alert('Error', `Failed to import file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsImportingStock(false);
+    }
+  };
+
+  const handleConfirmImportStock = async () => {
+    if (!importStockPreview || importStockPreview.counts.length === 0) {
+      Alert.alert('No Data', 'No valid stock counts to import');
+      return;
+    }
+
+    if (!importStockOutlet) {
+      Alert.alert('Error', 'Please select an outlet');
+      return;
+    }
+
+    if (!importStockDoneBy.trim()) {
+      Alert.alert('Error', 'Please enter who did this stock check');
+      return;
+    }
+
+    setIsImportingStock(true);
+    try {
+      const importTimestamp = new Date(importStockDate + 'T12:00:00').getTime();
+
+      const stockCounts: StockCount[] = importStockPreview.counts.map(c => ({
+        productId: c.productId!,
+        quantity: c.quantity || 0,
+        openingStock: c.openingStock,
+        receivedStock: c.receivedStock,
+        wastage: c.wastage,
+        notes: c.notes,
+      }));
+
+      const newStockCheck: StockCheck = {
+        id: `check-import-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        date: importStockDate,
+        timestamp: importTimestamp,
+        counts: stockCounts,
+        outlet: importStockOutlet,
+        doneDate: importStockDate,
+        completedBy: importStockDoneBy.trim(),
+      };
+
+      await saveStockCheck(newStockCheck);
+
+      Alert.alert('Success', `Imported stock check with ${stockCounts.length} product(s) successfully`);
+      setShowImportStockModal(false);
+      setImportStockPreview(null);
+    } catch (error) {
+      console.error('Failed to import stock check:', error);
+      Alert.alert('Error', 'Failed to import stock check');
+    } finally {
+      setIsImportingStock(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -554,6 +692,15 @@ export default function HistoryScreen() {
               >
                 <X size={16} color={Colors.light.danger} />
                 <Text style={styles.deleteAllButtonText}>Delete All</Text>
+              </TouchableOpacity>
+            )}
+            {isSuperAdmin && (
+              <TouchableOpacity
+                style={styles.importButton}
+                onPress={handleOpenImportStockModal}
+              >
+                <Upload size={16} color={Colors.light.accent} />
+                <Text style={styles.importButtonText}>Add Past</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1378,6 +1525,161 @@ export default function HistoryScreen() {
         }}
         testID="confirm-delete-all-requests"
       />
+
+      <Modal
+        visible={showImportStockModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowImportStockModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Past Stock Check</Text>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setShowImportStockModal(false)}
+              >
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView style={styles.importModalBody}>
+              <Text style={styles.importDescription}>
+                Import a previously exported stock check Excel file to restore historical data.
+              </Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Stock Check Date *</Text>
+                <View style={styles.dateEditButtonWrapper}>
+                  <Calendar size={16} color={Colors.light.tint} />
+                  <TextInput
+                    style={styles.dateEditInput}
+                    value={importStockDate}
+                    onChangeText={setImportStockDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Outlet *</Text>
+                <View style={styles.outletSelectWrapper}>
+                  {outlets.map((outlet) => (
+                    <TouchableOpacity
+                      key={outlet.id}
+                      style={[
+                        styles.outletSelectButton,
+                        importStockOutlet === outlet.name && styles.outletSelectButtonActive,
+                      ]}
+                      onPress={() => setImportStockOutlet(outlet.name)}
+                    >
+                      <Text
+                        style={[
+                          styles.outletSelectButtonText,
+                          importStockOutlet === outlet.name && styles.outletSelectButtonTextActive,
+                        ]}
+                      >
+                        {outlet.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Done By *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={importStockDoneBy}
+                  onChangeText={setImportStockDoneBy}
+                  placeholder="Enter name"
+                  placeholderTextColor={Colors.light.muted}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.selectFileButton}
+                onPress={handlePickImportStockFile}
+                disabled={isImportingStock}
+              >
+                {isImportingStock ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Upload size={20} color="#fff" />
+                    <Text style={styles.selectFileButtonText}>Select Excel File</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {importStockPreview && (
+                <View style={styles.previewContainer}>
+                  <Text style={styles.previewTitle}>Preview</Text>
+                  <Text style={styles.previewInfo}>
+                    Found {importStockPreview.counts.length} product(s)
+                  </Text>
+                  {importStockPreview.errors.length > 0 && (
+                    <View style={styles.errorsContainer}>
+                      <Text style={styles.errorsTitle}>Warnings:</Text>
+                      {importStockPreview.errors.slice(0, 5).map((error, index) => (
+                        <Text key={index} style={styles.errorText}>{error}</Text>
+                      ))}
+                      {importStockPreview.errors.length > 5 && (
+                        <Text style={styles.errorText}>...and {importStockPreview.errors.length - 5} more</Text>
+                      )}
+                    </View>
+                  )}
+                  {importStockPreview.counts.length > 0 && (
+                    <View style={styles.previewList}>
+                      {importStockPreview.counts.slice(0, 5).map((count, index) => {
+                        const product = products.find(p => p.id === count.productId);
+                        return (
+                          <View key={index} style={styles.previewItem}>
+                            <Text style={styles.previewItemName}>{product?.name || 'Unknown'}</Text>
+                            <Text style={styles.previewItemQty}>{count.quantity} {product?.unit || ''}</Text>
+                          </View>
+                        );
+                      })}
+                      {importStockPreview.counts.length > 5 && (
+                        <Text style={styles.previewMore}>...and {importStockPreview.counts.length - 5} more products</Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonCancel]}
+                  onPress={() => {
+                    setShowImportStockModal(false);
+                    setImportStockPreview(null);
+                  }}
+                >
+                  <Text style={styles.modalButtonTextCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalButton,
+                    styles.modalButtonSave,
+                    (!importStockPreview || importStockPreview.counts.length === 0) && { opacity: 0.5 }
+                  ]}
+                  onPress={handleConfirmImportStock}
+                  disabled={!importStockPreview || importStockPreview.counts.length === 0 || isImportingStock}
+                >
+                  {isImportingStock ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.modalButtonTextSave}>Import Stock Check</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2115,5 +2417,110 @@ const styles = StyleSheet.create({
   },
   monthContent: {
     padding: 12,
+  },
+  importButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Colors.light.accent + '15',
+    borderWidth: 1,
+    borderColor: Colors.light.accent + '30',
+    marginLeft: 8,
+  },
+  importButtonText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.accent,
+  },
+  importModalBody: {
+    padding: 20,
+    maxHeight: 500,
+  },
+  importDescription: {
+    fontSize: 14,
+    color: Colors.light.muted,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  selectFileButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    backgroundColor: Colors.light.tint,
+    paddingVertical: 14,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  selectFileButtonText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: '#fff',
+  },
+  previewContainer: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  previewTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
+  previewInfo: {
+    fontSize: 14,
+    color: Colors.light.success,
+    marginBottom: 12,
+  },
+  errorsContainer: {
+    backgroundColor: Colors.light.danger + '10',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 12,
+  },
+  errorsTitle: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.danger,
+    marginBottom: 4,
+  },
+  errorText: {
+    fontSize: 12,
+    color: Colors.light.danger,
+    marginTop: 2,
+  },
+  previewList: {
+    gap: 8,
+  },
+  previewItem: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  previewItemName: {
+    fontSize: 14,
+    color: Colors.light.text,
+    flex: 1,
+  },
+  previewItemQty: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.accent,
+  },
+  previewMore: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    fontStyle: 'italic' as const,
+    marginTop: 8,
   },
 });
