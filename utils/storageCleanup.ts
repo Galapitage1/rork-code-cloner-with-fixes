@@ -1,10 +1,20 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
-const STORAGE_SIZE_LIMIT_MB = 6;
+const STORAGE_SIZE_LIMIT_MB = 4;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
 const RETENTION_DAYS = 3;
-const CLEANUP_INTERVAL_DAYS = 3;
+const CLEANUP_INTERVAL_DAYS = 1;
+
+const DATA_LIMITS = {
+  MAX_STOCK_CHECKS: 200,
+  MAX_REQUESTS: 300,
+  MAX_SALES_DEDUCTIONS: 200,
+  MAX_RECONCILE_HISTORY: 100,
+  MAX_ACTIVITY_LOGS: 500,
+  MAX_KITCHEN_REPORTS: 100,
+  MAX_SALES_REPORTS: 100,
+};
 
 export async function getStorageSize(): Promise<number> {
   try {
@@ -136,6 +146,129 @@ export async function cleanupOldData(): Promise<void> {
       }
     }
     
+    const salesDeductionsKey = '@stock_app_sales_deductions';
+    if (allKeys.includes(salesDeductionsKey)) {
+      try {
+        const deductionsData = await AsyncStorage.getItem(salesDeductionsKey);
+        if (deductionsData) {
+          const deductions = JSON.parse(deductionsData);
+          if (Array.isArray(deductions)) {
+            let filtered = deductions.filter((d: any) => {
+              if (d.deleted) return false;
+              if (!d.salesDate) return true;
+              return d.salesDate >= retentionDaysAgoStr;
+            });
+            
+            if (filtered.length > DATA_LIMITS.MAX_SALES_DEDUCTIONS) {
+              filtered = filtered
+                .sort((a: any, b: any) => (b.salesDate || '').localeCompare(a.salesDate || ''))
+                .slice(0, DATA_LIMITS.MAX_SALES_DEDUCTIONS);
+            }
+            
+            if (filtered.length !== deductions.length) {
+              await AsyncStorage.setItem(salesDeductionsKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${deductions.length - filtered.length} sales deductions (limit: ${DATA_LIMITS.MAX_SALES_DEDUCTIONS})`);
+              totalItemsCleaned += deductions.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning sales deductions:', error);
+      }
+    }
+    
+    const reconcileHistoryKey = '@stock_app_reconcile_history';
+    if (allKeys.includes(reconcileHistoryKey)) {
+      try {
+        const historyData = await AsyncStorage.getItem(reconcileHistoryKey);
+        if (historyData) {
+          const history = JSON.parse(historyData);
+          if (Array.isArray(history)) {
+            let filtered = history.filter((h: any) => {
+              if (h.deleted) return false;
+              if (!h.date && !h.timestamp) return true;
+              const itemDate = h.date || new Date(h.timestamp).toISOString().split('T')[0];
+              return itemDate >= retentionDaysAgoStr;
+            });
+            
+            if (filtered.length > DATA_LIMITS.MAX_RECONCILE_HISTORY) {
+              filtered = filtered
+                .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
+                .slice(0, DATA_LIMITS.MAX_RECONCILE_HISTORY);
+            }
+            
+            if (filtered.length !== history.length) {
+              await AsyncStorage.setItem(reconcileHistoryKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${history.length - filtered.length} reconcile history (limit: ${DATA_LIMITS.MAX_RECONCILE_HISTORY})`);
+              totalItemsCleaned += history.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning reconcile history:', error);
+      }
+    }
+    
+    const kitchenReportsKey = '@kitchen_stock_reports';
+    if (allKeys.includes(kitchenReportsKey)) {
+      try {
+        const reportsData = await AsyncStorage.getItem(kitchenReportsKey);
+        if (reportsData) {
+          const reports = JSON.parse(reportsData);
+          if (Array.isArray(reports)) {
+            let filtered = reports.filter((r: any) => {
+              if (!r.date) return true;
+              return r.date >= retentionDaysAgoStr;
+            });
+            
+            if (filtered.length > DATA_LIMITS.MAX_KITCHEN_REPORTS) {
+              filtered = filtered
+                .sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
+                .slice(0, DATA_LIMITS.MAX_KITCHEN_REPORTS);
+            }
+            
+            if (filtered.length !== reports.length) {
+              await AsyncStorage.setItem(kitchenReportsKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${reports.length - filtered.length} kitchen reports`);
+              totalItemsCleaned += reports.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning kitchen reports:', error);
+      }
+    }
+    
+    const salesReportsKey = '@sales_reports';
+    if (allKeys.includes(salesReportsKey)) {
+      try {
+        const reportsData = await AsyncStorage.getItem(salesReportsKey);
+        if (reportsData) {
+          const reports = JSON.parse(reportsData);
+          if (Array.isArray(reports)) {
+            let filtered = reports.filter((r: any) => {
+              if (!r.date) return true;
+              return r.date >= retentionDaysAgoStr;
+            });
+            
+            if (filtered.length > DATA_LIMITS.MAX_SALES_REPORTS) {
+              filtered = filtered
+                .sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
+                .slice(0, DATA_LIMITS.MAX_SALES_REPORTS);
+            }
+            
+            if (filtered.length !== reports.length) {
+              await AsyncStorage.setItem(salesReportsKey, JSON.stringify(filtered));
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${reports.length - filtered.length} sales reports`);
+              totalItemsCleaned += reports.length - filtered.length;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error cleaning sales reports:', error);
+      }
+    }
+    
     const activityLogsKey = '@stock_app_activity_logs';
     if (allKeys.includes(activityLogsKey)) {
       try {
@@ -143,22 +276,70 @@ export async function cleanupOldData(): Promise<void> {
         if (logsData) {
           const logs = JSON.parse(logsData);
           if (Array.isArray(logs)) {
-            const filtered = logs.filter((log: any) => {
+            let filtered = logs.filter((log: any) => {
               if (log.deleted) return false;
               if (!log.createdAt && !log.date) return true;
               const itemDate = log.createdAt || new Date(log.date).getTime();
               return itemDate >= retentionDaysAgo;
             });
             
+            if (filtered.length > DATA_LIMITS.MAX_ACTIVITY_LOGS) {
+              filtered = filtered
+                .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))
+                .slice(0, DATA_LIMITS.MAX_ACTIVITY_LOGS);
+            }
+            
             if (filtered.length !== logs.length) {
               await AsyncStorage.setItem(activityLogsKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${logs.length - filtered.length} old activity logs (older than ${RETENTION_DAYS} days)`);
+              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${logs.length - filtered.length} activity logs (limit: ${DATA_LIMITS.MAX_ACTIVITY_LOGS})`);
               totalItemsCleaned += logs.length - filtered.length;
             }
           }
         }
       } catch (error) {
         console.error('[STORAGE CLEANUP] ✗ Error cleaning activity logs:', error);
+      }
+    }
+    
+    if (allKeys.includes(stockChecksKey)) {
+      try {
+        const checksData = await AsyncStorage.getItem(stockChecksKey);
+        if (checksData) {
+          const checks = JSON.parse(checksData);
+          if (Array.isArray(checks) && checks.length > DATA_LIMITS.MAX_STOCK_CHECKS) {
+            const sorted = checks
+              .filter((c: any) => !c.deleted)
+              .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
+              .slice(0, DATA_LIMITS.MAX_STOCK_CHECKS);
+            
+            await AsyncStorage.setItem(stockChecksKey, JSON.stringify(sorted));
+            console.log(`[STORAGE CLEANUP] ✓ Limited stock checks to ${DATA_LIMITS.MAX_STOCK_CHECKS} (was ${checks.length})`);
+            totalItemsCleaned += checks.length - sorted.length;
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error limiting stock checks:', error);
+      }
+    }
+    
+    if (allKeys.includes(requestsKey)) {
+      try {
+        const reqData = await AsyncStorage.getItem(requestsKey);
+        if (reqData) {
+          const reqs = JSON.parse(reqData);
+          if (Array.isArray(reqs) && reqs.length > DATA_LIMITS.MAX_REQUESTS) {
+            const sorted = reqs
+              .filter((r: any) => !r.deleted)
+              .sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0))
+              .slice(0, DATA_LIMITS.MAX_REQUESTS);
+            
+            await AsyncStorage.setItem(requestsKey, JSON.stringify(sorted));
+            console.log(`[STORAGE CLEANUP] ✓ Limited requests to ${DATA_LIMITS.MAX_REQUESTS} (was ${reqs.length})`);
+            totalItemsCleaned += reqs.length - sorted.length;
+          }
+        }
+      } catch (error) {
+        console.error('[STORAGE CLEANUP] ✗ Error limiting requests:', error);
       }
     }
     
@@ -205,7 +386,7 @@ export async function cleanupOldData(): Promise<void> {
             console.log(`[STORAGE CLEANUP] ✓ Cleaned ${cleaned} old items from ${key}`);
           }
         }
-      } catch (parseError) {
+      } catch {
         continue;
       }
     }
