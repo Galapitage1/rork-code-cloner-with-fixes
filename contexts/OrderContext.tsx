@@ -50,24 +50,19 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
               const activeOrders = parsed.filter(order => !order.deleted);
               setOrders(activeOrders);
             } else {
-              console.error('Orders data is not an array');
               await AsyncStorage.removeItem(ORDERS_KEY);
               setOrders([]);
             }
           } else {
-            console.error('Orders data is not valid JSON:', stored);
             await AsyncStorage.removeItem(ORDERS_KEY);
             setOrders([]);
           }
-        } catch (parseError) {
-          console.error('Failed to parse orders data:', parseError);
-          console.error('Raw data:', stored);
+        } catch {
           await AsyncStorage.removeItem(ORDERS_KEY);
           setOrders([]);
         }
       }
-    } catch (error) {
-      console.error('Error loading orders:', error);
+    } catch {
     } finally {
       setIsLoading(false);
     }
@@ -84,17 +79,13 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       const deletedOrders = existingOrders.filter((o: CustomerOrder) => o.deleted);
       const ordersWithDeleted = [...newOrders, ...deletedOrders];
       
-      console.log('OrderContext saveOrders: Saving to AsyncStorage...', { activeCount: newOrders.length, deletedCount: deletedOrders.length });
       await AsyncStorage.setItem(ORDERS_KEY, JSON.stringify(ordersWithDeleted));
       setOrders(newOrders);
-      console.log('OrderContext saveOrders: Saved locally');
       
       if (immediate && currentUser && syncOrdersRef.current) {
-        console.log('OrderContext saveOrders: Triggering immediate sync to server...');
-        syncOrdersRef.current().catch(e => console.error('OrderContext saveOrders: Immediate sync failed:', e));
+        syncOrdersRef.current().catch(() => {});
       }
-    } catch (error) {
-      console.error('Error saving orders:', error);
+    } catch {
     }
   }, [currentUser]);
 
@@ -123,8 +114,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   }, [orders, saveOrders]);
 
   const deleteOrder = useCallback(async (id: string) => {
-    console.log('OrderContext deleteOrder: Starting delete for', id);
-    
     try {
       const allOrders = await AsyncStorage.getItem(ORDERS_KEY);
       const existingOrders: CustomerOrder[] = allOrders ? JSON.parse(allOrders) : [];
@@ -135,19 +124,15 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
           : order
       );
       
-      console.log('OrderContext deleteOrder: Saving marked-as-deleted to storage...');
       await AsyncStorage.setItem(ORDERS_KEY, JSON.stringify(updated));
       
       const activeOrders = updated.filter(o => o.deleted !== true);
       setOrders(activeOrders);
-      console.log('OrderContext deleteOrder: Saved locally');
       
       if (currentUser && syncOrdersRef.current) {
-        console.log('OrderContext deleteOrder: Triggering immediate sync to server...');
-        syncOrdersRef.current().catch(e => console.error('OrderContext deleteOrder: Immediate sync failed:', e));
+        syncOrdersRef.current().catch(() => {});
       }
     } catch (error) {
-      console.error('OrderContext deleteOrder: Failed', error);
       throw error;
     }
   }, [currentUser]);
@@ -199,7 +184,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       const allOrders = await AsyncStorage.getItem(ORDERS_KEY);
       const ordersToSync: CustomerOrder[] = allOrders ? JSON.parse(allOrders) : [];
       
-      console.log('[OrderContext] Starting sync for orders...');
       const remoteData = await getFromServer<CustomerOrder>({ userId: currentUser.id, dataType: 'orders' });
       const merged = mergeData(ordersToSync, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'orders' });
@@ -209,9 +193,7 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       const activeOrders = synced.filter(order => order.deleted !== true);
       setOrders(activeOrders);
       setLastSyncTime(Date.now());
-      console.log('[OrderContext] Sync complete. Synced', activeOrders.length, 'orders');
     } catch (error) {
-      console.error('OrderContext syncOrders: Failed:', error);
       if (!silent) {
         throw error;
       }
@@ -230,16 +212,14 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
-      console.log('OrderContext: Setting up auto-sync interval (10 seconds)');
       interval = setInterval(() => {
         if (!syncInProgressRef.current && syncOrdersRef.current) {
-          syncOrdersRef.current().catch((e) => console.log('Orders auto-sync error', e));
+          syncOrdersRef.current().catch(() => {});
         }
-      }, 10000);
+      }, 60000);
     }
     return () => {
       if (interval) {
-        console.log('OrderContext: Clearing auto-sync interval');
         clearInterval(interval);
       }
     };
@@ -250,7 +230,6 @@ export function OrderProvider({ children, currentUser }: { children: ReactNode; 
       await AsyncStorage.removeItem(ORDERS_KEY);
       setOrders([]);
     } catch (error) {
-      console.error('Failed to clear orders:', error);
       throw error as Error;
     }
   }, []);

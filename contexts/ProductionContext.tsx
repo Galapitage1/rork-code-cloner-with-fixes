@@ -25,18 +25,14 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
         AsyncStorage.getItem(STORAGE_KEYS.APPROVED_PRODUCTIONS),
       ]);
 
-      console.log('[ProductionContext] Loading from AsyncStorage...');
-
       if (requestsData) {
         try {
           const parsed = JSON.parse(requestsData);
           if (Array.isArray(parsed)) {
             const filtered = parsed.filter((r: any) => !r?.deleted);
-            console.log(`[ProductionContext] Loaded ${filtered.length} production requests`);
             setProductionRequests(filtered);
           }
-        } catch (parseError) {
-          console.error('[ProductionContext] Failed to parse production requests:', parseError);
+        } catch {
           await AsyncStorage.removeItem(STORAGE_KEYS.PRODUCTION_REQUESTS);
           setProductionRequests([]);
         }
@@ -47,17 +43,14 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
           const parsed = JSON.parse(approvalsData);
           if (Array.isArray(parsed)) {
             const filtered = parsed.filter((a: any) => !a?.deleted);
-            console.log(`[ProductionContext] Loaded ${filtered.length} approved productions`);
             setApprovedProductions(filtered);
           }
-        } catch (parseError) {
-          console.error('[ProductionContext] Failed to parse approved productions:', parseError);
+        } catch {
           await AsyncStorage.removeItem(STORAGE_KEYS.APPROVED_PRODUCTIONS);
           setApprovedProductions([]);
         }
       }
-    } catch (error) {
-      console.error('[ProductionContext] Failed to load production data:', error);
+    } catch {
     }
   }, []);
 
@@ -66,8 +59,7 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
       try {
         setIsLoading(true);
         await loadFromAsyncStorage();
-      } catch (error) {
-        console.error('[ProductionContext] Failed to load production data:', error);
+      } catch {
       } finally {
         setIsLoading(false);
       }
@@ -77,13 +69,11 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
   }, [loadFromAsyncStorage]);
 
   const setUser = useCallback((user: { id: string; username?: string; role?: 'superadmin' | 'admin' | 'user' } | null) => {
-    console.log('[ProductionContext] Setting user:', user?.username);
     setCurrentUser(user);
   }, []);
 
   const saveProductionRequests = useCallback(async (requests: ProductionRequest[]) => {
     try {
-      console.log(`[ProductionContext] Saving ${requests.length} production requests to AsyncStorage`);
       const requestsWithTimestamp = requests.map(r => ({
         ...r,
         updatedAt: r.updatedAt || Date.now(),
@@ -91,29 +81,23 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
       
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCTION_REQUESTS, JSON.stringify(requestsWithTimestamp));
       const filtered = requestsWithTimestamp.filter(r => !r.deleted);
-      console.log(`[ProductionContext] Updated state with ${filtered.length} active requests`);
       setProductionRequests(filtered);
 
       try {
         if (currentUser?.id) {
-          console.log('[ProductionContext] Syncing production requests to server...');
           const synced = await syncData('productionRequests', requestsWithTimestamp, currentUser.id);
           await AsyncStorage.setItem(STORAGE_KEYS.PRODUCTION_REQUESTS, JSON.stringify(synced));
           setProductionRequests((synced as any[]).filter(r => !r?.deleted));
-          console.log('[ProductionContext] Sync complete');
         }
-      } catch (e) {
-        console.log('[ProductionContext] Sync failed, will retry later');
+      } catch {
       }
     } catch (error) {
-      console.error('[ProductionContext] Failed to save production requests:', error);
       throw error;
     }
   }, [currentUser]);
 
   const saveApprovedProductions = useCallback(async (approvals: ApprovedProduction[]) => {
     try {
-      console.log(`[ProductionContext] Saving ${approvals.length} approved productions to AsyncStorage`);
       const approvalsWithTimestamp = approvals.map(a => ({
         ...a,
         updatedAt: a.updatedAt || Date.now(),
@@ -125,29 +109,23 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
 
       try {
         if (currentUser?.id) {
-          console.log('[ProductionContext] Syncing approved productions to server...');
           const synced = await syncData('approvedProductions', approvalsWithTimestamp, currentUser.id);
           await AsyncStorage.setItem(STORAGE_KEYS.APPROVED_PRODUCTIONS, JSON.stringify(synced));
           setApprovedProductions((synced as any[]).filter(a => !a?.deleted));
-          console.log('[ProductionContext] Sync complete');
         }
-      } catch (e) {
-        console.log('[ProductionContext] Sync failed, will retry later');
+      } catch {
       }
     } catch (error) {
-      console.error('[ProductionContext] Failed to save approved productions:', error);
       throw error;
     }
   }, [currentUser]);
 
   const addProductionRequest = useCallback(async (request: ProductionRequest) => {
-    console.log('[ProductionContext] Adding production request:', request.date);
     const updatedRequests = [...productionRequests, request];
     await saveProductionRequests(updatedRequests);
   }, [productionRequests, saveProductionRequests]);
 
   const updateProductionRequest = useCallback(async (requestId: string, updates: Partial<ProductionRequest>) => {
-    console.log('[ProductionContext] Updating production request:', requestId);
     const updatedRequests = productionRequests.map(r =>
       r.id === requestId ? { ...r, ...updates, updatedAt: Date.now() } : r
     );
@@ -155,7 +133,6 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
   }, [productionRequests, saveProductionRequests]);
 
   const deleteProductionRequest = useCallback(async (requestId: string) => {
-    console.log('[ProductionContext] Deleting production request:', requestId);
     const updatedRequests = productionRequests.map(r =>
       r.id === requestId ? { ...r, deleted: true as const, updatedAt: Date.now() } : r
     );
@@ -163,7 +140,6 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
   }, [productionRequests, saveProductionRequests]);
 
   const approveProductionRequest = useCallback(async (approval: ApprovedProduction) => {
-    console.log('[ProductionContext] Approving production request:', approval.requestId);
     
     const updatedRequests = productionRequests.map(r =>
       r.id === approval.requestId ? { ...r, status: 'approved' as const, updatedAt: Date.now() } : r
@@ -201,7 +177,6 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
       
       setLastSyncTime(Date.now());
     } catch (error) {
-      console.error('[ProductionContext] syncAll: Failed:', error);
       if (!silent) {
         throw error;
       }
@@ -217,8 +192,8 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
-        syncAll(true).catch((e) => console.log('[ProductionContext] Auto-sync error', e));
-      }, 10000);
+        syncAll(true).catch(() => {});
+      }, 60000);
     }
     return () => {
       if (interval) clearInterval(interval);

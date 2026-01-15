@@ -43,8 +43,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
               const parsed = JSON.parse(trimmed);
               if (Array.isArray(parsed)) setRecipes(parsed);
             }
-          } catch (e) {
-            console.log('RecipeContext: failed to parse, clearing');
+          } catch {
             await AsyncStorage.removeItem(STORAGE_KEY);
           }
         }
@@ -58,7 +57,6 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
   const save = useCallback(async (next: Recipe[]) => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     setRecipes(next);
-    console.log('RecipeContext: Saved locally, will sync on next interval');
   }, []);
 
   const addOrUpdateRecipe = useCallback(async (recipe: Recipe) => {
@@ -99,7 +97,6 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
       if (!silent) {
         setIsSyncing(true);
       }
-      console.log('[RecipeContext] Starting sync for recipes...');
       const remoteData = await getFromServer<Recipe>({ userId: currentUser.id, dataType: 'recipes' });
       const merged = mergeData(recipes, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'recipes' });
@@ -107,9 +104,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(synced));
       setRecipes(synced as Recipe[]);
       setLastSyncTime(Date.now());
-      console.log('[RecipeContext] Sync complete. Synced', synced.length, 'recipes');
     } catch (e) {
-      console.error('RecipeContext sync failed:', e);
       if (!silent) {
         throw e;
       }
@@ -125,12 +120,11 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     let interval: ReturnType<typeof setInterval> | undefined;
     if (currentUser) {
       interval = setInterval(() => {
-        syncRecipes(true).catch(err => console.log('Recipes auto-sync error', err));
-      }, 10000);
+        syncRecipes(true).catch(() => {});
+      }, 60000);
     }
     return () => {
       if (interval) {
-        console.log('RecipeContext: Clearing auto-sync interval');
         clearInterval(interval);
       }
     };
