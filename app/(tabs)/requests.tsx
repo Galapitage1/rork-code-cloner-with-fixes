@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ShoppingCart, Plus, X, Download, Edit2, CalendarDays, ChevronDown, ChevronUp, Trash2, RotateCcw, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { parseRequestsExcelFile } from '@/utils/excelParser';
+import { parseRequestsExcelFile, ParsedRequestData } from '@/utils/excelParser';
 import { useStock } from '@/contexts/StockContext';
 import { useStores } from '@/contexts/StoresContext';
 import { Product, ProductRequest, StockCheck } from '@/types';
@@ -63,7 +63,7 @@ export default function RequestsScreen() {
   const [importToOutlet, setImportToOutlet] = useState<string>('');
   const [importRequestedBy, setImportRequestedBy] = useState<string>('');
   const [isImporting, setIsImporting] = useState<boolean>(false);
-  const [importPreview, setImportPreview] = useState<{ requests: any[]; errors: string[] } | null>(null);
+  const [importPreview, setImportPreview] = useState<ParsedRequestData | null>(null);
   const [showImportCalendar, setShowImportCalendar] = useState<boolean>(false);
 
   useEffect(() => {
@@ -750,11 +750,19 @@ export default function RequestsScreen() {
         });
       }
 
-      console.log('Parsing Excel file...');
       const parseResult = parseRequestsExcelFile(base64Data, products);
-      console.log('Parse result:', parseResult.requests.length, 'requests,', parseResult.errors.length, 'errors');
 
       setImportPreview(parseResult);
+
+      if (parseResult.summaryInfo?.requestDate) {
+        setImportDate(parseResult.summaryInfo.requestDate);
+      }
+      if (parseResult.summaryInfo?.sendingOutlet) {
+        setImportFromOutlet(parseResult.summaryInfo.sendingOutlet);
+      }
+      if (parseResult.summaryInfo?.receivingOutlet) {
+        setImportToOutlet(parseResult.summaryInfo.receivingOutlet);
+      }
 
       if (parseResult.errors.length > 0 && parseResult.requests.length === 0) {
         Alert.alert('Import Error', parseResult.errors.join('\n'));
@@ -790,10 +798,14 @@ export default function RequestsScreen() {
 
     setIsImporting(true);
     try {
-      const importTimestamp = new Date(importDate + 'T12:00:00').getTime();
       let importedCount = 0;
 
       for (const req of importPreview.requests) {
+        const reqDate = req.requestDate || importDate;
+        const reqFromOutlet = req.fromOutlet || importFromOutlet;
+        const reqToOutlet = req.toOutlet || importToOutlet;
+        const importTimestamp = req.requestedAt || new Date(reqDate + 'T12:00:00').getTime();
+
         const newRequest: ProductRequest = {
           id: `req-import-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           productId: req.productId!,
@@ -801,12 +813,12 @@ export default function RequestsScreen() {
           wastage: req.wastage || 0,
           priority: req.priority || 'medium',
           status: req.status || 'approved',
-          fromOutlet: req.fromOutlet || importFromOutlet,
-          toOutlet: req.toOutlet || importToOutlet,
-          notes: req.notes || `Imported from Excel on ${new Date().toISOString().split('T')[0]}`,
+          fromOutlet: reqFromOutlet,
+          toOutlet: reqToOutlet,
+          notes: req.notes || `Imported from Excel`,
           requestedAt: importTimestamp,
-          requestDate: importDate,
-          doneDate: importDate,
+          requestDate: reqDate,
+          doneDate: reqDate,
           requestedBy: importRequestedBy.trim(),
         };
 
@@ -818,7 +830,6 @@ export default function RequestsScreen() {
       setShowImportModal(false);
       setImportPreview(null);
     } catch (error) {
-      console.error('Failed to import requests:', error);
       Alert.alert('Error', 'Failed to import requests');
     } finally {
       setIsImporting(false);
@@ -1731,69 +1742,8 @@ export default function RequestsScreen() {
               </View>
 
               <ScrollView style={styles.modalScroll}>
-                <Text style={styles.label}>Import Date</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                  <TouchableOpacity onPress={() => setShowImportCalendar(true)} style={{ padding: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 6, backgroundColor: Colors.light.card }}>
-                    <CalendarDays size={16} color={Colors.light.tint} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => {
-                    const d = new Date(importDate);
-                    d.setDate(d.getDate() - 1);
-                    setImportDate(d.toISOString().split('T')[0]);
-                  }} style={{ padding: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 6, backgroundColor: Colors.light.card }}>
-                    <Text style={{ fontWeight: '600' as const }}>-</Text>
-                  </TouchableOpacity>
-                  <Text style={{ fontSize: 14, fontWeight: '700' as const, color: Colors.light.text, minWidth: 100, textAlign: 'center' as const }}>{importDate}</Text>
-                  <TouchableOpacity onPress={() => {
-                    const d = new Date(importDate);
-                    d.setDate(d.getDate() + 1);
-                    setImportDate(d.toISOString().split('T')[0]);
-                  }} style={{ padding: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 6, backgroundColor: Colors.light.card }}>
-                    <Text style={{ fontWeight: '600' as const }}>+</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.outletsRow}>
-                  <View style={styles.outletColumn}>
-                    <Text style={styles.label}>From Outlet</Text>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={importFromOutlet}
-                        onValueChange={(itemValue: string) => setImportFromOutlet(itemValue)}
-                        style={styles.picker}
-                      >
-                        {outlets.map((outlet) => (
-                          <Picker.Item key={outlet.id} label={outlet.name} value={outlet.name} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </View>
-                  <View style={styles.outletColumn}>
-                    <Text style={styles.label}>To Outlet</Text>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={importToOutlet}
-                        onValueChange={(itemValue: string) => setImportToOutlet(itemValue)}
-                        style={styles.picker}
-                      >
-                        {outlets.map((outlet) => (
-                          <Picker.Item key={outlet.id} label={outlet.name} value={outlet.name} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </View>
-                </View>
-
-                <Text style={styles.label}>Imported By</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your name"
-                  value={importRequestedBy}
-                  onChangeText={setImportRequestedBy}
-                  placeholderTextColor={Colors.light.muted}
-                />
-
-                <Text style={[styles.label, { marginTop: 20 }]}>Select Excel File</Text>
+                <Text style={[styles.label, { marginTop: 0 }]}>Select Excel File</Text>
+                <Text style={{ fontSize: 12, color: Colors.light.muted, marginBottom: 12 }}>Date and outlets will be read from the Excel file</Text>
                 <TouchableOpacity style={styles.pickFileButton} onPress={handlePickImportFile} disabled={isImporting}>
                   {isImporting ? (
                     <ActivityIndicator color={Colors.light.card} />
@@ -1811,8 +1761,71 @@ export default function RequestsScreen() {
                       Found {importPreview.requests.length} valid request(s)
                     </Text>
 
+                    {importPreview.summaryInfo && (importPreview.summaryInfo.requestDate || importPreview.summaryInfo.receivingOutlet) && (
+                      <View style={{ backgroundColor: Colors.light.success + '15', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '600' as const, color: Colors.light.success, marginBottom: 6 }}>Detected from Excel:</Text>
+                        {importPreview.summaryInfo.requestDate && (
+                          <Text style={{ fontSize: 13, color: Colors.light.text }}>• Date: {importPreview.summaryInfo.requestDate}</Text>
+                        )}
+                        {importPreview.summaryInfo.sendingOutlet && (
+                          <Text style={{ fontSize: 13, color: Colors.light.text }}>• From: {importPreview.summaryInfo.sendingOutlet}</Text>
+                        )}
+                        {importPreview.summaryInfo.receivingOutlet && (
+                          <Text style={{ fontSize: 13, color: Colors.light.text }}>• To: {importPreview.summaryInfo.receivingOutlet}</Text>
+                        )}
+                      </View>
+                    )}
+
+                    <Text style={[styles.label, { marginTop: 8 }]}>Fallback Date (if not in Excel)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                      <TouchableOpacity onPress={() => setShowImportCalendar(true)} style={{ padding: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 6, backgroundColor: Colors.light.card }}>
+                        <CalendarDays size={16} color={Colors.light.tint} />
+                      </TouchableOpacity>
+                      <Text style={{ fontSize: 14, fontWeight: '600' as const, color: Colors.light.text }}>{importDate}</Text>
+                    </View>
+
+                    <View style={styles.outletsRow}>
+                      <View style={styles.outletColumn}>
+                        <Text style={styles.label}>Fallback From Outlet</Text>
+                        <View style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={importFromOutlet}
+                            onValueChange={(itemValue: string) => setImportFromOutlet(itemValue)}
+                            style={styles.picker}
+                          >
+                            {outlets.map((outlet) => (
+                              <Picker.Item key={outlet.id} label={outlet.name} value={outlet.name} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </View>
+                      <View style={styles.outletColumn}>
+                        <Text style={styles.label}>Fallback To Outlet</Text>
+                        <View style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={importToOutlet}
+                            onValueChange={(itemValue: string) => setImportToOutlet(itemValue)}
+                            style={styles.picker}
+                          >
+                            {outlets.map((outlet) => (
+                              <Picker.Item key={outlet.id} label={outlet.name} value={outlet.name} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </View>
+                    </View>
+
+                    <Text style={styles.label}>Imported By</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Enter your name"
+                      value={importRequestedBy}
+                      onChangeText={setImportRequestedBy}
+                      placeholderTextColor={Colors.light.muted}
+                    />
+
                     {importPreview.errors.length > 0 && (
-                      <View style={{ marginBottom: 12 }}>
+                      <View style={{ marginTop: 12, marginBottom: 12 }}>
                         <Text style={{ fontSize: 13, fontWeight: '600' as const, color: Colors.light.danger, marginBottom: 6 }}>Errors:</Text>
                         {importPreview.errors.slice(0, 5).map((err, idx) => (
                           <Text key={idx} style={styles.importErrorText}>• {err}</Text>
@@ -1823,12 +1836,18 @@ export default function RequestsScreen() {
                       </View>
                     )}
 
+                    <Text style={[styles.label, { marginTop: 12 }]}>Preview</Text>
                     <ScrollView style={{ maxHeight: 200 }}>
                       {importPreview.requests.slice(0, 10).map((req, idx) => {
                         const product = products.find(p => p.id === req.productId);
                         return (
                           <View key={idx} style={styles.importPreviewItem}>
-                            <Text style={styles.importPreviewName}>{product?.name || 'Unknown'}</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.importPreviewName}>{product?.name || 'Unknown'}</Text>
+                              <Text style={{ fontSize: 11, color: Colors.light.muted }}>
+                                {req.requestDate || importDate} • {req.fromOutlet || importFromOutlet} → {req.toOutlet || importToOutlet}
+                              </Text>
+                            </View>
                             <Text style={styles.importPreviewQty}>{req.quantity} {product?.unit || ''}</Text>
                           </View>
                         );

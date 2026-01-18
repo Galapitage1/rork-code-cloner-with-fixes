@@ -122,6 +122,7 @@ export interface ParsedRequestData {
   errors: string[];
   summaryInfo?: {
     receivingOutlet?: string;
+    sendingOutlet?: string;
     requestDate?: string;
   };
 }
@@ -154,11 +155,15 @@ export function parseRequestsExcelFile(
     if (workbook.SheetNames.includes('Summary')) {
       const summarySheet = workbook.Sheets['Summary'];
       const summaryData = XLSX.utils.sheet_to_json(summarySheet) as any[];
-      console.log('Summary data:', summaryData);
       
       summaryData.forEach((row: any) => {
-        if (row.Field === 'Receiving Outlet') {
+        const field = String(row.Field || '').toLowerCase();
+        if (field === 'receiving outlet' || field.includes('to outlet')) {
           summaryInfo.receivingOutlet = String(row.Value || '').trim();
+        } else if (field === 'sending outlet' || field.includes('from outlet')) {
+          summaryInfo.sendingOutlet = String(row.Value || '').trim();
+        } else if (field === 'request date' || field === 'date') {
+          summaryInfo.requestDate = String(row.Value || '').trim();
         }
       });
     }
@@ -193,6 +198,7 @@ export function parseRequestsExcelFile(
     const toOutletIndex = headers.findIndex((h: string) => h.includes('to') && h.includes('outlet'));
     const statusIndex = headers.findIndex((h: string) => h.includes('status'));
     const requestedAtIndex = headers.findIndex((h: string) => h.includes('requested') && h.includes('at'));
+    const requestDateIndex = headers.findIndex((h: string) => (h.includes('request') && h.includes('date')) || h === 'date');
     const notesIndex = headers.findIndex((h: string) => h.includes('notes'));
     const unitIndex = headers.findIndex((h: string) => h === 'unit');
 
@@ -257,7 +263,24 @@ export function parseRequestsExcelFile(
       const toOutlet = toOutletIndex !== -1 && row[toOutletIndex] ? String(row[toOutletIndex]).trim() : summaryInfo.receivingOutlet || '';
       const notes = notesIndex !== -1 && row[notesIndex] ? String(row[notesIndex]).trim() : '';
 
-      // Parse requested at date
+      // Parse request date
+      let requestDate = summaryInfo.requestDate || '';
+      if (requestDateIndex !== -1 && row[requestDateIndex]) {
+        const dateVal = row[requestDateIndex];
+        if (typeof dateVal === 'number') {
+          const excelDate = XLSX.SSF.parse_date_code(dateVal);
+          if (excelDate) {
+            requestDate = `${excelDate.y}-${String(excelDate.m).padStart(2, '0')}-${String(excelDate.d).padStart(2, '0')}`;
+          }
+        } else {
+          const parsed = new Date(dateVal);
+          if (!isNaN(parsed.getTime())) {
+            requestDate = parsed.toISOString().split('T')[0];
+          }
+        }
+      }
+
+      // Parse requested at timestamp
       let requestedAt = Date.now();
       if (requestedAtIndex !== -1 && row[requestedAtIndex]) {
         const dateVal = row[requestedAtIndex];
@@ -265,6 +288,23 @@ export function parseRequestsExcelFile(
         if (!isNaN(parsed.getTime())) {
           requestedAt = parsed.getTime();
         }
+      } else if (requestDate) {
+        requestedAt = new Date(requestDate + 'T12:00:00').getTime();
+      }
+
+      // Use outlet from row or fallback to summary
+      const finalFromOutlet = fromOutlet || summaryInfo.sendingOutlet || '';
+      const finalToOutlet = toOutlet || summaryInfo.receivingOutlet || '';
+
+      // Update summaryInfo if we found outlets in the data
+      if (!summaryInfo.receivingOutlet && finalToOutlet) {
+        summaryInfo.receivingOutlet = finalToOutlet;
+      }
+      if (!summaryInfo.sendingOutlet && finalFromOutlet) {
+        summaryInfo.sendingOutlet = finalFromOutlet;
+      }
+      if (!summaryInfo.requestDate && requestDate) {
+        summaryInfo.requestDate = requestDate;
       }
 
       requests.push({
@@ -273,10 +313,11 @@ export function parseRequestsExcelFile(
         wastage,
         priority,
         status,
-        fromOutlet,
-        toOutlet,
+        fromOutlet: finalFromOutlet,
+        toOutlet: finalToOutlet,
         notes,
         requestedAt,
+        requestDate,
       });
     }
 
