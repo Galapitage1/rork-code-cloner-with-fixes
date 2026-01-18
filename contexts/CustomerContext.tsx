@@ -55,8 +55,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       await AsyncStorage.setItem(CUSTOMERS_META_KEY, JSON.stringify(meta));
       
       await AsyncStorage.removeItem(CUSTOMERS_KEY);
-    } catch (error) {
-      console.error('Error loading customers from server:', error);
+    } catch {
       try {
         const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
         if (stored) {
@@ -66,8 +65,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
             setCustomers(activeCustomers);
           }
         }
-      } catch (cacheError) {
-        console.error('Error loading from cache:', cacheError);
+      } catch {
       }
     } finally {
       setIsLoading(false);
@@ -83,8 +81,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
   const saveCustomers = useCallback(async (newCustomers: Customer[]) => {
     try {
       setCustomers(newCustomers);
-    } catch (error) {
-      console.error('Error saving customers:', error);
+    } catch {
     }
   }, []);
 
@@ -119,8 +116,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     try {
       const synced = await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
       setCustomers(synced.filter(c => c.deleted !== true));
-    } catch (error) {
-      console.error('[CustomerContext] importCustomers: Failed to sync to server:', error);
+    } catch {
       await saveCustomers(updated);
     }
     
@@ -147,7 +143,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       setCustomers(activeCustomers);
       await saveToServer(updated, { userId: currentUser?.id || '', dataType: 'customers' });
     } catch (error) {
-      console.error('CustomerContext deleteCustomer: Failed', error);
       throw error;
     }
   }, [customers, currentUser]);
@@ -189,7 +184,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       setCustomers(activeCustomers);
       setLastSyncTime(Date.now());
     } catch (error) {
-      console.error('CustomerContext syncCustomers: Failed:', error);
       if (!silent) {
         throw error;
       }
@@ -201,19 +195,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     }
   }, [currentUser, customers]);
 
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    if (currentUser) {
-      interval = setInterval(() => {
-        syncCustomers(true).catch(() => {});
-      }, 10000);
-    }
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, [currentUser, syncCustomers]);
+
 
   const deleteDuplicatesByPhone = useCallback(async () => {
     if (!currentUser) {
@@ -257,7 +239,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
       return { duplicatesFound, duplicatesDeleted: idsToDelete.size };
     } catch (error) {
-      console.error('[CustomerContext] Failed to delete duplicates:', error);
       throw error;
     }
   }, [customers, currentUser]);
@@ -268,7 +249,6 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       await AsyncStorage.removeItem(CUSTOMERS_META_KEY);
       setCustomers([]);
     } catch (error) {
-      console.error('Failed to clear customers:', error);
       throw error as Error;
     }
   }, []);

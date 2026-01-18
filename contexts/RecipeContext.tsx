@@ -116,19 +116,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     }
   }, [currentUser, recipes]);
 
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    if (currentUser) {
-      interval = setInterval(() => {
-        syncRecipes(true).catch(() => {});
-      }, 60000);
-    }
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, [currentUser, isSyncing, syncRecipes]);
+
 
   const value = useMemo(() => ({
     recipes,
