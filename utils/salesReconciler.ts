@@ -254,12 +254,28 @@ export async function reconcileSalesFromExcelBase64(
       });
     }
 
-    for (let i = 14; i <= 500; i++) {
+    // Find the actual data range in the worksheet
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:AC500');
+    const maxRow = Math.max(range.e.r + 1, 1000); // Go up to at least row 1000 or worksheet end
+    
+    let consecutiveEmptyRows = 0;
+    const maxConsecutiveEmpty = 10; // Stop after 10 consecutive empty rows
+    
+    for (let i = 10; i <= maxRow; i++) { // Start from row 10 to catch all products
       const name = getCellString(ws, `I${i}`);
       const unit = getCellString(ws, `R${i}`);
       const sold = getCellNumber(ws, `AC${i}`);
 
-      if (!name && !unit && sold == null) continue;
+      // Track consecutive empty rows to know when data ends
+      if (!name && !unit && sold == null) {
+        consecutiveEmptyRows++;
+        if (consecutiveEmptyRows >= maxConsecutiveEmpty) {
+          break; // Stop processing after many consecutive empty rows
+        }
+        continue;
+      }
+      
+      consecutiveEmptyRows = 0; // Reset counter when we find data
       if (!name || !unit) {
         rows.push({
           name: name ?? '',
