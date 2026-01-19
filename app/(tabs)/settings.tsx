@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { Upload, Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle, MessageSquare } from 'lucide-react-native';
+import { Upload, Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle, MessageSquare, CalendarDays } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMoir } from '@/contexts/MoirContext';
@@ -21,7 +21,8 @@ import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
 import { useSMSCampaign } from '@/contexts/SMSCampaignContext';
 import { SMSProviderSettings } from '@/components/SMSProviderSettings';
-import { Outlet, UserRole } from '@/types';
+import { Outlet, UserRole, LeaveType } from '@/types';
+import { useLeave } from '@/contexts/LeaveContext';
 import { hasPermission } from '@/utils/permissions';
 import { useBackendStatus } from '@/utils/backendStatus';
 import Colors from '@/constants/colors';
@@ -78,8 +79,19 @@ export default function SettingsScreen() {
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [isSavingPermanentSettings, setIsSavingPermanentSettings] = useState<boolean>(false);
   const [showSMSSettings, setShowSMSSettings] = useState<boolean>(false);
+  const [leaveTypesExpanded, setLeaveTypesExpanded] = useState<boolean>(false);
+  const [showLeaveTypeModal, setShowLeaveTypeModal] = useState<boolean>(false);
+  const [editingLeaveType, setEditingLeaveType] = useState<LeaveType | null>(null);
+  const [newLeaveTypeName, setNewLeaveTypeName] = useState<string>('');
+  const [newLeaveTypeColor, setNewLeaveTypeColor] = useState<string>('#3B82F6');
   
   const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
+  const { leaveTypes, addLeaveType, updateLeaveType, deleteLeaveType } = useLeave();
+
+  const leaveTypeColors = [
+    '#3B82F6', '#10B981', '#EF4444', '#F59E0B', '#8B5CF6',
+    '#EC4899', '#06B6D4', '#6366F1', '#14B8A6', '#F97316'
+  ];
 
   const backendStatus = useBackendStatus();
 
@@ -762,6 +774,90 @@ export default function SettingsScreen() {
                   <Text style={styles.buttonText}>Add Outlet</Text>
                 </TouchableOpacity>
               )}
+            </>
+          )}
+        </View>
+      )}
+
+      {/* Leave Types Section */}
+      {isSuperAdmin && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setLeaveTypesExpanded(!leaveTypesExpanded)}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <CalendarDays size={24} color={Colors.light.tint} />
+              <Text style={styles.sectionTitle}>Leave Types ({leaveTypes.length})</Text>
+            </View>
+            {leaveTypesExpanded ? (
+              <ChevronUp size={20} color={Colors.light.tint} />
+            ) : (
+              <ChevronDown size={20} color={Colors.light.tint} />
+            )}
+          </TouchableOpacity>
+
+          {leaveTypesExpanded && (
+            <>
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>
+                  Manage leave types available for employees to select when submitting leave requests.
+                </Text>
+              </View>
+
+              {leaveTypes.map((type) => (
+                <View key={type.id} style={styles.listItem}>
+                  <View style={[styles.leaveTypeColorDot, { backgroundColor: type.color }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.listItemTitle}>{type.name}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setEditingLeaveType(type);
+                        setNewLeaveTypeName(type.name);
+                        setNewLeaveTypeColor(type.color);
+                        setShowLeaveTypeModal(true);
+                      }}
+                    >
+                      <Edit2 size={20} color={Colors.light.tint} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        openConfirm({
+                          title: 'Delete Leave Type',
+                          message: `Are you sure you want to delete "${type.name}"?`,
+                          destructive: true,
+                          testID: 'confirm-delete-leave-type',
+                          onConfirm: async () => {
+                            try {
+                              await deleteLeaveType(type.id);
+                              Alert.alert('Success', 'Leave type deleted successfully');
+                            } catch {
+                              Alert.alert('Error', 'Failed to delete leave type');
+                            }
+                          },
+                        });
+                      }}
+                    >
+                      <Trash2 size={20} color={Colors.light.danger} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton]}
+                onPress={() => {
+                  setEditingLeaveType(null);
+                  setNewLeaveTypeName('');
+                  setNewLeaveTypeColor('#3B82F6');
+                  setShowLeaveTypeModal(true);
+                }}
+              >
+                <Plus size={20} color={Colors.light.card} />
+                <Text style={styles.buttonText}>Add Leave Type</Text>
+              </TouchableOpacity>
             </>
           )}
         </View>
@@ -1581,6 +1677,92 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
+      {/* Leave Type Modal */}
+      <Modal
+        visible={showLeaveTypeModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowLeaveTypeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingLeaveType ? 'Edit Leave Type' : 'Add Leave Type'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowLeaveTypeModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Leave Type Name *</Text>
+              <TextInput
+                style={styles.input}
+                value={newLeaveTypeName}
+                onChangeText={setNewLeaveTypeName}
+                placeholder="e.g., Annual Leave, Sick Leave"
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Color *</Text>
+              <View style={styles.colorPickerGrid}>
+                {leaveTypeColors.map((color) => (
+                  <TouchableOpacity
+                    key={color}
+                    style={[
+                      styles.colorPickerItem,
+                      { backgroundColor: color },
+                      newLeaveTypeColor === color && styles.colorPickerItemSelected
+                    ]}
+                    onPress={() => setNewLeaveTypeColor(color)}
+                  >
+                    {newLeaveTypeColor === color && <Check size={16} color="#FFFFFF" />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowLeaveTypeModal(false)}
+              >
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, { flex: 1 }]}
+                onPress={async () => {
+                  if (!newLeaveTypeName.trim()) {
+                    Alert.alert('Error', 'Please enter a leave type name');
+                    return;
+                  }
+                  try {
+                    if (editingLeaveType) {
+                      await updateLeaveType(editingLeaveType.id, {
+                        name: newLeaveTypeName,
+                        color: newLeaveTypeColor
+                      });
+                      Alert.alert('Success', 'Leave type updated successfully');
+                    } else {
+                      await addLeaveType(newLeaveTypeName, newLeaveTypeColor);
+                      Alert.alert('Success', 'Leave type added successfully');
+                    }
+                    setShowLeaveTypeModal(false);
+                  } catch {
+                    Alert.alert('Error', 'Failed to save leave type');
+                  }
+                }}
+              >
+                <Text style={styles.buttonText}>{editingLeaveType ? 'Update' : 'Add'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ConfirmDialog
         visible={!!confirmVisible}
         title={confirmState?.title ?? ''}
@@ -1854,5 +2036,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row' as const,
     gap: 12,
     marginTop: 24,
+  },
+  leaveTypeColorDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+  },
+  colorPickerGrid: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 12,
+  },
+  colorPickerItem: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  colorPickerItemSelected: {
+    borderColor: Colors.light.text,
   },
 });

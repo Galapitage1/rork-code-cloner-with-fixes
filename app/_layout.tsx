@@ -16,6 +16,7 @@ import { StoresProvider, useStores } from '@/contexts/StoresContext';
 import { ProductionProvider, useProduction } from '@/contexts/ProductionContext';
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { MoirProvider } from '@/contexts/MoirContext';
+import { LeaveProvider } from '@/contexts/LeaveContext';
 import { SMSCampaignContext } from '@/contexts/SMSCampaignContext';
 import { ProductTrackerProvider } from '@/contexts/ProductTrackerContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
@@ -47,6 +48,7 @@ function RootLayoutNav() {
       <Stack.Screen name="moir" options={{ headerShown: false }} />
       <Stack.Screen name="campaigns" options={{ title: 'Campaign Manager' }} />
       <Stack.Screen name="products" options={{ title: 'Products Management' }} />
+      <Stack.Screen name="leave" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -206,6 +208,7 @@ export default function RootLayout() {
         <AuthProvider>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <MoirProvider>
+              <LeaveProvider>
               <SMSCampaignContext>
               <StoresProvider>
                 <ProductionProvider>
@@ -220,6 +223,7 @@ export default function RootLayout() {
                 </ProductionProvider>
               </StoresProvider>
               </SMSCampaignContext>
+              </LeaveProvider>
             </MoirProvider>
           </GestureHandlerRootView>
         </AuthProvider>

@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, MapPin, Mail } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, MapPin, Mail, CalendarDays } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMoir } from '@/contexts/MoirContext';
 import { useRef, useEffect, useState } from 'react';
@@ -129,6 +129,13 @@ const navCards: NavCard[] = [
     color: '#6B7280',
   },
 ];
+
+const leaveCard: NavCard = {
+  title: 'Leave',
+  icon: CalendarDays,
+  route: '/leave',
+  color: '#0891B2',
+};
 
 function NavigationCard({ card, onPress, unreadCount }: { card: NavCard; onPress: () => void; unreadCount?: number }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -303,6 +310,7 @@ export default function HomeScreen() {
         route: '/moir',
         color: '#FFD700',
       },
+      leaveCard,
       ...allCards
     ];
   }

@@ -481,3 +481,33 @@ export interface SMSDeliveryEvent {
   raw_querystring: string;
   received_at: number;
 }
+
+export interface LeaveType {
+  id: string;
+  name: string;
+  color: string;
+  createdAt: number;
+  updatedAt: number;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface LeaveRequest {
+  id: string;
+  employeeName: string;
+  leaveTypeId: string;
+  startDate: string;
+  endDate: string;
+  reason?: string;
+  status: LeaveRequestStatus;
+  reviewedBy?: string;
+  reviewedAt?: number;
+  reviewNotes?: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
