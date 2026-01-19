@@ -750,7 +750,7 @@ export default function RequestsScreen() {
         });
       }
 
-      const parseResult = parseRequestsExcelFile(base64Data, products);
+      const parseResult = await parseRequestsExcelFile(base64Data, products);
 
       setImportPreview(parseResult);
 

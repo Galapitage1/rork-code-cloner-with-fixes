@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Product, ProductType, ProductRequest, StockCheck, StockCount } from '@/types';
+import { findBestMatch, findMappingForTruncatedName, saveProductNameMapping } from './productNameMapping';
 
 export interface ParsedExcelData {
   products: Product[];
@@ -117,6 +118,14 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
   return { products, errors };
 }
 
+export interface UnmatchedProduct {
+  rowIndex: number;
+  name: string;
+  unit: string;
+  quantity: number;
+  possibleMatches: { id: string; name: string; score: number }[];
+}
+
 export interface ParsedRequestData {
   requests: Partial<ProductRequest>[];
   errors: string[];
@@ -125,6 +134,8 @@ export interface ParsedRequestData {
     sendingOutlet?: string;
     requestDate?: string;
   };
+  unmatchedProducts?: UnmatchedProduct[];
+  autoMatchedCount?: number;
 }
 
 export interface ParsedStockCheckData {
@@ -138,13 +149,15 @@ export interface ParsedStockCheckData {
   };
 }
 
-export function parseRequestsExcelFile(
+export async function parseRequestsExcelFile(
   base64Data: string,
   existingProducts: Product[]
-): ParsedRequestData {
+): Promise<ParsedRequestData> {
   const errors: string[] = [];
   const requests: Partial<ProductRequest>[] = [];
   let summaryInfo: ParsedRequestData['summaryInfo'] = {};
+  const unmatchedProducts: UnmatchedProduct[] = [];
+  let autoMatchedCount = 0;
 
   try {
     console.log('Parsing requests Excel file...');
@@ -223,7 +236,6 @@ export function parseRequestsExcelFile(
       const parsedName = String(productName).trim();
       const parsedUnit = unitIndex !== -1 && row[unitIndex] ? String(row[unitIndex]).trim().toLowerCase() : '';
       
-      // Find matching product
       let matchingProduct = existingProducts.find(p => {
         const nameMatch = p.name.toLowerCase().trim() === parsedName.toLowerCase();
         if (parsedUnit) {
@@ -231,6 +243,36 @@ export function parseRequestsExcelFile(
         }
         return nameMatch;
       });
+
+      if (!matchingProduct) {
+        const savedMapping = await findMappingForTruncatedName(parsedName);
+        if (savedMapping) {
+          matchingProduct = existingProducts.find(p => p.id === savedMapping.fullProductId);
+        }
+      }
+
+      if (!matchingProduct) {
+        const productsWithUnit = existingProducts.map(p => ({ id: p.id, name: p.name, unit: p.unit }));
+        const matchResult = findBestMatch(parsedName, productsWithUnit, { unit: parsedUnit, minAutoMatchScore: 85 });
+        
+        if (matchResult.match) {
+          matchingProduct = existingProducts.find(p => p.id === matchResult.match!.id);
+          if (matchingProduct) {
+            autoMatchedCount++;
+            await saveProductNameMapping(parsedName, matchingProduct.id, matchingProduct.name);
+          }
+        } else if (matchResult.needsConfirmation && matchResult.possibleMatches.length > 0) {
+          const quantity = Number(row[quantityIndex]) || 0;
+          unmatchedProducts.push({
+            rowIndex: i + 1,
+            name: parsedName,
+            unit: parsedUnit,
+            quantity,
+            possibleMatches: matchResult.possibleMatches,
+          });
+          continue;
+        }
+      }
 
       if (!matchingProduct) {
         errors.push(`Row ${i + 1}: Product "${parsedName}" not found in system`);
@@ -321,18 +363,15 @@ export function parseRequestsExcelFile(
       });
     }
 
-    if (requests.length === 0 && errors.length === 0) {
+    if (requests.length === 0 && errors.length === 0 && unmatchedProducts.length === 0) {
       errors.push('No valid requests found in the Excel file');
     }
 
-    console.log(`Parsed ${requests.length} requests with ${errors.length} errors`);
-
   } catch (error) {
-    console.error('Failed to parse requests Excel:', error);
     errors.push(`Failed to parse Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 
-  return { requests, errors, summaryInfo };
+  return { requests, errors, summaryInfo, unmatchedProducts, autoMatchedCount };
 }
 
 export function parseStockCheckExcelFile(

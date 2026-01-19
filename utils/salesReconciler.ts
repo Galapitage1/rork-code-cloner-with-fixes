@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Product, StockCheck, Recipe, ProductConversion } from '@/types';
-import { findMappingForTruncatedName, findPossibleMatches } from './productNameMapping';
+import { findMappingForTruncatedName, findBestMatch, saveProductNameMapping } from './productNameMapping';
 
 export type ReconciledRow = {
   name: string;
@@ -299,14 +299,38 @@ export async function reconcileSalesFromExcelBase64(
         const mapping = await findMappingForTruncatedName(name);
         if (mapping) {
           product = products.find(p => p.id === mapping.fullProductId);
-          console.log(`Using saved mapping: "${name}" -> "${mapping.fullProductName}" (${mapping.fullProductId})`);
         }
       }
 
       if (!product) {
-        const possibleMatches = findPossibleMatches(name, products.filter(p => p.unit.toLowerCase() === unit.toLowerCase()));
-        const needsMapping = possibleMatches.length > 0;
+        const productsWithUnit = products.map(p => ({ id: p.id, name: p.name, unit: p.unit }));
+        const matchResult = findBestMatch(name, productsWithUnit, { unit, minAutoMatchScore: 85 });
         
+        if (matchResult.match) {
+          product = products.find(p => p.id === matchResult.match!.id);
+          if (product) {
+            await saveProductNameMapping(name, product.id, product.name);
+          }
+        } else if (matchResult.needsConfirmation && matchResult.possibleMatches.length > 0) {
+          rows.push({
+            name,
+            unit,
+            sold: Number(sold ?? 0),
+            opening: null,
+            received: null,
+            wastage: null,
+            closing: null,
+            expectedClosing: null,
+            discrepancy: null,
+            notes: 'Product name may be truncated - needs confirmation',
+            needsMapping: true,
+            possibleMatches: matchResult.possibleMatches,
+          });
+          continue;
+        }
+      }
+
+      if (!product) {
         rows.push({
           name,
           unit,
@@ -317,9 +341,9 @@ export async function reconcileSalesFromExcelBase64(
           closing: null,
           expectedClosing: null,
           discrepancy: null,
-          notes: needsMapping ? 'Product name may be truncated - needs confirmation' : 'Product not found in master list',
-          needsMapping,
-          possibleMatches: needsMapping ? possibleMatches : undefined,
+          notes: 'Product not found in master list',
+          needsMapping: false,
+          possibleMatches: undefined,
         });
         continue;
       }
