@@ -65,6 +65,7 @@ export default function HistoryScreen() {
   const [isPullingData, setIsPullingData] = useState<boolean>(false);
   const [pullDataResults, setPullDataResults] = useState<{ stockChecks: StockCheck[]; requests: ProductRequest[] } | null>(null);
   const [pullAllData, setPullAllData] = useState<boolean>(false);
+  const [pullIncludeDeleted, setPullIncludeDeleted] = useState<boolean>(false);
 
   const sortedChecks = useMemo(() => 
     [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
@@ -572,6 +573,7 @@ export default function HistoryScreen() {
     setPullEndDate(today.toISOString().split('T')[0]);
     setPullOutlet('all');
     setPullAllData(false);
+    setPullIncludeDeleted(false);
     setPullDataResults(null);
     setShowPullDataModal(true);
   }, []);
@@ -629,7 +631,7 @@ export default function HistoryScreen() {
 
       // Filter by date range (skip if pulling all data)
       let filteredStockChecks = serverStockChecks.filter(check => {
-        if (check.deleted) return false;
+        if (!pullIncludeDeleted && check.deleted) return false;
         const checkDate = check.date;
         if (!checkDate) return false;
         if (pullAllData) return true;
@@ -637,7 +639,7 @@ export default function HistoryScreen() {
       });
 
       let filteredRequests = serverRequests.filter(request => {
-        if (request.deleted) return false;
+        if (!pullIncludeDeleted && request.deleted) return false;
         if (pullAllData) return true;
         const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
         return reqDate >= pullStartDate && reqDate <= pullEndDate;
@@ -683,7 +685,7 @@ export default function HistoryScreen() {
     } finally {
       setIsPullingData(false);
     }
-  }, [pullStartDate, pullEndDate, pullOutlet, pullAllData, currentUser, calculateDaysFromToday]);
+  }, [pullStartDate, pullEndDate, pullOutlet, pullAllData, pullIncludeDeleted, currentUser, calculateDaysFromToday]);
 
   const handleClosePullDataModal = useCallback(() => {
     setShowPullDataModal(false);
@@ -1873,6 +1875,19 @@ export default function HistoryScreen() {
                 <View style={styles.pullAllDataTextContainer}>
                   <Text style={styles.pullAllDataLabel}>Fetch All Available Data</Text>
                   <Text style={styles.pullAllDataHint}>Retrieves all history stored on the server (up to 10 years)</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.pullAllDataToggle}
+                onPress={() => setPullIncludeDeleted(!pullIncludeDeleted)}
+              >
+                <View style={[styles.pullAllDataCheckbox, pullIncludeDeleted && styles.pullAllDataCheckboxActive]}>
+                  {pullIncludeDeleted && <Check size={14} color="#fff" />}
+                </View>
+                <View style={styles.pullAllDataTextContainer}>
+                  <Text style={styles.pullAllDataLabel}>Include Deleted Items</Text>
+                  <Text style={styles.pullAllDataHint}>Also retrieve stock checks and requests that were deleted</Text>
                 </View>
               </TouchableOpacity>
 
