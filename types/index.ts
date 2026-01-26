@@ -66,7 +66,7 @@ export interface ProductRequest {
   notes?: string;
   requestedBy?: string;
   requestedAt: number;
-  status: 'pending' | 'approved' | 'fulfilled';
+  status: 'pending' | 'approved' | 'fulfilled' | 'rejected';
   fromOutlet: string;
   toOutlet: string;
   requestDate?: string;
