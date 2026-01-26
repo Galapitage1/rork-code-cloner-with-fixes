@@ -388,22 +388,31 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         setIsLoading(false);
         
         // Check if local data is empty (cache was cleared) - trigger immediate full sync from server
-        const [freshProductsData, freshStockChecksData, freshRequestsData] = await Promise.all([
+        const [freshProductsData, freshStockChecksData, freshRequestsData, freshOutletsData, freshInventoryData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
           AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
           AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
+          AsyncStorage.getItem(STORAGE_KEYS.OUTLETS),
+          AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS),
         ]);
         
         const hasProducts = freshProductsData && JSON.parse(freshProductsData).length > 0;
         const hasStockChecks = freshStockChecksData && JSON.parse(freshStockChecksData).length > 0;
         const hasRequests = freshRequestsData && JSON.parse(freshRequestsData).length > 0;
+        const hasOutlets = freshOutletsData && JSON.parse(freshOutletsData).length > 0;
+        const hasInventory = freshInventoryData && JSON.parse(freshInventoryData).length > 0;
         
-        // CRITICAL: If cache was cleared (all data empty), trigger immediate FULL sync from server
-        if (!hasProducts && !hasStockChecks && !hasRequests && currentUser?.id) {
-          console.log('StockContext loadData: ⚠️ CACHE CLEARED DETECTED - Local storage is empty');
-          console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore data from server...');
+        // CRITICAL: Detect cache cleared if STOCK CHECKS are empty (most important for history)
+        // Stock checks are the primary indicator because they contain the 40-day history we need to restore
+        const cacheCleared = !hasStockChecks && currentUser?.id;
+        const partialCacheCleared = (!hasProducts || !hasStockChecks || !hasRequests || !hasOutlets || !hasInventory) && currentUser?.id;
+        
+        if (cacheCleared || partialCacheCleared) {
+          console.log('StockContext loadData: ⚠️ CACHE CLEARED DETECTED');
+          console.log('StockContext loadData: Data status - products:', hasProducts, 'stockChecks:', hasStockChecks, 'requests:', hasRequests, 'outlets:', hasOutlets, 'inventory:', hasInventory);
+          console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore ALL data (40 days history) from server...');
           
-          // Clear last sync timestamps to force full fetch from server
+          // Clear ALL last sync timestamps to force full fetch from server
           const timestampKeys = [
             '@last_sync_products_' + currentUser.id,
             '@last_sync_stockChecks_' + currentUser.id,
@@ -416,15 +425,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           ];
           
           await Promise.all(timestampKeys.map(key => AsyncStorage.removeItem(key).catch(() => {})));
-          console.log('StockContext loadData: Cleared sync timestamps to force full server fetch');
+          console.log('StockContext loadData: Cleared ALL sync timestamps to force full server fetch');
           
-          // Trigger immediate full sync
+          // Trigger immediate full sync with forceFullSync flag to skip cleanup filters
           syncInProgressRef.current = false;
           if (syncAllRef.current) {
-            console.log('StockContext loadData: Starting immediate full sync from server...');
-            syncAllRef.current().then(() => {
-              console.log('StockContext loadData: ✓ Full sync from server completed - data restored!');
-            }).catch((syncError) => {
+            console.log('StockContext loadData: Starting immediate FULL sync from server (40 days history)...');
+            // Pass true for forceFullSync to skip the 40-day cleanup filter during this sync
+            (syncAllRef.current as any)(false, true).then(() => {
+              console.log('StockContext loadData: ✓ Full sync from server completed - ALL data including 40 days history restored!');
+            }).catch((syncError: any) => {
               console.error('StockContext loadData: Full sync failed:', syncError);
             });
           }
@@ -3206,7 +3216,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     }
   }, [currentUser, inventoryStocks, stockChecks, outlets, salesDeductions]);
 
-  const syncAll = useCallback(async (silent: boolean = false) => {
+  const syncAll = useCallback(async (silent: boolean = false, forceFullSync: boolean = false) => {
     if (!currentUser) {
       return;
     }
@@ -3247,7 +3257,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // CLEANUP: Remove stock checks older than 40 days during sync (server keeps everything)
       // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
       // NOTE: Changed to 40 days to ensure stock check history is available after cache clear
-      if (stockChecksToSync.length > 0 && silent) {
+      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
+      if (stockChecksToSync.length > 0 && silent && !forceFullSync) {
         const RETENTION_DAYS = 40;
         const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
         const retentionDaysAgo = new Date();
@@ -3279,7 +3290,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
       // Keep pending/rejected requests for 7 days only
       // Keep deleted items for 30 days to prevent resurrection by old devices
-      if (requestsToSync.length > 0 && silent) {
+      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
+      if (requestsToSync.length > 0 && silent && !forceFullSync) {
         const PENDING_RETENTION_DAYS = 7;
         const APPROVED_RETENTION_DAYS = 90; // Keep approved requests longer for Live Inventory
         const DELETED_RETENTION_DAYS = 30;
@@ -3380,7 +3392,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
       // Keep pending/rejected requests for 7 days only
       // Keep deleted items for 30 days to prevent resurrection by old devices
-      if (silent) {
+      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
+      if (silent && !forceFullSync) {
         const PENDING_RETENTION_DAYS = 7;
         const APPROVED_RETENTION_DAYS = 90;
         const DELETED_RETENTION_DAYS = 30;
