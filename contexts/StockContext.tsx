@@ -387,7 +387,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       } finally {
         setIsLoading(false);
         
-        // Check if local data is empty (cache was cleared) - trigger immediate full sync from server
+        // Check if local data is empty (cache was cleared) OR if stock check history doesn't cover 40 days
+        // - trigger immediate full sync from server to restore ALL data
         const [freshProductsData, freshStockChecksData, freshRequestsData, freshOutletsData, freshInventoryData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
           AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
@@ -402,13 +403,56 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         const hasOutlets = freshOutletsData && JSON.parse(freshOutletsData).length > 0;
         const hasInventory = freshInventoryData && JSON.parse(freshInventoryData).length > 0;
         
+        // CRITICAL: Check if stock check history covers at least 40 days
+        // If not, we need to fetch from server to ensure full history is available
+        let needsFullHistorySync = false;
+        if (hasStockChecks && currentUser?.id) {
+          try {
+            const parsedChecks = JSON.parse(freshStockChecksData!);
+            const activeChecks = parsedChecks.filter((c: any) => !c?.deleted && c?.date);
+            
+            if (activeChecks.length > 0) {
+              // Find oldest and newest dates
+              const dates = activeChecks.map((c: any) => c.date).sort();
+              const oldestDate = new Date(dates[0]);
+              const newestDate = new Date(dates[dates.length - 1]);
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              
+              // Calculate how many days back we have history for
+              const fortyDaysAgo = new Date(today);
+              fortyDaysAgo.setDate(fortyDaysAgo.getDate() - 40);
+              
+              // Check if oldest date is within the last 40 days but we're missing older data
+              // This means we might not have full 40-day history
+              const daysCovered = Math.ceil((newestDate.getTime() - oldestDate.getTime()) / (1000 * 60 * 60 * 24));
+              
+              console.log('StockContext loadData: Stock check history analysis:');
+              console.log('  - Oldest date:', dates[0]);
+              console.log('  - Newest date:', dates[dates.length - 1]);
+              console.log('  - Days covered:', daysCovered);
+              console.log('  - Active checks count:', activeChecks.length);
+              
+              // If we have stock checks but oldest date is newer than 40 days ago,
+              // we might be missing older history - trigger full sync
+              if (oldestDate > fortyDaysAgo && daysCovered < 35) {
+                console.log('StockContext loadData: ⚠️ Stock check history may be incomplete (less than 40 days)');
+                console.log('  - 40 days ago would be:', fortyDaysAgo.toISOString().split('T')[0]);
+                needsFullHistorySync = true;
+              }
+            }
+          } catch (parseError) {
+            console.error('StockContext loadData: Failed to analyze stock check history:', parseError);
+          }
+        }
+        
         // CRITICAL: Detect cache cleared if STOCK CHECKS are empty (most important for history)
         // Stock checks are the primary indicator because they contain the 40-day history we need to restore
         const cacheCleared = !hasStockChecks && currentUser?.id;
         const partialCacheCleared = (!hasProducts || !hasStockChecks || !hasRequests || !hasOutlets || !hasInventory) && currentUser?.id;
         
-        if (cacheCleared || partialCacheCleared) {
-          console.log('StockContext loadData: ⚠️ CACHE CLEARED DETECTED');
+        if (cacheCleared || partialCacheCleared || needsFullHistorySync) {
+          console.log('StockContext loadData: ⚠️', needsFullHistorySync ? 'INCOMPLETE HISTORY DETECTED' : 'CACHE CLEARED DETECTED');
           console.log('StockContext loadData: Data status - products:', hasProducts, 'stockChecks:', hasStockChecks, 'requests:', hasRequests, 'outlets:', hasOutlets, 'inventory:', hasInventory);
           console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore ALL data (40 days history) from server...');
           
