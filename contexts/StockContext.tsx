@@ -3244,11 +3244,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const salesDeductionsToSync = salesDeductionsData ? JSON.parse(salesDeductionsData) : [];
       const reconcileHistoryToSync = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
       
-      // CLEANUP: Remove stock checks older than 30 days during sync (server keeps everything)
+      // CLEANUP: Remove stock checks older than 40 days during sync (server keeps everything)
       // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
-      // NOTE: Changed from 7 days to 30 days to ensure stock check history is available after cache clear
+      // NOTE: Changed to 40 days to ensure stock check history is available after cache clear
       if (stockChecksToSync.length > 0 && silent) {
-        const RETENTION_DAYS = 30;
+        const RETENTION_DAYS = 40;
         const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
         const retentionDaysAgo = new Date();
         retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
@@ -3271,7 +3271,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         });
         
         if (originalCount > stockChecksToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than', RETENTION_DAYS, 'days)');
+          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than 40 days)');
         }
       }
       
