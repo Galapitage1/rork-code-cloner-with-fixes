@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Modal, TextInput, Alert, Platform } from 'react-native';
-import { useMemo, useState } from 'react';
-import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar, Upload } from 'lucide-react-native';
+import { useMemo, useState, useCallback } from 'react';
+import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar, Upload, CloudDownload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 
@@ -12,6 +12,7 @@ import Colors from '@/constants/colors';
 import { exportStockCheckToExcel, exportRequestsToExcel } from '@/utils/excelExporter';
 import { parseStockCheckExcelFile } from '@/utils/excelParser';
 import { StockCheck, StockCount, ProductRequest } from '@/types';
+import { getFromServer } from '@/utils/directSync';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 export default function HistoryScreen() {
@@ -55,6 +56,14 @@ export default function HistoryScreen() {
   const [importStockDoneBy, setImportStockDoneBy] = useState<string>('');
   const [isImportingStock, setIsImportingStock] = useState<boolean>(false);
   const [importStockPreview, setImportStockPreview] = useState<{ counts: any[]; errors: string[]; summaryInfo?: any } | null>(null);
+
+  // Pull Data modal state
+  const [showPullDataModal, setShowPullDataModal] = useState<boolean>(false);
+  const [pullStartDate, setPullStartDate] = useState<string>('');
+  const [pullEndDate, setPullEndDate] = useState<string>('');
+  const [pullOutlet, setPullOutlet] = useState<string>('all');
+  const [isPullingData, setIsPullingData] = useState<boolean>(false);
+  const [pullDataResults, setPullDataResults] = useState<{ stockChecks: StockCheck[]; requests: ProductRequest[] } | null>(null);
 
   const sortedChecks = useMemo(() => 
     [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
@@ -541,6 +550,137 @@ export default function HistoryScreen() {
     return date.toISOString().split('T')[0];
   };
 
+  // Pull Data from Server
+  const calculateDaysFromToday = useCallback((dateStr: string): number => {
+    const date = new Date(dateStr);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    date.setHours(0, 0, 0, 0);
+    const diffTime = today.getTime() - date.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return Math.max(1, diffDays + 1); // Add 1 to include the start date
+  }, []);
+
+  const handleOpenPullDataModal = useCallback(() => {
+    // Default to last 40 days
+    const today = new Date();
+    const fortyDaysAgo = new Date();
+    fortyDaysAgo.setDate(fortyDaysAgo.getDate() - 40);
+    
+    setPullStartDate(fortyDaysAgo.toISOString().split('T')[0]);
+    setPullEndDate(today.toISOString().split('T')[0]);
+    setPullOutlet('all');
+    setPullDataResults(null);
+    setShowPullDataModal(true);
+  }, []);
+
+  const handlePullData = useCallback(async () => {
+    if (!pullStartDate || !pullEndDate) {
+      Alert.alert('Error', 'Please select both start and end dates');
+      return;
+    }
+
+    const startDate = new Date(pullStartDate);
+    const endDate = new Date(pullEndDate);
+    
+    if (startDate > endDate) {
+      Alert.alert('Error', 'Start date must be before end date');
+      return;
+    }
+
+    if (!currentUser?.id) {
+      Alert.alert('Error', 'You must be logged in to pull data');
+      return;
+    }
+
+    setIsPullingData(true);
+    setPullDataResults(null);
+
+    try {
+      console.log('\n=== PULLING HISTORICAL DATA FROM SERVER ===');
+      console.log('Date range:', pullStartDate, 'to', pullEndDate);
+      console.log('Outlet filter:', pullOutlet);
+
+      // Calculate minDays from start date to today
+      const minDays = calculateDaysFromToday(pullStartDate);
+      console.log('Requesting minDays:', minDays);
+
+      // Fetch stock checks from server
+      const serverStockChecks = await getFromServer<StockCheck>({
+        userId: currentUser.id,
+        dataType: 'stockChecks',
+        minDays: minDays,
+      });
+      console.log('Received stock checks from server:', serverStockChecks.length);
+
+      // Fetch requests from server
+      const serverRequests = await getFromServer<ProductRequest>({
+        userId: currentUser.id,
+        dataType: 'requests',
+        minDays: minDays,
+      });
+      console.log('Received requests from server:', serverRequests.length);
+
+      // Filter by date range
+      const filteredStockChecks = serverStockChecks.filter(check => {
+        if (check.deleted) return false;
+        const checkDate = check.date;
+        if (!checkDate) return false;
+        return checkDate >= pullStartDate && checkDate <= pullEndDate;
+      });
+
+      const filteredRequests = serverRequests.filter(request => {
+        if (request.deleted) return false;
+        const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
+        return reqDate >= pullStartDate && reqDate <= pullEndDate;
+      });
+
+      console.log('After date filter - Stock checks:', filteredStockChecks.length, 'Requests:', filteredRequests.length);
+
+      // Filter by outlet if not "all"
+      let finalStockChecks = filteredStockChecks;
+      let finalRequests = filteredRequests;
+
+      if (pullOutlet !== 'all') {
+        finalStockChecks = filteredStockChecks.filter(check => check.outlet === pullOutlet);
+        finalRequests = filteredRequests.filter(request => 
+          request.fromOutlet === pullOutlet || request.toOutlet === pullOutlet
+        );
+        console.log('After outlet filter - Stock checks:', finalStockChecks.length, 'Requests:', finalRequests.length);
+      }
+
+      // Sort by date (newest first)
+      finalStockChecks.sort((a, b) => b.timestamp - a.timestamp);
+      finalRequests.sort((a, b) => {
+        const da = a.requestDate ? new Date(a.requestDate).getTime() : a.requestedAt;
+        const db = b.requestDate ? new Date(b.requestDate).getTime() : b.requestedAt;
+        return db - da;
+      });
+
+      setPullDataResults({
+        stockChecks: finalStockChecks,
+        requests: finalRequests,
+      });
+
+      console.log('=== PULL DATA COMPLETE ===');
+      console.log('Results - Stock checks:', finalStockChecks.length, 'Requests:', finalRequests.length);
+
+      if (finalStockChecks.length === 0 && finalRequests.length === 0) {
+        Alert.alert('No Data Found', `No stock checks or requests found for the selected date range${pullOutlet !== 'all' ? ` and outlet (${pullOutlet})` : ''}.`);
+      }
+    } catch (error) {
+      console.error('Pull data error:', error);
+      Alert.alert('Error', 'Failed to pull data from server. Please check your connection and try again.');
+    } finally {
+      setIsPullingData(false);
+    }
+  }, [pullStartDate, pullEndDate, pullOutlet, currentUser, calculateDaysFromToday]);
+
+  const handleClosePullDataModal = useCallback(() => {
+    setShowPullDataModal(false);
+    setPullDataResults(null);
+  }, []);
+
   const handleOpenImportStockModal = () => {
     if (outlets.length === 0) {
       Alert.alert('No Outlets', 'Please add at least 1 outlet in Settings first.');
@@ -701,6 +841,15 @@ export default function HistoryScreen() {
               >
                 <Upload size={16} color={Colors.light.accent} />
                 <Text style={styles.importButtonText}>Add Past</Text>
+              </TouchableOpacity>
+            )}
+            {(isAdmin || isSuperAdmin) && (
+              <TouchableOpacity
+                style={styles.pullDataButton}
+                onPress={handleOpenPullDataModal}
+              >
+                <CloudDownload size={16} color={Colors.light.success} />
+                <Text style={styles.pullDataButtonText}>Pull Data</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1680,6 +1829,217 @@ export default function HistoryScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Pull Data Modal */}
+      <Modal
+        visible={showPullDataModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleClosePullDataModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pull Data from Server</Text>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={handleClosePullDataModal}
+              >
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView style={styles.pullDataModalBody}>
+              <Text style={styles.pullDataDescription}>
+                Pull stock check and request data from the server for a specific date range and outlet.
+              </Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Start Date *</Text>
+                <View style={styles.dateEditButtonWrapper}>
+                  <Calendar size={16} color={Colors.light.tint} />
+                  <TextInput
+                    style={styles.dateEditInput}
+                    value={pullStartDate}
+                    onChangeText={setPullStartDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>End Date *</Text>
+                <View style={styles.dateEditButtonWrapper}>
+                  <Calendar size={16} color={Colors.light.tint} />
+                  <TextInput
+                    style={styles.dateEditInput}
+                    value={pullEndDate}
+                    onChangeText={setPullEndDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Outlet</Text>
+                <View style={styles.outletSelectWrapper}>
+                  <TouchableOpacity
+                    style={[
+                      styles.outletSelectButton,
+                      pullOutlet === 'all' && styles.outletSelectButtonActive,
+                    ]}
+                    onPress={() => setPullOutlet('all')}
+                  >
+                    <Text
+                      style={[
+                        styles.outletSelectButtonText,
+                        pullOutlet === 'all' && styles.outletSelectButtonTextActive,
+                      ]}
+                    >
+                      All Outlets
+                    </Text>
+                  </TouchableOpacity>
+                  {outlets.map((outlet) => (
+                    <TouchableOpacity
+                      key={outlet.id}
+                      style={[
+                        styles.outletSelectButton,
+                        pullOutlet === outlet.name && styles.outletSelectButtonActive,
+                      ]}
+                      onPress={() => setPullOutlet(outlet.name)}
+                    >
+                      <Text
+                        style={[
+                          styles.outletSelectButtonText,
+                          pullOutlet === outlet.name && styles.outletSelectButtonTextActive,
+                        ]}
+                      >
+                        {outlet.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.pullDataFetchButton, isPullingData && { opacity: 0.7 }]}
+                onPress={handlePullData}
+                disabled={isPullingData}
+              >
+                {isPullingData ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <CloudDownload size={20} color="#fff" />
+                    <Text style={styles.pullDataFetchButtonText}>Fetch Data</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {pullDataResults && (
+                <View style={styles.pullDataResultsContainer}>
+                  <Text style={styles.pullDataResultsTitle}>Results</Text>
+                  
+                  <View style={styles.pullDataSummary}>
+                    <View style={styles.pullDataSummaryItem}>
+                      <Text style={styles.pullDataSummaryValue}>{pullDataResults.stockChecks.length}</Text>
+                      <Text style={styles.pullDataSummaryLabel}>Stock Checks</Text>
+                    </View>
+                    <View style={styles.pullDataSummaryItem}>
+                      <Text style={styles.pullDataSummaryValue}>{pullDataResults.requests.length}</Text>
+                      <Text style={styles.pullDataSummaryLabel}>Requests</Text>
+                    </View>
+                  </View>
+
+                  {pullDataResults.stockChecks.length > 0 && (
+                    <View style={styles.pullDataSection}>
+                      <Text style={styles.pullDataSectionTitle}>Stock Checks</Text>
+                      <ScrollView style={styles.pullDataList} nestedScrollEnabled>
+                        {pullDataResults.stockChecks.slice(0, 20).map((check) => (
+                          <View key={check.id} style={styles.pullDataItem}>
+                            <View style={styles.pullDataItemLeft}>
+                              <Text style={styles.pullDataItemDate}>{check.date}</Text>
+                              <Text style={styles.pullDataItemOutlet}>{check.outlet || 'No Outlet'}</Text>
+                            </View>
+                            <View style={styles.pullDataItemRight}>
+                              <Text style={styles.pullDataItemCount}>{check.counts.length} items</Text>
+                              {check.completedBy && (
+                                <Text style={styles.pullDataItemBy}>By: {check.completedBy}</Text>
+                              )}
+                            </View>
+                          </View>
+                        ))}
+                        {pullDataResults.stockChecks.length > 20 && (
+                          <Text style={styles.pullDataMoreText}>
+                            ...and {pullDataResults.stockChecks.length - 20} more
+                          </Text>
+                        )}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  {pullDataResults.requests.length > 0 && (
+                    <View style={styles.pullDataSection}>
+                      <Text style={styles.pullDataSectionTitle}>Requests</Text>
+                      <ScrollView style={styles.pullDataList} nestedScrollEnabled>
+                        {pullDataResults.requests.slice(0, 20).map((request) => {
+                          const product = products.find(p => p.id === request.productId);
+                          const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
+                          return (
+                            <View key={request.id} style={styles.pullDataItem}>
+                              <View style={styles.pullDataItemLeft}>
+                                <Text style={styles.pullDataItemDate}>{reqDate}</Text>
+                                <Text style={styles.pullDataItemProduct}>{product?.name || 'Unknown'}</Text>
+                                <Text style={styles.pullDataItemOutlet}>
+                                  {request.fromOutlet} → {request.toOutlet}
+                                </Text>
+                              </View>
+                              <View style={styles.pullDataItemRight}>
+                                <Text style={styles.pullDataItemQty}>
+                                  {request.quantity} {product?.unit || ''}
+                                </Text>
+                                <View style={[
+                                  styles.pullDataStatusBadge,
+                                  { backgroundColor: request.status === 'approved' ? Colors.light.success + '20' : 
+                                    request.status === 'rejected' ? Colors.light.danger + '20' : Colors.light.warning + '20' }
+                                ]}>
+                                  <Text style={[
+                                    styles.pullDataStatusText,
+                                    { color: request.status === 'approved' ? Colors.light.success : 
+                                      request.status === 'rejected' ? Colors.light.danger : Colors.light.warning }
+                                  ]}>
+                                    {request.status.toUpperCase()}
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+                          );
+                        })}
+                        {pullDataResults.requests.length > 20 && (
+                          <Text style={styles.pullDataMoreText}>
+                            ...and {pullDataResults.requests.length - 20} more
+                          </Text>
+                        )}
+                      </ScrollView>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonCancel]}
+                  onPress={handleClosePullDataModal}
+                >
+                  <Text style={styles.modalButtonTextCancel}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2522,5 +2882,156 @@ const styles = StyleSheet.create({
     color: Colors.light.muted,
     fontStyle: 'italic' as const,
     marginTop: 8,
+  },
+  pullDataButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Colors.light.success + '15',
+    borderWidth: 1,
+    borderColor: Colors.light.success + '30',
+    marginLeft: 8,
+  },
+  pullDataButtonText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.success,
+  },
+  pullDataModalBody: {
+    padding: 20,
+    maxHeight: 600,
+  },
+  pullDataDescription: {
+    fontSize: 14,
+    color: Colors.light.muted,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  pullDataFetchButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    backgroundColor: Colors.light.success,
+    paddingVertical: 14,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  pullDataFetchButtonText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: '#fff',
+  },
+  pullDataResultsContainer: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  pullDataResultsTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+    marginBottom: 12,
+  },
+  pullDataSummary: {
+    flexDirection: 'row' as const,
+    gap: 16,
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  pullDataSummaryItem: {
+    flex: 1,
+    alignItems: 'center' as const,
+  },
+  pullDataSummaryValue: {
+    fontSize: 28,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  pullDataSummaryLabel: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    marginTop: 4,
+  },
+  pullDataSection: {
+    marginBottom: 16,
+  },
+  pullDataSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
+  pullDataList: {
+    maxHeight: 200,
+  },
+  pullDataItem: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'flex-start' as const,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  pullDataItemLeft: {
+    flex: 1,
+  },
+  pullDataItemRight: {
+    alignItems: 'flex-end' as const,
+  },
+  pullDataItemDate: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  pullDataItemOutlet: {
+    fontSize: 12,
+    color: Colors.light.tint,
+    marginTop: 2,
+  },
+  pullDataItemProduct: {
+    fontSize: 13,
+    color: Colors.light.text,
+    marginTop: 2,
+  },
+  pullDataItemCount: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.accent,
+  },
+  pullDataItemQty: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.accent,
+  },
+  pullDataItemBy: {
+    fontSize: 11,
+    color: Colors.light.muted,
+    marginTop: 2,
+  },
+  pullDataStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  pullDataStatusText: {
+    fontSize: 10,
+    fontWeight: '700' as const,
+  },
+  pullDataMoreText: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    fontStyle: 'italic' as const,
+    textAlign: 'center' as const,
+    paddingVertical: 8,
   },
 });
