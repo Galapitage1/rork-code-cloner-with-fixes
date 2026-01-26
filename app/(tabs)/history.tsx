@@ -1877,33 +1877,35 @@ export default function HistoryScreen() {
               </TouchableOpacity>
 
               {!pullAllData && (
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Start Date *</Text>
-                <View style={styles.dateEditButtonWrapper}>
-                  <Calendar size={16} color={Colors.light.tint} />
-                  <TextInput
-                    style={styles.dateEditInput}
-                    value={pullStartDate}
-                    onChangeText={setPullStartDate}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={Colors.light.muted}
-                  />
-                </View>
-              </View>
+                <>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Start Date *</Text>
+                    <View style={styles.dateEditButtonWrapper}>
+                      <Calendar size={16} color={Colors.light.tint} />
+                      <TextInput
+                        style={styles.dateEditInput}
+                        value={pullStartDate}
+                        onChangeText={setPullStartDate}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={Colors.light.muted}
+                      />
+                    </View>
+                  </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>End Date *</Text>
-                <View style={styles.dateEditButtonWrapper}>
-                  <Calendar size={16} color={Colors.light.tint} />
-                  <TextInput
-                    style={styles.dateEditInput}
-                    value={pullEndDate}
-                    onChangeText={setPullEndDate}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={Colors.light.muted}
-                  />
-                </View>
-              </View>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>End Date *</Text>
+                    <View style={styles.dateEditButtonWrapper}>
+                      <Calendar size={16} color={Colors.light.tint} />
+                      <TextInput
+                        style={styles.dateEditInput}
+                        value={pullEndDate}
+                        onChangeText={setPullEndDate}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={Colors.light.muted}
+                      />
+                    </View>
+                  </View>
+                </>
               )}
 
               <View style={styles.inputGroup}>
