@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Modal, TextInput, Alert, Platform } from 'react-native';
 import { useMemo, useState, useCallback } from 'react';
-import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar, Upload, CloudDownload } from 'lucide-react-native';
+import { History as HistoryIcon, Package, Download, ShoppingCart, ArrowRight, X, Edit, Search, ChevronDown, ChevronUp, Calendar, Upload, CloudDownload, Check } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 
@@ -64,6 +64,7 @@ export default function HistoryScreen() {
   const [pullOutlet, setPullOutlet] = useState<string>('all');
   const [isPullingData, setIsPullingData] = useState<boolean>(false);
   const [pullDataResults, setPullDataResults] = useState<{ stockChecks: StockCheck[]; requests: ProductRequest[] } | null>(null);
+  const [pullAllData, setPullAllData] = useState<boolean>(false);
 
   const sortedChecks = useMemo(() => 
     [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
@@ -570,22 +571,25 @@ export default function HistoryScreen() {
     setPullStartDate(fortyDaysAgo.toISOString().split('T')[0]);
     setPullEndDate(today.toISOString().split('T')[0]);
     setPullOutlet('all');
+    setPullAllData(false);
     setPullDataResults(null);
     setShowPullDataModal(true);
   }, []);
 
   const handlePullData = useCallback(async () => {
-    if (!pullStartDate || !pullEndDate) {
-      Alert.alert('Error', 'Please select both start and end dates');
+    if (!pullAllData && (!pullStartDate || !pullEndDate)) {
+      Alert.alert('Error', 'Please select both start and end dates, or enable "Fetch All Available Data"');
       return;
     }
 
-    const startDate = new Date(pullStartDate);
-    const endDate = new Date(pullEndDate);
-    
-    if (startDate > endDate) {
-      Alert.alert('Error', 'Start date must be before end date');
-      return;
+    if (!pullAllData) {
+      const startDate = new Date(pullStartDate);
+      const endDate = new Date(pullEndDate);
+      
+      if (startDate > endDate) {
+        Alert.alert('Error', 'Start date must be before end date');
+        return;
+      }
     }
 
     if (!currentUser?.id) {
@@ -598,11 +602,13 @@ export default function HistoryScreen() {
 
     try {
       console.log('\n=== PULLING HISTORICAL DATA FROM SERVER ===');
-      console.log('Date range:', pullStartDate, 'to', pullEndDate);
+      console.log('Pull all data:', pullAllData);
+      console.log('Date range:', pullAllData ? 'ALL' : `${pullStartDate} to ${pullEndDate}`);
       console.log('Outlet filter:', pullOutlet);
 
-      // Calculate minDays from start date to today
-      const minDays = calculateDaysFromToday(pullStartDate);
+      // For all data, use 3650 days (~10 years) to get everything available
+      // For date range, calculate minDays from start date to today
+      const minDays = pullAllData ? 3650 : calculateDaysFromToday(pullStartDate);
       console.log('Requesting minDays:', minDays);
 
       // Fetch stock checks from server
@@ -621,16 +627,18 @@ export default function HistoryScreen() {
       });
       console.log('Received requests from server:', serverRequests.length);
 
-      // Filter by date range
-      const filteredStockChecks = serverStockChecks.filter(check => {
+      // Filter by date range (skip if pulling all data)
+      let filteredStockChecks = serverStockChecks.filter(check => {
         if (check.deleted) return false;
         const checkDate = check.date;
         if (!checkDate) return false;
+        if (pullAllData) return true;
         return checkDate >= pullStartDate && checkDate <= pullEndDate;
       });
 
-      const filteredRequests = serverRequests.filter(request => {
+      let filteredRequests = serverRequests.filter(request => {
         if (request.deleted) return false;
+        if (pullAllData) return true;
         const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
         return reqDate >= pullStartDate && reqDate <= pullEndDate;
       });
@@ -666,7 +674,8 @@ export default function HistoryScreen() {
       console.log('Results - Stock checks:', finalStockChecks.length, 'Requests:', finalRequests.length);
 
       if (finalStockChecks.length === 0 && finalRequests.length === 0) {
-        Alert.alert('No Data Found', `No stock checks or requests found for the selected date range${pullOutlet !== 'all' ? ` and outlet (${pullOutlet})` : ''}.`);
+        const rangeText = pullAllData ? '' : `for the selected date range`;
+        Alert.alert('No Data Found', `No stock checks or requests found ${rangeText}${pullOutlet !== 'all' ? ` and outlet (${pullOutlet})` : ''}.`);
       }
     } catch (error) {
       console.error('Pull data error:', error);
@@ -674,7 +683,7 @@ export default function HistoryScreen() {
     } finally {
       setIsPullingData(false);
     }
-  }, [pullStartDate, pullEndDate, pullOutlet, currentUser, calculateDaysFromToday]);
+  }, [pullStartDate, pullEndDate, pullOutlet, pullAllData, currentUser, calculateDaysFromToday]);
 
   const handleClosePullDataModal = useCallback(() => {
     setShowPullDataModal(false);
@@ -1851,9 +1860,23 @@ export default function HistoryScreen() {
             
             <ScrollView style={styles.pullDataModalBody}>
               <Text style={styles.pullDataDescription}>
-                Pull stock check and request data from the server for a specific date range and outlet.
+                Pull stock check and request data from the server for a specific date range and outlet, or fetch all available data.
               </Text>
 
+              <TouchableOpacity
+                style={styles.pullAllDataToggle}
+                onPress={() => setPullAllData(!pullAllData)}
+              >
+                <View style={[styles.pullAllDataCheckbox, pullAllData && styles.pullAllDataCheckboxActive]}>
+                  {pullAllData && <Check size={14} color="#fff" />}
+                </View>
+                <View style={styles.pullAllDataTextContainer}>
+                  <Text style={styles.pullAllDataLabel}>Fetch All Available Data</Text>
+                  <Text style={styles.pullAllDataHint}>Retrieves all history stored on the server (up to 10 years)</Text>
+                </View>
+              </TouchableOpacity>
+
+              {!pullAllData && (
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Start Date *</Text>
                 <View style={styles.dateEditButtonWrapper}>
@@ -1881,6 +1904,7 @@ export default function HistoryScreen() {
                   />
                 </View>
               </View>
+              )}
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Outlet</Text>
@@ -3033,5 +3057,44 @@ const styles = StyleSheet.create({
     fontStyle: 'italic' as const,
     textAlign: 'center' as const,
     paddingVertical: 8,
+  },
+  pullAllDataToggle: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-start' as const,
+    gap: 12,
+    backgroundColor: Colors.light.background,
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  pullAllDataCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: Colors.light.border,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: Colors.light.card,
+  },
+  pullAllDataCheckboxActive: {
+    backgroundColor: Colors.light.success,
+    borderColor: Colors.light.success,
+  },
+  pullAllDataTextContainer: {
+    flex: 1,
+  },
+  pullAllDataLabel: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 4,
+  },
+  pullAllDataHint: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    lineHeight: 16,
   },
 });
