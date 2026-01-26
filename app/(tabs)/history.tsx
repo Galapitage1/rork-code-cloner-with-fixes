@@ -607,13 +607,14 @@ export default function HistoryScreen() {
       console.log('Pull all data:', pullAllData);
       console.log('Date range:', pullAllData ? 'ALL' : `${pullStartDate} to ${pullEndDate}`);
       console.log('Outlet filter:', pullOutlet);
+      console.log('Include deleted:', pullIncludeDeleted);
 
       // For all data, use 3650 days (~10 years) to get everything available
       // For date range, calculate minDays from start date to today
       const minDays = pullAllData ? 3650 : calculateDaysFromToday(pullStartDate);
       console.log('Requesting minDays:', minDays);
 
-      // Fetch stock checks from server
+      // Fetch stock checks from server (regular endpoint)
       const serverStockChecks = await getFromServer<StockCheck>({
         userId: currentUser.id,
         dataType: 'stockChecks',
@@ -621,9 +622,70 @@ export default function HistoryScreen() {
         includeDeleted: pullIncludeDeleted,
       });
       console.log('Received stock checks from server:', serverStockChecks.length);
+      
+      // If includeDeleted is enabled, also try fetching from dedicated deleted endpoints
+      let allStockChecks = [...serverStockChecks];
+      let allRequests: ProductRequest[] = [];
+      
       if (pullIncludeDeleted) {
-        const deletedCount = serverStockChecks.filter(c => c.deleted).length;
-        console.log('Including deleted stock checks:', deletedCount);
+        // Try fetching from deletedStockChecks endpoint (server may store deleted items separately)
+        try {
+          console.log('Fetching from deletedStockChecks endpoint...');
+          const deletedStockChecks = await getFromServer<StockCheck>({
+            userId: currentUser.id,
+            dataType: 'deletedStockChecks',
+            minDays: minDays,
+          });
+          console.log('Received from deletedStockChecks:', deletedStockChecks.length);
+          
+          // Merge deleted items, marking them as deleted if not already
+          const deletedWithFlag = deletedStockChecks.map(check => ({
+            ...check,
+            deleted: true,
+          }));
+          
+          // Add only items not already in the list
+          const existingIds = new Set(allStockChecks.map(c => c.id));
+          for (const check of deletedWithFlag) {
+            if (!existingIds.has(check.id)) {
+              allStockChecks.push(check);
+              existingIds.add(check.id);
+            }
+          }
+          console.log('After merging deleted stock checks, total:', allStockChecks.length);
+        } catch (deletedError) {
+          console.log('deletedStockChecks endpoint not available or failed:', deletedError);
+        }
+        
+        // Also try stockChecks_deleted endpoint (alternative naming)
+        try {
+          console.log('Fetching from stockChecks_deleted endpoint...');
+          const deletedStockChecks2 = await getFromServer<StockCheck>({
+            userId: currentUser.id,
+            dataType: 'stockChecks_deleted',
+            minDays: minDays,
+          });
+          console.log('Received from stockChecks_deleted:', deletedStockChecks2.length);
+          
+          const deletedWithFlag = deletedStockChecks2.map(check => ({
+            ...check,
+            deleted: true,
+          }));
+          
+          const existingIds = new Set(allStockChecks.map(c => c.id));
+          for (const check of deletedWithFlag) {
+            if (!existingIds.has(check.id)) {
+              allStockChecks.push(check);
+              existingIds.add(check.id);
+            }
+          }
+          console.log('After merging stockChecks_deleted, total:', allStockChecks.length);
+        } catch (deletedError2) {
+          console.log('stockChecks_deleted endpoint not available or failed:', deletedError2);
+        }
+        
+        const deletedCount = allStockChecks.filter(c => c.deleted).length;
+        console.log('Total deleted stock checks found:', deletedCount);
       }
 
       // Fetch requests from server
@@ -634,13 +696,69 @@ export default function HistoryScreen() {
         includeDeleted: pullIncludeDeleted,
       });
       console.log('Received requests from server:', serverRequests.length);
+      allRequests = [...serverRequests];
+      
       if (pullIncludeDeleted) {
-        const deletedReqCount = serverRequests.filter(r => r.deleted).length;
-        console.log('Including deleted requests:', deletedReqCount);
+        // Try fetching from deletedRequests endpoint
+        try {
+          console.log('Fetching from deletedRequests endpoint...');
+          const deletedRequests = await getFromServer<ProductRequest>({
+            userId: currentUser.id,
+            dataType: 'deletedRequests',
+            minDays: minDays,
+          });
+          console.log('Received from deletedRequests:', deletedRequests.length);
+          
+          const deletedWithFlag = deletedRequests.map(req => ({
+            ...req,
+            deleted: true,
+          }));
+          
+          const existingIds = new Set(allRequests.map(r => r.id));
+          for (const req of deletedWithFlag) {
+            if (!existingIds.has(req.id)) {
+              allRequests.push(req);
+              existingIds.add(req.id);
+            }
+          }
+          console.log('After merging deleted requests, total:', allRequests.length);
+        } catch (deletedError) {
+          console.log('deletedRequests endpoint not available or failed:', deletedError);
+        }
+        
+        // Also try requests_deleted endpoint
+        try {
+          console.log('Fetching from requests_deleted endpoint...');
+          const deletedRequests2 = await getFromServer<ProductRequest>({
+            userId: currentUser.id,
+            dataType: 'requests_deleted',
+            minDays: minDays,
+          });
+          console.log('Received from requests_deleted:', deletedRequests2.length);
+          
+          const deletedWithFlag = deletedRequests2.map(req => ({
+            ...req,
+            deleted: true,
+          }));
+          
+          const existingIds = new Set(allRequests.map(r => r.id));
+          for (const req of deletedWithFlag) {
+            if (!existingIds.has(req.id)) {
+              allRequests.push(req);
+              existingIds.add(req.id);
+            }
+          }
+          console.log('After merging requests_deleted, total:', allRequests.length);
+        } catch (deletedError2) {
+          console.log('requests_deleted endpoint not available or failed:', deletedError2);
+        }
+        
+        const deletedReqCount = allRequests.filter(r => r.deleted).length;
+        console.log('Total deleted requests found:', deletedReqCount);
       }
 
       // Filter by date range (skip if pulling all data)
-      let filteredStockChecks = serverStockChecks.filter(check => {
+      let filteredStockChecks = allStockChecks.filter(check => {
         if (!pullIncludeDeleted && check.deleted) return false;
         const checkDate = check.date;
         if (!checkDate) return false;
@@ -648,7 +766,7 @@ export default function HistoryScreen() {
         return checkDate >= pullStartDate && checkDate <= pullEndDate;
       });
 
-      let filteredRequests = serverRequests.filter(request => {
+      let filteredRequests = allRequests.filter(request => {
         if (!pullIncludeDeleted && request.deleted) return false;
         if (pullAllData) return true;
         const reqDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
@@ -683,11 +801,19 @@ export default function HistoryScreen() {
       });
 
       console.log('=== PULL DATA COMPLETE ===');
-      console.log('Results - Stock checks:', finalStockChecks.length, 'Requests:', finalRequests.length);
+      console.log('Results - Stock checks:', finalStockChecks.length, '(deleted:', finalStockChecks.filter(c => c.deleted).length, ')');
+      console.log('Results - Requests:', finalRequests.length, '(deleted:', finalRequests.filter(r => r.deleted).length, ')');
 
       if (finalStockChecks.length === 0 && finalRequests.length === 0) {
         const rangeText = pullAllData ? '' : `for the selected date range`;
-        Alert.alert('No Data Found', `No stock checks or requests found ${rangeText}${pullOutlet !== 'all' ? ` and outlet (${pullOutlet})` : ''}.`);
+        const deletedText = pullIncludeDeleted ? ' (including deleted items)' : '';
+        Alert.alert('No Data Found', `No stock checks or requests found ${rangeText}${pullOutlet !== 'all' ? ` and outlet (${pullOutlet})` : ''}${deletedText}.\n\nNote: Deleted items may have been permanently removed from the server.`);
+      } else if (pullIncludeDeleted) {
+        const deletedChecksCount = finalStockChecks.filter(c => c.deleted).length;
+        const deletedReqsCount = finalRequests.filter(r => r.deleted).length;
+        if (deletedChecksCount > 0 || deletedReqsCount > 0) {
+          Alert.alert('Data Retrieved', `Found ${finalStockChecks.length} stock checks (${deletedChecksCount} deleted) and ${finalRequests.length} requests (${deletedReqsCount} deleted).`);
+        }
       }
     } catch (error) {
       console.error('Pull data error:', error);
