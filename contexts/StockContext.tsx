@@ -3407,21 +3407,25 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // CRITICAL: When forceFullSync is true (cache was cleared), use fetchOnly mode
       // This prevents empty local data from overwriting existing server data
       // We ONLY want to PULL data from server, not PUSH empty data to it
+      // CRITICAL: Also set includeDeleted: true to restore deleted items that may have been lost
       const fetchOnly = forceFullSync;
+      const includeDeleted = forceFullSync; // Fetch deleted items when cache was cleared to allow restoration
       if (fetchOnly) {
         console.log('StockContext syncAll: ⚠️ FETCH-ONLY MODE - Cache was cleared, will only pull from server');
         console.log('StockContext syncAll: This prevents empty local data from overwriting server history');
+        console.log('StockContext syncAll: Will also fetch DELETED items from server for potential restoration');
+        console.log('StockContext syncAll: Server retains data for 40+ days, so all recent history will be restored');
       }
       
       const syncResults = await Promise.allSettled([
-        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly }),
-        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays, fetchOnly }),
-        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : undefined, fetchOnly }),
-        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly }),
-        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly }),
-        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly }),
-        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly }),
-        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly }),
+        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted }),
+        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays, fetchOnly, includeDeleted }),
+        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : undefined, fetchOnly, includeDeleted }),
+        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted }),
+        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted }),
+        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
+        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted }),
+        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
       ]);
       
       const syncedProducts = syncResults[0].status === 'fulfilled' ? syncResults[0].value : productsToSync;
