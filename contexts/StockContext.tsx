@@ -387,9 +387,48 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       } finally {
         setIsLoading(false);
         
-        // Get fresh products data for syncing after loading
-        const freshProductsData = await AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS);
-        if (freshProductsData && currentUser?.id) {
+        // Check if local data is empty (cache was cleared) - trigger immediate full sync from server
+        const [freshProductsData, freshStockChecksData, freshRequestsData] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
+          AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
+          AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
+        ]);
+        
+        const hasProducts = freshProductsData && JSON.parse(freshProductsData).length > 0;
+        const hasStockChecks = freshStockChecksData && JSON.parse(freshStockChecksData).length > 0;
+        const hasRequests = freshRequestsData && JSON.parse(freshRequestsData).length > 0;
+        
+        // CRITICAL: If cache was cleared (all data empty), trigger immediate FULL sync from server
+        if (!hasProducts && !hasStockChecks && !hasRequests && currentUser?.id) {
+          console.log('StockContext loadData: ⚠️ CACHE CLEARED DETECTED - Local storage is empty');
+          console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore data from server...');
+          
+          // Clear last sync timestamps to force full fetch from server
+          const timestampKeys = [
+            '@last_sync_products_' + currentUser.id,
+            '@last_sync_stockChecks_' + currentUser.id,
+            '@last_sync_requests_' + currentUser.id,
+            '@last_sync_outlets_' + currentUser.id,
+            '@last_sync_productConversions_' + currentUser.id,
+            '@last_sync_inventoryStocks_' + currentUser.id,
+            '@last_sync_salesDeductions_' + currentUser.id,
+            '@last_sync_reconcileHistory_' + currentUser.id,
+          ];
+          
+          await Promise.all(timestampKeys.map(key => AsyncStorage.removeItem(key).catch(() => {})));
+          console.log('StockContext loadData: Cleared sync timestamps to force full server fetch');
+          
+          // Trigger immediate full sync
+          syncInProgressRef.current = false;
+          if (syncAllRef.current) {
+            console.log('StockContext loadData: Starting immediate full sync from server...');
+            syncAllRef.current().then(() => {
+              console.log('StockContext loadData: ✓ Full sync from server completed - data restored!');
+            }).catch((syncError) => {
+              console.error('StockContext loadData: Full sync failed:', syncError);
+            });
+          }
+        } else if (freshProductsData && currentUser?.id) {
           try {
             const parsedProducts = JSON.parse(freshProductsData);
             if (Array.isArray(parsedProducts) && parsedProducts.length > 0) {
@@ -3205,10 +3244,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const salesDeductionsToSync = salesDeductionsData ? JSON.parse(salesDeductionsData) : [];
       const reconcileHistoryToSync = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
       
-      // CLEANUP: Remove stock checks older than 7 days during sync (server keeps everything)
+      // CLEANUP: Remove stock checks older than 30 days during sync (server keeps everything)
       // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
+      // NOTE: Changed from 7 days to 30 days to ensure stock check history is available after cache clear
       if (stockChecksToSync.length > 0 && silent) {
-        const RETENTION_DAYS = 7;
+        const RETENTION_DAYS = 30;
         const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
         const retentionDaysAgo = new Date();
         retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
@@ -3222,7 +3262,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           if (check.deleted) {
             const deletedAt = check.updatedAt || 0;
             if (deletedAt > deletedRetentionTime) {
-              console.log('StockContext syncAll: Keeping deleted stock check', check.id, 'for sync (prevents resurrection)');
               return true;
             }
             return false;
@@ -3232,8 +3271,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         });
         
         if (originalCount > stockChecksToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than', RETENTION_DAYS, 'days active OR', DELETED_RETENTION_DAYS, 'days deleted) from local storage');
-          console.log('StockContext syncAll: Server still has all historical data');
+          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than', RETENTION_DAYS, 'days)');
         }
       }
       
