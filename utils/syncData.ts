@@ -23,7 +23,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
   dataType: string,
   localData: T[],
   userId?: string,
-  options?: { minDays?: number; isDefaultAdminDevice?: boolean; [key: string]: unknown }
+  options?: { minDays?: number; isDefaultAdminDevice?: boolean; fetchOnly?: boolean; [key: string]: unknown }
 ): Promise<T[]> {
   if (!userId) {
     return localData;
@@ -48,15 +48,25 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
       // No lock
     }
     
-    const changedItems = isFirstSync 
-      ? localData 
-      : localData.filter(item => (item.updatedAt || 0) > lastSyncTime);
-    
-    if (changedItems.length > 0) {
-      if (isFirstSync) {
-        await saveToServer(changedItems, { userId, dataType });
+    // CRITICAL: When fetchOnly is true (cache was cleared), do NOT push local data to server
+    // This prevents empty local data from overwriting existing server data
+    if (options?.fetchOnly) {
+      console.log(`syncData [${dataType}]: FETCH-ONLY mode - skipping push to server to prevent data loss`);
+    } else {
+      const changedItems = isFirstSync 
+        ? localData 
+        : localData.filter(item => (item.updatedAt || 0) > lastSyncTime);
+      
+      if (changedItems.length > 0) {
+        if (isFirstSync) {
+          console.log(`syncData [${dataType}]: First sync - pushing ${changedItems.length} items to server`);
+          await saveToServer(changedItems, { userId, dataType });
+        } else {
+          console.log(`syncData [${dataType}]: Delta sync - pushing ${changedItems.length} changed items to server`);
+          await saveDeltaToServer(changedItems, { userId, dataType });
+        }
       } else {
-        await saveDeltaToServer(changedItems, { userId, dataType });
+        console.log(`syncData [${dataType}]: No changed items to push`);
       }
     }
     
