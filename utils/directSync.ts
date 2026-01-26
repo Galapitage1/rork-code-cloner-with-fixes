@@ -2,6 +2,7 @@ export interface SyncOptions {
   userId: string;
   dataType: string;
   minDays?: number;
+  includeDeleted?: boolean;
 }
 
 export interface DeltaSyncOptions extends SyncOptions {
@@ -195,7 +196,8 @@ export async function getFromServer<T>(
     const baseUrl = getBaseUrl();
     // Add minDays parameter for stockChecks to request full history (40 days) after cache clear
     const minDaysParam = options.minDays ? `&minDays=${options.minDays}` : '';
-    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}${minDaysParam}`;
+    const includeDeletedParam = options.includeDeleted ? '&includeDeleted=true' : '';
+    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}${minDaysParam}${includeDeletedParam}`;
     
     const response = await fetchWithRetry(url, {
       method: 'GET',

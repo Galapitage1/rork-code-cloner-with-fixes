@@ -618,16 +618,26 @@ export default function HistoryScreen() {
         userId: currentUser.id,
         dataType: 'stockChecks',
         minDays: minDays,
+        includeDeleted: pullIncludeDeleted,
       });
       console.log('Received stock checks from server:', serverStockChecks.length);
+      if (pullIncludeDeleted) {
+        const deletedCount = serverStockChecks.filter(c => c.deleted).length;
+        console.log('Including deleted stock checks:', deletedCount);
+      }
 
       // Fetch requests from server
       const serverRequests = await getFromServer<ProductRequest>({
         userId: currentUser.id,
         dataType: 'requests',
         minDays: minDays,
+        includeDeleted: pullIncludeDeleted,
       });
       console.log('Received requests from server:', serverRequests.length);
+      if (pullIncludeDeleted) {
+        const deletedReqCount = serverRequests.filter(r => r.deleted).length;
+        console.log('Including deleted requests:', deletedReqCount);
+      }
 
       // Filter by date range (skip if pulling all data)
       let filteredStockChecks = serverStockChecks.filter(check => {
