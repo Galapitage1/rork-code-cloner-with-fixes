@@ -457,7 +457,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore ALL data (40 days history) from server...');
           
           // Clear ALL last sync timestamps to force full fetch from server
-          const timestampKeys = [
+          const timestampKeys = currentUser ? [
             '@last_sync_products_' + currentUser.id,
             '@last_sync_stockChecks_' + currentUser.id,
             '@last_sync_requests_' + currentUser.id,
@@ -466,7 +466,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
             '@last_sync_inventoryStocks_' + currentUser.id,
             '@last_sync_salesDeductions_' + currentUser.id,
             '@last_sync_reconcileHistory_' + currentUser.id,
-          ];
+          ] : [];
           
           await Promise.all(timestampKeys.map(key => AsyncStorage.removeItem(key).catch(() => {})));
           console.log('StockContext loadData: Cleared ALL sync timestamps to force full server fetch');
