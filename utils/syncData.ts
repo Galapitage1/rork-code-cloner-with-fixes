@@ -23,7 +23,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
   dataType: string,
   localData: T[],
   userId?: string,
-  _options?: Record<string, unknown>
+  options?: { minDays?: number; isDefaultAdminDevice?: boolean; [key: string]: unknown }
 ): Promise<T[]> {
   if (!userId) {
     return localData;
@@ -61,7 +61,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
     }
     
     const remoteChanges = isFirstSync
-      ? await getFromServer<T>({ userId, dataType })
+      ? await getFromServer<T>({ userId, dataType, minDays: options?.minDays })
       : await getDeltaFromServer<T>({ userId, dataType, since: lastSyncTime });
     
     if (remoteChanges.length > 0) {

@@ -3356,10 +3356,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
       })));
       
+      // CRITICAL: Pass minDays: 40 for stockChecks when forceFullSync is true (cache was cleared)
+      // This ensures the server returns up to 40 days of stock check history
+      const stockChecksMinDays = forceFullSync ? 40 : undefined;
+      
       const syncResults = await Promise.allSettled([
         syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
-        syncData('stockChecks', stockChecksToSync, currentUser.id),
-        syncData('requests', requestsToSync, currentUser.id),
+        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays }),
+        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : undefined }),
         syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' }),
         syncData('productConversions', conversionsToSync, currentUser.id),
         syncData('inventoryStocks', inventoryToSync, currentUser.id),
