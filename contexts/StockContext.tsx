@@ -154,7 +154,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.error('StockContext loadData: Failed to cleanup old sales deductions:', cleanupError);
         }
         
-        const [productsData, stockChecksData, requestsData, outletsData, showProductListData, conversionsData, inventoryData, salesDeductionsData, viewModeData, reconcileHistoryData, syncPausedData] = await Promise.all([
+        const [productsData, stockChecksData, requestsData, outletsData, showProductListData, conversionsData, inventoryData, salesDeductionsData, viewModeData, reconcileHistoryData, syncPausedData, snapshotsData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
           AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
           AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
@@ -166,6 +166,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           AsyncStorage.getItem(STORAGE_KEYS.VIEW_MODE),
           AsyncStorage.getItem(STORAGE_KEYS.RECONCILE_HISTORY),
           AsyncStorage.getItem(STORAGE_KEYS.SYNC_PAUSED),
+          AsyncStorage.getItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS),
         ]);
 
         if (productsData) {
@@ -387,6 +388,30 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
             console.error('Raw data:', reconcileHistoryData);
             await AsyncStorage.removeItem(STORAGE_KEYS.RECONCILE_HISTORY);
             setReconcileHistory([]);
+          }
+        }
+        if (snapshotsData) {
+          try {
+            const trimmed = snapshotsData.trim();
+            if (trimmed && (trimmed.startsWith('[') || trimmed.startsWith('{'))) {
+              const parsed = JSON.parse(trimmed);
+              if (Array.isArray(parsed)) {
+                const activeSnapshots = parsed.filter((s: any) => !s?.deleted);
+                setLiveInventorySnapshots(activeSnapshots);
+                console.log('StockContext loadData: Loaded', activeSnapshots.length, 'live inventory snapshots from local storage');
+              } else {
+                console.error('Snapshots data is not an array');
+                await AsyncStorage.removeItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS);
+              }
+            } else {
+              console.error('Snapshots data is not valid JSON:', snapshotsData);
+              await AsyncStorage.removeItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS);
+            }
+          } catch (parseError) {
+            console.error('Failed to parse snapshots data:', parseError);
+            console.error('Raw data:', snapshotsData);
+            await AsyncStorage.removeItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS);
+            setLiveInventorySnapshots([]);
           }
         }
       } catch (error) {
