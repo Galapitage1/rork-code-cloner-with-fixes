@@ -1,10 +1,28 @@
 import * as XLSX from 'xlsx';
 import { Recipe, Product, ProductConversion } from '@/types';
 
+export interface UnmatchedItem {
+  type: 'menu' | 'ingredient';
+  originalName: string;
+  originalUnit: string;
+  forProduct?: string; // For ingredients, the menu product name
+  forProductId?: string; // For ingredients, the menu product id
+  quantity?: number; // For ingredients
+  rowData?: {
+    productName: string;
+    productUnit: string;
+    ingredientName: string;
+    quantity: number;
+    unit: string;
+  };
+  possibleMatches: Product[];
+}
+
 export interface ParsedRecipeData {
   recipes: Recipe[];
   errors: string[];
   warnings: string[];
+  unmatchedItems: UnmatchedItem[];
 }
 
 function normalizeUnit(unit: string): string {
@@ -27,6 +45,43 @@ function parseQuantityWithUnit(value: string): { quantity: number; unit: string 
   return { quantity: 0, unit: '' };
 }
 
+function findClosestMatches(name: string, unit: string, products: Product[], limit: number = 5): Product[] {
+  const normalizedName = name.toLowerCase().trim();
+  const normalizedUnit = unit.toLowerCase().trim();
+  
+  const scored = products.map(p => {
+    let score = 0;
+    const pName = p.name.toLowerCase();
+    const pUnit = p.unit.toLowerCase();
+    
+    // Exact name match
+    if (pName === normalizedName) score += 100;
+    // Name contains search or vice versa
+    else if (pName.includes(normalizedName) || normalizedName.includes(pName)) score += 50;
+    // Partial word match
+    else {
+      const searchWords = normalizedName.split(/\s+/);
+      const productWords = pName.split(/\s+/);
+      const matchingWords = searchWords.filter(sw => 
+        productWords.some(pw => pw.includes(sw) || sw.includes(pw))
+      );
+      score += matchingWords.length * 20;
+    }
+    
+    // Unit matching bonus
+    if (pUnit === normalizedUnit) score += 30;
+    else if (pUnit.includes(normalizedUnit) || normalizedUnit.includes(pUnit)) score += 15;
+    
+    return { product: p, score };
+  });
+  
+  return scored
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(s => s.product);
+}
+
 export function parseRecipeExcelFile(
   base64Data: string, 
   existingProducts: Product[], 
@@ -36,6 +91,7 @@ export function parseRecipeExcelFile(
   const errors: string[] = [];
   const warnings: string[] = [];
   const recipes: Recipe[] = [];
+  const unmatchedItems: UnmatchedItem[] = [];
 
   try {
     const workbook = XLSX.read(base64Data, { type: 'base64' });
@@ -79,12 +135,21 @@ export function parseRecipeExcelFile(
         );
         
         if (!matchedProduct) {
-          const fuzzyMatch = menuProducts.find(p => 
-            p.name.toLowerCase().includes(productName.toLowerCase()) ||
-            productName.toLowerCase().includes(p.name.toLowerCase())
-          );
-          if (fuzzyMatch) {
-            warnings.push(`Product "${productName}" (${productUnit}) - possible match: ${fuzzyMatch.name} (${fuzzyMatch.unit})`);
+          const possibleMatches = findClosestMatches(productName, productUnit, menuProducts);
+          if (possibleMatches.length > 0) {
+            // Check if we already have this unmatched item
+            const existingUnmatched = unmatchedItems.find(
+              u => u.type === 'menu' && u.originalName.toLowerCase() === productName.toLowerCase() && u.originalUnit.toLowerCase() === productUnit.toLowerCase()
+            );
+            if (!existingUnmatched) {
+              unmatchedItems.push({
+                type: 'menu',
+                originalName: productName,
+                originalUnit: productUnit,
+                possibleMatches,
+              });
+              warnings.push(`Product "${productName}" (${productUnit}) - possible match: ${possibleMatches[0].name} (${possibleMatches[0].unit})`);
+            }
           }
           continue;
         }
@@ -120,12 +185,36 @@ export function parseRecipeExcelFile(
         );
 
         if (!matchedRaw) {
-          const fuzzyRawMatch = rawProducts.find(p => 
-            p.name.toLowerCase().includes(ingredientName.toLowerCase()) ||
-            ingredientName.toLowerCase().includes(p.name.toLowerCase())
+          const possibleMatches = findClosestMatches(ingredientName, unit, rawProducts);
+          // Check if we already have this unmatched item for the same product
+          const existingUnmatched = unmatchedItems.find(
+            u => u.type === 'ingredient' && 
+                 u.originalName.toLowerCase() === ingredientName.toLowerCase() && 
+                 u.originalUnit.toLowerCase() === unit.toLowerCase() &&
+                 u.forProductId === matchedProduct.id
           );
-          if (fuzzyRawMatch) {
-            warnings.push(`Ingredient "${ingredientName}" (${unit}) for ${productName} - possible match: ${fuzzyRawMatch.name} (${fuzzyRawMatch.unit})`);
+          if (!existingUnmatched) {
+            unmatchedItems.push({
+              type: 'ingredient',
+              originalName: ingredientName,
+              originalUnit: unit,
+              forProduct: productName,
+              forProductId: matchedProduct.id,
+              quantity,
+              rowData: {
+                productName,
+                productUnit,
+                ingredientName,
+                quantity,
+                unit,
+              },
+              possibleMatches,
+            });
+            if (possibleMatches.length > 0) {
+              warnings.push(`Ingredient "${ingredientName}" (${unit}) for ${productName} - possible match: ${possibleMatches[0].name} (${possibleMatches[0].unit})`);
+            } else {
+              warnings.push(`Ingredient "${ingredientName}" (${unit}) for ${productName} - no matches found`);
+            }
           }
           continue;
         }
@@ -190,5 +279,5 @@ export function parseRecipeExcelFile(
     errors.push(`Failed to parse Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 
-  return { recipes, errors, warnings };
+  return { recipes, errors, warnings, unmatchedItems };
 }

@@ -9,7 +9,7 @@ import { Plus, Save, X, Upload, AlertCircle } from 'lucide-react-native';
 import { RecipeComponent, Recipe } from '@/types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { parseRecipeExcelFile } from '@/utils/recipeExcelParser';
+import { parseRecipeExcelFile, UnmatchedItem } from '@/utils/recipeExcelParser';
 import { VoiceSearchInput } from '@/components/VoiceSearchInput';
 import { formatCurrency } from '@/utils/currencyHelper';
 
@@ -29,6 +29,15 @@ export default function RecipesScreen() {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [showImportResults, setShowImportResults] = useState<boolean>(false);
   const [importResults, setImportResults] = useState<{ success: number; warnings: string[]; errors: string[] }>({ success: 0, warnings: [], errors: [] });
+  
+  // Product matching state
+  const [unmatchedItems, setUnmatchedItems] = useState<UnmatchedItem[]>([]);
+  const [currentUnmatchedIndex, setCurrentUnmatchedIndex] = useState<number>(0);
+  const [showMatchingModal, setShowMatchingModal] = useState<boolean>(false);
+  const [showManualSelection, setShowManualSelection] = useState<boolean>(false);
+  const [manualSearchQuery, setManualSearchQuery] = useState<string>('');
+  const [pendingRecipes, setPendingRecipes] = useState<Recipe[]>([]);
+  const [resolvedIngredients, setResolvedIngredients] = useState<Map<string, { productId: string; quantity: number; forProductId: string }>>(new Map());
 
   const calculateProductCost = useCallback((menuProductId: string): number | null => {
     const recipe = recipes.find(r => r.menuProductId === menuProductId);
@@ -198,6 +207,21 @@ export default function RecipesScreen() {
         return;
       }
 
+      // Store pending recipes
+      setPendingRecipes(parsed.recipes);
+      
+      // Check if there are unmatched items that need resolution
+      const ingredientUnmatched = parsed.unmatchedItems.filter(u => u.type === 'ingredient');
+      if (ingredientUnmatched.length > 0) {
+        setUnmatchedItems(ingredientUnmatched);
+        setCurrentUnmatchedIndex(0);
+        setResolvedIngredients(new Map());
+        setShowMatchingModal(true);
+        setIsImporting(false);
+        return;
+      }
+
+      // No unmatched items, proceed with import
       let successCount = 0;
       for (const recipe of parsed.recipes) {
         await addOrUpdateRecipe(recipe);
@@ -214,6 +238,101 @@ export default function RecipesScreen() {
       setIsImporting(false);
     }
   };
+
+  const handleMatchSelection = async (selectedProductId: string | null) => {
+    const currentItem = unmatchedItems[currentUnmatchedIndex];
+    
+    if (selectedProductId && currentItem.forProductId && currentItem.quantity) {
+      // Store the resolved ingredient
+      const key = `${currentItem.forProductId}-${currentItem.originalName}-${currentItem.originalUnit}`;
+      setResolvedIngredients(prev => {
+        const newMap = new Map(prev);
+        newMap.set(key, {
+          productId: selectedProductId,
+          quantity: currentItem.quantity!,
+          forProductId: currentItem.forProductId!,
+        });
+        return newMap;
+      });
+    }
+    
+    // Move to next unmatched item or finish
+    if (currentUnmatchedIndex < unmatchedItems.length - 1) {
+      setCurrentUnmatchedIndex(prev => prev + 1);
+      setShowManualSelection(false);
+      setManualSearchQuery('');
+    } else {
+      // All items resolved, finalize import
+      await finalizeImport();
+    }
+  };
+
+  const finalizeImport = async () => {
+    try {
+      setShowMatchingModal(false);
+      setIsImporting(true);
+      
+      // Apply resolved ingredients to recipes
+      const finalRecipes = [...pendingRecipes];
+      
+      resolvedIngredients.forEach((resolved, _key) => {
+        const existingRecipe = finalRecipes.find(r => r.menuProductId === resolved.forProductId);
+        if (existingRecipe) {
+          // Add component to existing recipe
+          existingRecipe.components.push({
+            rawProductId: resolved.productId,
+            quantityPerUnit: resolved.quantity,
+          });
+        } else {
+          // Create new recipe
+          finalRecipes.push({
+            id: `rcp-${resolved.forProductId}`,
+            menuProductId: resolved.forProductId,
+            components: [{
+              rawProductId: resolved.productId,
+              quantityPerUnit: resolved.quantity,
+            }],
+            updatedAt: Date.now(),
+          });
+        }
+      });
+      
+      let successCount = 0;
+      for (const recipe of finalRecipes) {
+        await addOrUpdateRecipe(recipe);
+        successCount++;
+      }
+      
+      const skippedCount = unmatchedItems.length - resolvedIngredients.size;
+      const warnings: string[] = [];
+      if (skippedCount > 0) {
+        warnings.push(`${skippedCount} ingredient(s) were skipped`);
+      }
+      
+      setImportResults({ success: successCount, warnings, errors: [] });
+      setShowImportResults(true);
+      setIsImporting(false);
+      
+      // Reset state
+      setUnmatchedItems([]);
+      setCurrentUnmatchedIndex(0);
+      setResolvedIngredients(new Map());
+      setPendingRecipes([]);
+    } catch (error) {
+      console.error('Finalize import error:', error);
+      Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to finalize import');
+      setIsImporting(false);
+    }
+  };
+
+  const currentUnmatched = unmatchedItems[currentUnmatchedIndex];
+  const filteredProductsForManual = useMemo(() => {
+    if (!showManualSelection || !currentUnmatched) return [];
+    const targetProducts = currentUnmatched.type === 'menu' ? menuItems : rawItems;
+    if (!manualSearchQuery.trim()) return targetProducts;
+    const q = manualSearchQuery.toLowerCase().trim();
+    return targetProducts.filter(p => p.name.toLowerCase().includes(q));
+  }, [showManualSelection, currentUnmatched, manualSearchQuery, menuItems, rawItems]);
 
   return (
     <View style={styles.container}>
@@ -451,6 +570,107 @@ export default function RecipesScreen() {
               </View>
             </View>
           </Modal>
+
+          {/* Product Matching Modal */}
+          <Modal visible={showMatchingModal} transparent animationType="fade" onRequestClose={() => {}}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Match Product ({currentUnmatchedIndex + 1}/{unmatchedItems.length})</Text>
+                </View>
+                
+                {currentUnmatched && !showManualSelection && (
+                  <ScrollView style={{ maxHeight: 450 }} contentContainerStyle={{ padding: 16 }}>
+                    <View style={styles.unmatchedInfo}>
+                      <Text style={styles.unmatchedLabel}>Could not find:</Text>
+                      <Text style={styles.unmatchedName}>"{currentUnmatched.originalName}" ({currentUnmatched.originalUnit})</Text>
+                      {currentUnmatched.forProduct && (
+                        <Text style={styles.unmatchedFor}>For recipe: {currentUnmatched.forProduct}</Text>
+                      )}
+                      {currentUnmatched.quantity && (
+                        <Text style={styles.unmatchedQty}>Quantity: {currentUnmatched.quantity} {currentUnmatched.originalUnit}</Text>
+                      )}
+                    </View>
+                    
+                    {currentUnmatched.possibleMatches.length > 0 ? (
+                      <>
+                        <Text style={styles.matchSectionTitle}>Suggested Matches:</Text>
+                        {currentUnmatched.possibleMatches.map((match, idx) => (
+                          <TouchableOpacity
+                            key={match.id}
+                            style={[styles.matchOption, idx === 0 && styles.matchOptionBest]}
+                            onPress={() => handleMatchSelection(match.id)}
+                          >
+                            <View style={styles.matchOptionContent}>
+                              <Text style={styles.matchOptionName}>{match.name}</Text>
+                              <Text style={styles.matchOptionUnit}>Unit: {match.unit}</Text>
+                            </View>
+                            {idx === 0 && <Text style={styles.bestMatchBadge}>Best Match</Text>}
+                          </TouchableOpacity>
+                        ))}
+                      </>
+                    ) : (
+                      <Text style={styles.noMatchesText}>No similar products found</Text>
+                    )}
+                    
+                    <View style={styles.matchActions}>
+                      <TouchableOpacity
+                        style={styles.matchActionBtn}
+                        onPress={() => {
+                          setShowManualSelection(true);
+                          setManualSearchQuery('');
+                        }}
+                      >
+                        <Text style={styles.matchActionBtnText}>Choose Another...</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[styles.matchActionBtn, styles.matchSkipBtn]}
+                        onPress={() => handleMatchSelection(null)}
+                      >
+                        <Text style={styles.matchSkipBtnText}>Skip</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </ScrollView>
+                )}
+                
+                {currentUnmatched && showManualSelection && (
+                  <View style={{ maxHeight: 450, padding: 16 }}>
+                    <View style={styles.manualHeader}>
+                      <TouchableOpacity onPress={() => setShowManualSelection(false)}>
+                        <Text style={styles.backLink}>← Back to suggestions</Text>
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <TextInput
+                      style={styles.manualSearchInput}
+                      placeholder="Search all products..."
+                      value={manualSearchQuery}
+                      onChangeText={setManualSearchQuery}
+                      placeholderTextColor={Colors.light.muted}
+                      autoFocus
+                    />
+                    
+                    <ScrollView style={styles.manualList}>
+                      {filteredProductsForManual.map(product => (
+                        <TouchableOpacity
+                          key={product.id}
+                          style={styles.manualOption}
+                          onPress={() => handleMatchSelection(product.id)}
+                        >
+                          <Text style={styles.manualOptionName}>{product.name}</Text>
+                          <Text style={styles.manualOptionUnit}>{product.unit}</Text>
+                        </TouchableOpacity>
+                      ))}
+                      {filteredProductsForManual.length === 0 && (
+                        <Text style={styles.noResultsText}>No products found</Text>
+                      )}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            </View>
+          </Modal>
         </>
       )}
     </View>
@@ -512,6 +732,32 @@ const styles = StyleSheet.create({
   warningText: { color: Colors.light.muted, fontSize: 13, marginLeft: 22, marginTop: 4 },
   errorTitle: { color: Colors.light.danger, fontSize: 14, fontWeight: '700' },
   errorText: { color: Colors.light.danger, fontSize: 13, marginLeft: 22, marginTop: 4 },
+  unmatchedInfo: { backgroundColor: Colors.light.background, borderRadius: 8, padding: 12, marginBottom: 16 },
+  unmatchedLabel: { fontSize: 12, color: Colors.light.muted, marginBottom: 4 },
+  unmatchedName: { fontSize: 16, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 4 },
+  unmatchedFor: { fontSize: 13, color: Colors.light.accent, marginTop: 4 },
+  unmatchedQty: { fontSize: 13, color: Colors.light.muted, marginTop: 2 },
+  matchSectionTitle: { fontSize: 14, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 10 },
+  matchOption: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  matchOptionBest: { borderColor: Colors.light.tint, borderWidth: 2 },
+  matchOptionContent: { flex: 1 },
+  matchOptionName: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text },
+  matchOptionUnit: { fontSize: 12, color: Colors.light.muted, marginTop: 2 },
+  bestMatchBadge: { backgroundColor: Colors.light.tint, color: '#fff', fontSize: 10, fontWeight: '700' as const, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, overflow: 'hidden' },
+  noMatchesText: { color: Colors.light.muted, fontSize: 14, textAlign: 'center' as const, marginVertical: 16 },
+  matchActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  matchActionBtn: { flex: 1, backgroundColor: Colors.light.accent, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  matchActionBtnText: { color: '#fff', fontWeight: '700' as const, fontSize: 14 },
+  matchSkipBtn: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
+  matchSkipBtnText: { color: Colors.light.muted, fontWeight: '600' as const, fontSize: 14 },
+  manualHeader: { marginBottom: 12 },
+  backLink: { color: Colors.light.tint, fontSize: 14, fontWeight: '600' as const },
+  manualSearchInput: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, fontSize: 14, color: Colors.light.text, marginBottom: 12 },
+  manualList: { maxHeight: 280 },
+  manualOption: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  manualOptionName: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text, flex: 1 },
+  manualOptionUnit: { fontSize: 12, color: Colors.light.muted },
+  noResultsText: { color: Colors.light.muted, textAlign: 'center' as const, marginTop: 20 },
   typeHeader: { backgroundColor: Colors.light.tint, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 8, marginTop: 16, borderRadius: 8 },
   typeTitle: { fontSize: 16, fontWeight: '800' as const, color: '#fff', letterSpacing: 1 },
   categoryHeader: { backgroundColor: Colors.light.accent + '20', paddingVertical: 8, paddingHorizontal: 12, marginBottom: 8, marginTop: 8, borderRadius: 6 },
