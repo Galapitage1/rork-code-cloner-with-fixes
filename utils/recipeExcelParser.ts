@@ -1,6 +1,13 @@
 import * as XLSX from 'xlsx';
 import { Recipe, Product, ProductConversion } from '@/types';
 
+export interface PendingIngredient {
+  ingredientName: string;
+  quantity: number;
+  unit: string;
+  sheetName: string;
+}
+
 export interface UnmatchedItem {
   type: 'menu' | 'ingredient';
   originalName: string;
@@ -16,6 +23,7 @@ export interface UnmatchedItem {
     unit: string;
   };
   possibleMatches: Product[];
+  pendingIngredients?: PendingIngredient[]; // For menu items, the ingredients to be added after matching
 }
 
 export interface ParsedRecipeData {
@@ -109,7 +117,17 @@ export function parseRecipeExcelFile(
       conversionsByFromId.set(conv.fromProductId, { toProductId: conv.toProductId, factor: conv.conversionFactor });
     });
 
+    // Structure to hold pending ingredients for unmatched menu products
+    // Key: "originalMenuName|originalMenuUnit", Value: array of ingredients
+    const pendingIngredientsForUnmatchedMenu = new Map<string, Array<{
+      ingredientName: string;
+      quantity: number;
+      unit: string;
+      sheetName: string;
+    }>>();
+
     for (const sheetName of workbook.SheetNames) {
+      console.log(`[RecipeParser] Processing sheet: ${sheetName}`);
       
       const sheet = workbook.Sheets[sheetName];
       const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
@@ -122,67 +140,102 @@ export function parseRecipeExcelFile(
         }
 
         const productName = String(productNameCell.v).trim();
-        const productUnitCell = sheet[`B${row + 1}`];
-        const productUnit = productUnitCell && productUnitCell.v ? normalizeUnit(String(productUnitCell.v)) : '';
-
-        if (!productUnit) {
-          continue;
-        }
-
-        const matchedProduct = menuProducts.find(p => 
-          p.name.toLowerCase() === productName.toLowerCase() && 
-          p.unit.toLowerCase() === productUnit.toLowerCase()
-        );
         
-        if (!matchedProduct) {
-          const possibleMatches = findClosestMatches(productName, productUnit, menuProducts);
-          if (possibleMatches.length > 0) {
-            // Check if we already have this unmatched item
-            const existingUnmatched = unmatchedItems.find(
-              u => u.type === 'menu' && u.originalName.toLowerCase() === productName.toLowerCase() && u.originalUnit.toLowerCase() === productUnit.toLowerCase()
-            );
-            if (!existingUnmatched) {
-              unmatchedItems.push({
-                type: 'menu',
-                originalName: productName,
-                originalUnit: productUnit,
-                possibleMatches,
-              });
-              warnings.push(`Product "${productName}" (${productUnit}) - possible match: ${possibleMatches[0].name} (${possibleMatches[0].unit})`);
-            }
-          }
-          continue;
-        }
-
-        const existingRecipe = existingRecipes.find(r => r.menuProductId === matchedProduct.id);
-        if (existingRecipe) {
-          
-          continue;
-        }
-
-        const ingredientNameCell = sheet[`C${row + 1}`];
+        // Column B: Ingredient name
+        const ingredientNameCell = sheet[`B${row + 1}`];
         if (!ingredientNameCell || !ingredientNameCell.v) {
           continue;
         }
-
         const ingredientName = String(ingredientNameCell.v).trim();
-        const quantityWithUnitCell = sheet[`D${row + 1}`];
         
+        // Column C: Quantity and unit mixed together
+        const quantityWithUnitCell = sheet[`C${row + 1}`];
         if (!quantityWithUnitCell || !quantityWithUnitCell.v) {
           continue;
         }
-
         const quantityWithUnit = String(quantityWithUnitCell.v).trim();
         const { quantity, unit } = parseQuantityWithUnit(quantityWithUnit);
 
         if (quantity <= 0) {
+          console.log(`[RecipeParser] Skipping row ${row + 1} - invalid quantity: ${quantityWithUnit}`);
           continue;
         }
 
-        const matchedRaw = rawProducts.find(p => 
+        // Try to match menu product by name only (more flexible matching)
+        let matchedProduct = menuProducts.find(p => 
+          p.name.toLowerCase() === productName.toLowerCase()
+        );
+        
+        // If no exact match, try partial match
+        if (!matchedProduct) {
+          matchedProduct = menuProducts.find(p => 
+            p.name.toLowerCase().includes(productName.toLowerCase()) ||
+            productName.toLowerCase().includes(p.name.toLowerCase())
+          );
+        }
+        
+        if (!matchedProduct) {
+          // Menu product not found - add to unmatched
+          const possibleMatches = findClosestMatches(productName, '', menuProducts);
+          const menuKey = `${productName.toLowerCase()}`;
+          
+          // Check if we already have this unmatched menu item
+          const existingUnmatched = unmatchedItems.find(
+            u => u.type === 'menu' && u.originalName.toLowerCase() === productName.toLowerCase()
+          );
+          
+          if (!existingUnmatched) {
+            unmatchedItems.push({
+              type: 'menu',
+              originalName: productName,
+              originalUnit: '', // We don't have unit info in column A anymore
+              possibleMatches,
+            });
+            if (possibleMatches.length > 0) {
+              warnings.push(`Menu product "${productName}" - possible match: ${possibleMatches[0].name}`);
+            } else {
+              warnings.push(`Menu product "${productName}" - no matches found in system`);
+            }
+          }
+          
+          // Store the ingredient for this unmatched menu product
+          const pendingKey = productName.toLowerCase();
+          if (!pendingIngredientsForUnmatchedMenu.has(pendingKey)) {
+            pendingIngredientsForUnmatchedMenu.set(pendingKey, []);
+          }
+          pendingIngredientsForUnmatchedMenu.get(pendingKey)!.push({
+            ingredientName,
+            quantity,
+            unit,
+            sheetName,
+          });
+          
+          continue;
+        }
+
+        // Menu product matched - now process the ingredient
+        const existingRecipe = existingRecipes.find(r => r.menuProductId === matchedProduct!.id);
+        
+        // Try to match raw product
+        let matchedRaw = rawProducts.find(p => 
           p.name.toLowerCase() === ingredientName.toLowerCase() && 
           p.unit.toLowerCase() === unit.toLowerCase()
         );
+        
+        // If no exact match with unit, try name-only match
+        if (!matchedRaw) {
+          matchedRaw = rawProducts.find(p => 
+            p.name.toLowerCase() === ingredientName.toLowerCase()
+          );
+        }
+        
+        // If still no match, try partial name match
+        if (!matchedRaw) {
+          matchedRaw = rawProducts.find(p => 
+            p.name.toLowerCase().includes(ingredientName.toLowerCase()) ||
+            ingredientName.toLowerCase().includes(p.name.toLowerCase())
+          );
+        }
 
         if (!matchedRaw) {
           const possibleMatches = findClosestMatches(ingredientName, unit, rawProducts);
@@ -190,8 +243,7 @@ export function parseRecipeExcelFile(
           const existingUnmatched = unmatchedItems.find(
             u => u.type === 'ingredient' && 
                  u.originalName.toLowerCase() === ingredientName.toLowerCase() && 
-                 u.originalUnit.toLowerCase() === unit.toLowerCase() &&
-                 u.forProductId === matchedProduct.id
+                 u.forProductId === matchedProduct!.id
           );
           if (!existingUnmatched) {
             unmatchedItems.push({
@@ -203,7 +255,7 @@ export function parseRecipeExcelFile(
               quantity,
               rowData: {
                 productName,
-                productUnit,
+                productUnit: matchedProduct.unit,
                 ingredientName,
                 quantity,
                 unit,
@@ -219,12 +271,24 @@ export function parseRecipeExcelFile(
           continue;
         }
 
-        const existingRecipeForProduct = recipes.find(r => r.menuProductId === matchedProduct.id);
+        // Skip if recipe already exists for this product
+        if (existingRecipe) {
+          console.log(`[RecipeParser] Recipe already exists for ${matchedProduct.name}, skipping`);
+          continue;
+        }
+
+        const existingRecipeForProduct = recipes.find(r => r.menuProductId === matchedProduct!.id);
         if (existingRecipeForProduct) {
-          existingRecipeForProduct.components.push({
-            rawProductId: matchedRaw.id,
-            quantityPerUnit: quantity
-          });
+          // Check if this ingredient already exists in the recipe
+          const existingComponent = existingRecipeForProduct.components.find(
+            c => c.rawProductId === matchedRaw!.id
+          );
+          if (!existingComponent) {
+            existingRecipeForProduct.components.push({
+              rawProductId: matchedRaw.id,
+              quantityPerUnit: quantity
+            });
+          }
         } else {
           const recipe: Recipe = {
             id: `rcp-${matchedProduct.id}`,
@@ -239,6 +303,17 @@ export function parseRecipeExcelFile(
         }
       }
     }
+    
+    // Store pending ingredients info in unmatched menu items for later resolution
+    unmatchedItems.forEach(item => {
+      if (item.type === 'menu') {
+        const pendingKey = item.originalName.toLowerCase();
+        const pendingIngredients = pendingIngredientsForUnmatchedMenu.get(pendingKey);
+        if (pendingIngredients && pendingIngredients.length > 0) {
+          (item as any).pendingIngredients = pendingIngredients;
+        }
+      }
+    });
 
     const recipesWithConversions: Recipe[] = [];
     for (const recipe of recipes) {

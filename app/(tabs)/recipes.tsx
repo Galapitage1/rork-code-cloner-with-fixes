@@ -9,7 +9,7 @@ import { Plus, Save, X, Upload, AlertCircle } from 'lucide-react-native';
 import { RecipeComponent, Recipe } from '@/types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { parseRecipeExcelFile, UnmatchedItem } from '@/utils/recipeExcelParser';
+import { parseRecipeExcelFile, UnmatchedItem, PendingIngredient } from '@/utils/recipeExcelParser';
 import { VoiceSearchInput } from '@/components/VoiceSearchInput';
 import { formatCurrency } from '@/utils/currencyHelper';
 
@@ -38,6 +38,8 @@ export default function RecipesScreen() {
   const [manualSearchQuery, setManualSearchQuery] = useState<string>('');
   const [pendingRecipes, setPendingRecipes] = useState<Recipe[]>([]);
   const [resolvedIngredients, setResolvedIngredients] = useState<Map<string, { productId: string; quantity: number; forProductId: string }>>(new Map());
+  const [resolvedMenuProducts, setResolvedMenuProducts] = useState<Map<string, { menuProductId: string; pendingIngredients: PendingIngredient[] }>>(new Map());
+  const [parsedBase64Data, setParsedBase64Data] = useState<string>('');
 
   const calculateProductCost = useCallback((menuProductId: string): number | null => {
     const recipe = recipes.find(r => r.menuProductId === menuProductId);
@@ -207,15 +209,22 @@ export default function RecipesScreen() {
         return;
       }
 
-      // Store pending recipes
+      // Store pending recipes and base64 data for re-parsing after menu resolution
       setPendingRecipes(parsed.recipes);
+      setParsedBase64Data(base64Data);
+      
+      // Sort unmatched items: menu products first, then ingredients
+      const sortedUnmatched = [
+        ...parsed.unmatchedItems.filter(u => u.type === 'menu'),
+        ...parsed.unmatchedItems.filter(u => u.type === 'ingredient'),
+      ];
       
       // Check if there are unmatched items that need resolution
-      const ingredientUnmatched = parsed.unmatchedItems.filter(u => u.type === 'ingredient');
-      if (ingredientUnmatched.length > 0) {
-        setUnmatchedItems(ingredientUnmatched);
+      if (sortedUnmatched.length > 0) {
+        setUnmatchedItems(sortedUnmatched);
         setCurrentUnmatchedIndex(0);
         setResolvedIngredients(new Map());
+        setResolvedMenuProducts(new Map());
         setShowMatchingModal(true);
         setIsImporting(false);
         return;
@@ -242,18 +251,39 @@ export default function RecipesScreen() {
   const handleMatchSelection = async (selectedProductId: string | null) => {
     const currentItem = unmatchedItems[currentUnmatchedIndex];
     
-    if (selectedProductId && currentItem.forProductId && currentItem.quantity) {
-      // Store the resolved ingredient
-      const key = `${currentItem.forProductId}-${currentItem.originalName}-${currentItem.originalUnit}`;
-      setResolvedIngredients(prev => {
-        const newMap = new Map(prev);
-        newMap.set(key, {
-          productId: selectedProductId,
-          quantity: currentItem.quantity!,
-          forProductId: currentItem.forProductId!,
+    if (currentItem.type === 'menu') {
+      // Handle menu product matching
+      if (selectedProductId) {
+        const key = currentItem.originalName.toLowerCase();
+        setResolvedMenuProducts(prev => {
+          const newMap = new Map(prev);
+          newMap.set(key, {
+            menuProductId: selectedProductId,
+            pendingIngredients: currentItem.pendingIngredients || [],
+          });
+          return newMap;
         });
-        return newMap;
-      });
+        console.log(`[Recipes] Menu product "${currentItem.originalName}" matched to product ID: ${selectedProductId}`);
+      } else {
+        console.log(`[Recipes] Menu product "${currentItem.originalName}" skipped`);
+      }
+    } else if (currentItem.type === 'ingredient') {
+      // Handle ingredient matching
+      if (selectedProductId && currentItem.forProductId && currentItem.quantity) {
+        const key = `${currentItem.forProductId}-${currentItem.originalName}-${currentItem.originalUnit}`;
+        setResolvedIngredients(prev => {
+          const newMap = new Map(prev);
+          newMap.set(key, {
+            productId: selectedProductId,
+            quantity: currentItem.quantity!,
+            forProductId: currentItem.forProductId!,
+          });
+          return newMap;
+        });
+        console.log(`[Recipes] Ingredient "${currentItem.originalName}" matched to product ID: ${selectedProductId}`);
+      } else {
+        console.log(`[Recipes] Ingredient "${currentItem.originalName}" skipped`);
+      }
     }
     
     // Move to next unmatched item or finish
@@ -275,16 +305,66 @@ export default function RecipesScreen() {
       // Apply resolved ingredients to recipes
       const finalRecipes = [...pendingRecipes];
       
+      // First, process resolved menu products and their pending ingredients
+      resolvedMenuProducts.forEach((resolved, _key) => {
+        const menuProductId = resolved.menuProductId;
+        const matchedMenuProduct = products.find(p => p.id === menuProductId);
+        
+        if (!matchedMenuProduct) {
+          console.log(`[Recipes] Could not find menu product with ID: ${menuProductId}`);
+          return;
+        }
+        
+        // Process pending ingredients for this menu product
+        resolved.pendingIngredients.forEach(pending => {
+          // Try to match the ingredient
+          const matchedRaw = rawItems.find(p => 
+            p.name.toLowerCase() === pending.ingredientName.toLowerCase()
+          ) || rawItems.find(p => 
+            p.name.toLowerCase().includes(pending.ingredientName.toLowerCase()) ||
+            pending.ingredientName.toLowerCase().includes(p.name.toLowerCase())
+          );
+          
+          if (matchedRaw) {
+            const existingRecipe = finalRecipes.find(r => r.menuProductId === menuProductId);
+            if (existingRecipe) {
+              const existingComponent = existingRecipe.components.find(c => c.rawProductId === matchedRaw.id);
+              if (!existingComponent) {
+                existingRecipe.components.push({
+                  rawProductId: matchedRaw.id,
+                  quantityPerUnit: pending.quantity,
+                });
+              }
+            } else {
+              finalRecipes.push({
+                id: `rcp-${menuProductId}`,
+                menuProductId: menuProductId,
+                components: [{
+                  rawProductId: matchedRaw.id,
+                  quantityPerUnit: pending.quantity,
+                }],
+                updatedAt: Date.now(),
+              });
+            }
+            console.log(`[Recipes] Added ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
+          } else {
+            console.log(`[Recipes] Could not match ingredient "${pending.ingredientName}" for menu product "${matchedMenuProduct.name}"`);
+          }
+        });
+      });
+      
+      // Then, process resolved ingredients (for already matched menu products)
       resolvedIngredients.forEach((resolved, _key) => {
         const existingRecipe = finalRecipes.find(r => r.menuProductId === resolved.forProductId);
         if (existingRecipe) {
-          // Add component to existing recipe
-          existingRecipe.components.push({
-            rawProductId: resolved.productId,
-            quantityPerUnit: resolved.quantity,
-          });
+          const existingComponent = existingRecipe.components.find(c => c.rawProductId === resolved.productId);
+          if (!existingComponent) {
+            existingRecipe.components.push({
+              rawProductId: resolved.productId,
+              quantityPerUnit: resolved.quantity,
+            });
+          }
         } else {
-          // Create new recipe
           finalRecipes.push({
             id: `rcp-${resolved.forProductId}`,
             menuProductId: resolved.forProductId,
@@ -303,10 +383,14 @@ export default function RecipesScreen() {
         successCount++;
       }
       
-      const skippedCount = unmatchedItems.length - resolvedIngredients.size;
+      const menuSkipped = unmatchedItems.filter(u => u.type === 'menu').length - resolvedMenuProducts.size;
+      const ingredientSkipped = unmatchedItems.filter(u => u.type === 'ingredient').length - resolvedIngredients.size;
       const warnings: string[] = [];
-      if (skippedCount > 0) {
-        warnings.push(`${skippedCount} ingredient(s) were skipped`);
+      if (menuSkipped > 0) {
+        warnings.push(`${menuSkipped} menu product(s) were skipped`);
+      }
+      if (ingredientSkipped > 0) {
+        warnings.push(`${ingredientSkipped} ingredient(s) were skipped`);
       }
       
       setImportResults({ success: successCount, warnings, errors: [] });
@@ -317,7 +401,9 @@ export default function RecipesScreen() {
       setUnmatchedItems([]);
       setCurrentUnmatchedIndex(0);
       setResolvedIngredients(new Map());
+      setResolvedMenuProducts(new Map());
       setPendingRecipes([]);
+      setParsedBase64Data('');
     } catch (error) {
       console.error('Finalize import error:', error);
       Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to finalize import');
@@ -582,19 +668,31 @@ export default function RecipesScreen() {
                 {currentUnmatched && !showManualSelection && (
                   <ScrollView style={{ maxHeight: 450 }} contentContainerStyle={{ padding: 16 }}>
                     <View style={styles.unmatchedInfo}>
-                      <Text style={styles.unmatchedLabel}>Could not find:</Text>
-                      <Text style={styles.unmatchedName}>"{currentUnmatched.originalName}" ({currentUnmatched.originalUnit})</Text>
-                      {currentUnmatched.forProduct && (
+                      <Text style={styles.unmatchedLabel}>
+                        {currentUnmatched.type === 'menu' ? 'Menu Product not found:' : 'Ingredient not found:'}
+                      </Text>
+                      <Text style={styles.unmatchedName}>
+                        "{currentUnmatched.originalName}"
+                        {currentUnmatched.originalUnit ? ` (${currentUnmatched.originalUnit})` : ''}
+                      </Text>
+                      {currentUnmatched.type === 'menu' && currentUnmatched.pendingIngredients && currentUnmatched.pendingIngredients.length > 0 && (
+                        <Text style={styles.unmatchedFor}>
+                          Has {currentUnmatched.pendingIngredients.length} ingredient(s) to import
+                        </Text>
+                      )}
+                      {currentUnmatched.type === 'ingredient' && currentUnmatched.forProduct && (
                         <Text style={styles.unmatchedFor}>For recipe: {currentUnmatched.forProduct}</Text>
                       )}
-                      {currentUnmatched.quantity && (
+                      {currentUnmatched.type === 'ingredient' && currentUnmatched.quantity && (
                         <Text style={styles.unmatchedQty}>Quantity: {currentUnmatched.quantity} {currentUnmatched.originalUnit}</Text>
                       )}
                     </View>
                     
                     {currentUnmatched.possibleMatches.length > 0 ? (
                       <>
-                        <Text style={styles.matchSectionTitle}>Suggested Matches:</Text>
+                        <Text style={styles.matchSectionTitle}>
+                          {currentUnmatched.type === 'menu' ? 'Suggested Menu Products:' : 'Suggested Ingredients:'}
+                        </Text>
                         {currentUnmatched.possibleMatches.map((match, idx) => (
                           <TouchableOpacity
                             key={match.id}
@@ -604,13 +702,16 @@ export default function RecipesScreen() {
                             <View style={styles.matchOptionContent}>
                               <Text style={styles.matchOptionName}>{match.name}</Text>
                               <Text style={styles.matchOptionUnit}>Unit: {match.unit}</Text>
+                              {match.category && <Text style={styles.matchOptionCategory}>{match.category}</Text>}
                             </View>
                             {idx === 0 && <Text style={styles.bestMatchBadge}>Best Match</Text>}
                           </TouchableOpacity>
                         ))}
                       </>
                     ) : (
-                      <Text style={styles.noMatchesText}>No similar products found</Text>
+                      <Text style={styles.noMatchesText}>
+                        No similar {currentUnmatched.type === 'menu' ? 'menu products' : 'ingredients'} found
+                      </Text>
                     )}
                     
                     <View style={styles.matchActions}>
@@ -758,6 +859,7 @@ const styles = StyleSheet.create({
   manualOptionName: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text, flex: 1 },
   manualOptionUnit: { fontSize: 12, color: Colors.light.muted },
   noResultsText: { color: Colors.light.muted, textAlign: 'center' as const, marginTop: 20 },
+  matchOptionCategory: { fontSize: 11, color: Colors.light.accent, marginTop: 2 },
   typeHeader: { backgroundColor: Colors.light.tint, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 8, marginTop: 16, borderRadius: 8 },
   typeTitle: { fontSize: 16, fontWeight: '800' as const, color: '#fff', letterSpacing: 1 },
   categoryHeader: { backgroundColor: Colors.light.accent + '20', paddingVertical: 8, paddingHorizontal: 12, marginBottom: 8, marginTop: 8, borderRadius: 6 },
