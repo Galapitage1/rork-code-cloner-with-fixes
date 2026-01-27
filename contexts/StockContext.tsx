@@ -81,7 +81,6 @@ type StockContextType = {
   getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
   restoreRequests: (requestIds: string[]) => Promise<number>;
   // Live Inventory Snapshot functions
-  liveInventorySnapshots: LiveInventorySnapshot[];
   createLiveInventorySnapshot: (triggeredBy: LiveInventorySnapshot['triggeredBy'], triggerDetails?: string) => Promise<LiveInventorySnapshot>;
   getSnapshotForDate: (date: string) => LiveInventorySnapshot | undefined;
   getLatestSnapshot: () => LiveInventorySnapshot | undefined;
@@ -4046,6 +4045,62 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     };
   }, [currentUser, isSyncPaused, syncAll, serverTimestamps]);
 
+  const createLiveInventorySnapshot = useCallback(async (triggeredBy: LiveInventorySnapshot['triggeredBy'], triggerDetails?: string): Promise<LiveInventorySnapshot> => {
+    const now = Date.now();
+    const dateStr = new Date(now).toISOString().split('T')[0];
+    
+    const snapshotItems: LiveInventorySnapshotItem[] = inventoryStocks.map(stock => ({
+      productId: stock.productId,
+      productionWhole: stock.productionWhole || 0,
+      productionSlices: stock.productionSlices || 0,
+      prodsReqWhole: stock.prodsReqWhole || 0,
+      prodsReqSlices: stock.prodsReqSlices || 0,
+      outletStocks: (stock.outletStocks || []).map(os => ({
+        outletName: os.outletName,
+        whole: os.whole || 0,
+        slices: os.slices || 0,
+        openingWhole: 0,
+        openingSlices: 0,
+        receivedWhole: 0,
+        receivedSlices: 0,
+        soldWhole: 0,
+        soldSlices: 0,
+        wastageWhole: 0,
+        wastageSlices: 0,
+      })),
+    }));
+    
+    const snapshot: LiveInventorySnapshot = {
+      id: `snapshot_${now}`,
+      date: dateStr,
+      createdAt: now,
+      updatedAt: now,
+      triggeredBy,
+      triggerDetails,
+      items: snapshotItems,
+    };
+    
+    const updated = [...liveInventorySnapshots.filter(s => s.date !== dateStr), snapshot];
+    const sortedSnapshots = updated.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 90);
+    
+    setLiveInventorySnapshots(sortedSnapshots);
+    await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(sortedSnapshots));
+    
+    console.log('StockContext: Created live inventory snapshot for', dateStr, 'triggered by', triggeredBy);
+    return snapshot;
+  }, [inventoryStocks, liveInventorySnapshots]);
+
+  const getSnapshotForDate = useCallback((date: string): LiveInventorySnapshot | undefined => {
+    return liveInventorySnapshots.find(s => s.date === date);
+  }, [liveInventorySnapshots]);
+
+  const getLatestSnapshot = useCallback((): LiveInventorySnapshot | undefined => {
+    if (liveInventorySnapshots.length === 0) return undefined;
+    return liveInventorySnapshots.reduce((latest, current) => 
+      current.date > latest.date ? current : latest
+    );
+  }, [liveInventorySnapshots]);
+
   const value = useMemo(() => ({
     products,
     stockChecks,
@@ -4055,6 +4110,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     inventoryStocks,
     salesDeductions,
     reconcileHistory,
+    liveInventorySnapshots,
     isLoading,
     currentStockCounts,
     showProductList,
@@ -4105,6 +4161,9 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     toggleSyncPause,
     getDeletedRequests,
     restoreRequests,
+    createLiveInventorySnapshot,
+    getSnapshotForDate,
+    getLatestSnapshot,
   }), [
     products,
     stockChecks,
@@ -4114,6 +4173,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     inventoryStocks,
     salesDeductions,
     reconcileHistory,
+    liveInventorySnapshots,
     isLoading,
     currentStockCounts,
     showProductList,
@@ -4164,6 +4224,9 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     syncAll,
     getDeletedRequests,
     restoreRequests,
+    createLiveInventorySnapshot,
+    getSnapshotForDate,
+    getLatestSnapshot,
   ]);
 
   return <StockContext.Provider value={value}>{children}</StockContext.Provider>;
