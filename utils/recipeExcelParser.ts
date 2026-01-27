@@ -214,7 +214,7 @@ export function parseRecipeExcelFile(
         }
 
         // Menu product matched - now process the ingredient
-        const existingRecipe = existingRecipes.find(r => r.menuProductId === matchedProduct!.id);
+        const existingRecipeInSystem = existingRecipes.find(r => r.menuProductId === matchedProduct!.id);
         
         // Try to match raw product
         let matchedRaw = rawProducts.find(p => 
@@ -271,10 +271,17 @@ export function parseRecipeExcelFile(
           continue;
         }
 
-        // Skip if recipe already exists for this product
-        if (existingRecipe) {
-          console.log(`[RecipeParser] Recipe already exists for ${matchedProduct.name}, skipping`);
-          continue;
+        // Check if ingredient already exists in the system recipe
+        if (existingRecipeInSystem) {
+          const ingredientAlreadyInSystemRecipe = existingRecipeInSystem.components.find(
+            c => c.rawProductId === matchedRaw!.id
+          );
+          if (ingredientAlreadyInSystemRecipe) {
+            console.log(`[RecipeParser] Ingredient ${matchedRaw.name} already in recipe for ${matchedProduct.name}, skipping`);
+            continue;
+          }
+          // Ingredient not in system recipe - will be added below
+          console.log(`[RecipeParser] Adding new ingredient ${matchedRaw.name} to existing recipe for ${matchedProduct.name}`);
         }
 
         const existingRecipeForProduct = recipes.find(r => r.menuProductId === matchedProduct!.id);

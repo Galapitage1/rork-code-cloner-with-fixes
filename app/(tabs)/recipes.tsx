@@ -359,7 +359,56 @@ export default function RecipesScreen() {
       setIsImporting(true);
       
       // Apply resolved ingredients to recipes
+      // Start with pending recipes and also include existing recipes that need updates
       const finalRecipes = [...pendingRecipes];
+      const existingRecipesToUpdate = new Map<string, Recipe>();
+      
+      // Load existing recipes that may need new ingredients added
+      recipes.forEach(r => {
+        existingRecipesToUpdate.set(r.menuProductId, { ...r, components: [...r.components] });
+      });
+      
+      // Helper function to add ingredient to a recipe (handles both new and existing)
+      const addIngredientToRecipe = (menuProductId: string, rawProductId: string, quantity: number) => {
+        // First check if it's in finalRecipes (new recipes from this import)
+        let existingRecipe = finalRecipes.find(r => r.menuProductId === menuProductId);
+        
+        if (existingRecipe) {
+          const existingComponent = existingRecipe.components.find(c => c.rawProductId === rawProductId);
+          if (!existingComponent) {
+            existingRecipe.components.push({
+              rawProductId: rawProductId,
+              quantityPerUnit: quantity,
+            });
+          }
+          return;
+        }
+        
+        // Check if it's an existing recipe in the system
+        const systemRecipe = existingRecipesToUpdate.get(menuProductId);
+        if (systemRecipe) {
+          const existingComponent = systemRecipe.components.find(c => c.rawProductId === rawProductId);
+          if (!existingComponent) {
+            systemRecipe.components.push({
+              rawProductId: rawProductId,
+              quantityPerUnit: quantity,
+            });
+            systemRecipe.updatedAt = Date.now();
+          }
+          return;
+        }
+        
+        // Create new recipe
+        finalRecipes.push({
+          id: `rcp-${menuProductId}`,
+          menuProductId: menuProductId,
+          components: [{
+            rawProductId: rawProductId,
+            quantityPerUnit: quantity,
+          }],
+          updatedAt: Date.now(),
+        });
+      };
       
       // First, process resolved menu products and their pending ingredients
       resolvedMenuProducts.forEach((resolved, _key) => {
@@ -373,7 +422,18 @@ export default function RecipesScreen() {
         
         // Process pending ingredients for this menu product
         resolved.pendingIngredients.forEach(pending => {
-          // Try to match the ingredient
+          // First check if this ingredient was manually resolved
+          const resolvedKey = `${menuProductId}-${pending.ingredientName}-${pending.unit}`;
+          const manuallyResolved = resolvedIngredients.get(resolvedKey);
+          
+          if (manuallyResolved) {
+            // Use the manually resolved product
+            addIngredientToRecipe(menuProductId, manuallyResolved.productId, pending.quantity);
+            console.log(`[Recipes] Added manually resolved ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
+            return;
+          }
+          
+          // Try to auto-match the ingredient
           const matchedRaw = rawItems.find(p => 
             p.name.toLowerCase() === pending.ingredientName.toLowerCase()
           ) || rawItems.find(p => 
@@ -382,27 +442,8 @@ export default function RecipesScreen() {
           );
           
           if (matchedRaw) {
-            const existingRecipe = finalRecipes.find(r => r.menuProductId === menuProductId);
-            if (existingRecipe) {
-              const existingComponent = existingRecipe.components.find(c => c.rawProductId === matchedRaw.id);
-              if (!existingComponent) {
-                existingRecipe.components.push({
-                  rawProductId: matchedRaw.id,
-                  quantityPerUnit: pending.quantity,
-                });
-              }
-            } else {
-              finalRecipes.push({
-                id: `rcp-${menuProductId}`,
-                menuProductId: menuProductId,
-                components: [{
-                  rawProductId: matchedRaw.id,
-                  quantityPerUnit: pending.quantity,
-                }],
-                updatedAt: Date.now(),
-              });
-            }
-            console.log(`[Recipes] Added ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
+            addIngredientToRecipe(menuProductId, matchedRaw.id, pending.quantity);
+            console.log(`[Recipes] Added auto-matched ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
           } else {
             console.log(`[Recipes] Could not match ingredient "${pending.ingredientName}" for menu product "${matchedMenuProduct.name}"`);
           }
@@ -411,30 +452,23 @@ export default function RecipesScreen() {
       
       // Then, process resolved ingredients (for already matched menu products)
       resolvedIngredients.forEach((resolved, _key) => {
-        const existingRecipe = finalRecipes.find(r => r.menuProductId === resolved.forProductId);
-        if (existingRecipe) {
-          const existingComponent = existingRecipe.components.find(c => c.rawProductId === resolved.productId);
-          if (!existingComponent) {
-            existingRecipe.components.push({
-              rawProductId: resolved.productId,
-              quantityPerUnit: resolved.quantity,
-            });
+        addIngredientToRecipe(resolved.forProductId, resolved.productId, resolved.quantity);
+      });
+      
+      // Combine new recipes with updated existing recipes
+      const allRecipesToSave: Recipe[] = [...finalRecipes];
+      existingRecipesToUpdate.forEach((recipe, menuProductId) => {
+        // Only add if not already in finalRecipes and has been modified
+        if (!finalRecipes.find(r => r.menuProductId === menuProductId)) {
+          const originalRecipe = recipes.find(r => r.menuProductId === menuProductId);
+          if (originalRecipe && recipe.components.length > originalRecipe.components.length) {
+            allRecipesToSave.push(recipe);
           }
-        } else {
-          finalRecipes.push({
-            id: `rcp-${resolved.forProductId}`,
-            menuProductId: resolved.forProductId,
-            components: [{
-              rawProductId: resolved.productId,
-              quantityPerUnit: resolved.quantity,
-            }],
-            updatedAt: Date.now(),
-          });
         }
       });
       
       let successCount = 0;
-      for (const recipe of finalRecipes) {
+      for (const recipe of allRecipesToSave) {
         await addOrUpdateRecipe(recipe);
         successCount++;
       }
