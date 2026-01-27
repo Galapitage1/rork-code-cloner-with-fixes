@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
-import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory } from '@/types';
+import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory, LiveInventorySnapshot, LiveInventorySnapshotItem } from '@/types';
 import { syncData } from '@/utils/syncData';
 import { addToPendingQueue, processPendingQueue, hasPendingOperations, PendingOperation } from '@/utils/pendingSync';
 import { Alert } from 'react-native';
@@ -17,6 +17,7 @@ const STORAGE_KEYS = {
   VIEW_MODE: '@stock_app_view_mode',
   RECONCILE_HISTORY: '@stock_app_reconcile_history',
   SYNC_PAUSED: '@stock_app_sync_paused',
+  LIVE_INVENTORY_SNAPSHOTS: '@stock_app_live_inventory_snapshots',
 };
 
 type StockContextType = {
@@ -28,6 +29,7 @@ type StockContextType = {
   inventoryStocks: InventoryStock[];
   salesDeductions: SalesDeduction[];
   reconcileHistory: SalesReconciliationHistory[];
+  liveInventorySnapshots: LiveInventorySnapshot[];
   isLoading: boolean;
   currentStockCounts: Map<string, number>;
   showProductList: boolean;
@@ -78,6 +80,11 @@ type StockContextType = {
   syncAll: (silent?: boolean) => Promise<void>;
   getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
   restoreRequests: (requestIds: string[]) => Promise<number>;
+  // Live Inventory Snapshot functions
+  liveInventorySnapshots: LiveInventorySnapshot[];
+  createLiveInventorySnapshot: (triggeredBy: LiveInventorySnapshot['triggeredBy'], triggerDetails?: string) => Promise<LiveInventorySnapshot>;
+  getSnapshotForDate: (date: string) => LiveInventorySnapshot | undefined;
+  getLatestSnapshot: () => LiveInventorySnapshot | undefined;
 };
 
 const StockContext = createContext<StockContextType | null>(null);
@@ -99,6 +106,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   const [inventoryStocks, setInventoryStocks] = useState<InventoryStock[]>([]);
   const [salesDeductions, setSalesDeductions] = useState<SalesDeduction[]>([]);
   const [reconcileHistory, setReconcileHistory] = useState<SalesReconciliationHistory[]>([]);
+  const [liveInventorySnapshots, setLiveInventorySnapshots] = useState<LiveInventorySnapshot[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [currentStockCounts, setCurrentStockCounts] = useState<Map<string, number>>(new Map());
   const [showProductList, setShowProductList] = useState<boolean>(true);

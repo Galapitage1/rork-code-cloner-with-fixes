@@ -409,6 +409,46 @@ export interface ProductTrackerSnapshot {
   deleted?: boolean;
 }
 
+// Live Inventory Snapshot - captures the state of inventory at a point in time
+// This is used to preserve inventory data even if source data (stock checks, transfers) is deleted
+export interface LiveInventorySnapshotItem {
+  productId: string;
+  // Production/Kitchen stock
+  productionWhole: number;
+  productionSlices: number;
+  // Production request column
+  prodsReqWhole: number;
+  prodsReqSlices: number;
+  // Per-outlet stocks
+  outletStocks: {
+    outletName: string;
+    whole: number;
+    slices: number;
+    // Tracked values for live inventory display
+    openingWhole: number;
+    openingSlices: number;
+    receivedWhole: number;
+    receivedSlices: number;
+    soldWhole: number;
+    soldSlices: number;
+    wastageWhole: number;
+    wastageSlices: number;
+  }[];
+}
+
+export interface LiveInventorySnapshot {
+  id: string;
+  date: string; // YYYY-MM-DD format
+  items: LiveInventorySnapshotItem[];
+  // Metadata about what triggered this snapshot
+  triggeredBy: 'transfer_approved' | 'stock_check' | 'sales_reconciliation' | 'manual' | 'system';
+  triggerDetails?: string; // e.g., "Transfer #123 approved" or "Stock check for Outlet A"
+  createdAt: number;
+  updatedAt: number;
+  deviceId?: string;
+  deleted?: boolean;
+}
+
 export interface SMSProviderSettings {
   id: string;
   provider: 'dialog_esms';
