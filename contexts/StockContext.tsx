@@ -3342,7 +3342,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       console.log('StockContext syncAll: Starting', silent ? 'background' : 'manual', 'sync...');
       console.log('StockContext syncAll: Reading all data from AsyncStorage for sync...');
-      const [productsData, stockChecksData, requestsData, outletsData, conversionsData, inventoryData, salesDeductionsData, reconcileHistoryData] = await Promise.all([
+      const [productsData, stockChecksData, requestsData, outletsData, conversionsData, inventoryData, salesDeductionsData, reconcileHistoryData, snapshotsData] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
         AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
         AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
@@ -3351,6 +3351,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS),
         AsyncStorage.getItem(STORAGE_KEYS.SALES_DEDUCTIONS),
         AsyncStorage.getItem(STORAGE_KEYS.RECONCILE_HISTORY),
+        AsyncStorage.getItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS),
       ]);
       
       const productsToSync = productsData ? JSON.parse(productsData) : [];
@@ -3361,6 +3362,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const inventoryToSync = inventoryData ? JSON.parse(inventoryData) : [];
       const salesDeductionsToSync = salesDeductionsData ? JSON.parse(salesDeductionsData) : [];
       const reconcileHistoryToSync = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
+      let snapshotsToSync = snapshotsData ? JSON.parse(snapshotsData) : [];
       
       // CLEANUP: Remove stock checks older than 40 days during sync (server keeps everything)
       // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
@@ -3449,8 +3451,27 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         }
       }
       
-      console.log('StockContext syncAll: Syncing all data including product conversions and reconcile history...');
-      console.log('StockContext syncAll: Data to sync - products:', productsToSync.length, 'stockChecks:', stockChecksToSync.length, 'requests:', requestsToSync.length, 'outlets:', outletsToSync.length, 'conversions:', conversionsToSync.length, 'inventory:', inventoryToSync.length, 'salesDeductions:', salesDeductionsToSync.length, 'reconcileHistory:', reconcileHistoryToSync.length);
+      // CLEANUP: Keep only last 90 days of snapshots
+      if (snapshotsToSync.length > 0 && silent && !forceFullSync) {
+        const SNAPSHOT_RETENTION_DAYS = 90;
+        const retentionDate = new Date();
+        retentionDate.setDate(retentionDate.getDate() - SNAPSHOT_RETENTION_DAYS);
+        const retentionDateStr = retentionDate.toISOString().split('T')[0];
+        
+        const originalCount = snapshotsToSync.length;
+        snapshotsToSync = snapshotsToSync.filter((snapshot: any) => {
+          if (snapshot.deleted) return false;
+          if (!snapshot.date) return true;
+          return snapshot.date >= retentionDateStr;
+        });
+        
+        if (originalCount > snapshotsToSync.length) {
+          console.log('StockContext syncAll: Cleaned up', originalCount - snapshotsToSync.length, 'old snapshots (older than 90 days)');
+        }
+      }
+      
+      console.log('StockContext syncAll: Syncing all data including product conversions, reconcile history, and live inventory snapshots...');
+      console.log('StockContext syncAll: Data to sync - products:', productsToSync.length, 'stockChecks:', stockChecksToSync.length, 'requests:', requestsToSync.length, 'outlets:', outletsToSync.length, 'conversions:', conversionsToSync.length, 'inventory:', inventoryToSync.length, 'salesDeductions:', salesDeductionsToSync.length, 'reconcileHistory:', reconcileHistoryToSync.length, 'snapshots:', snapshotsToSync.length);
       console.log('StockContext syncAll: This is a', silent ? 'BACKGROUND' : 'MANUAL', 'sync - will', silent ? 'merge with server data preserving local data' : 'fetch from server and merge');
       
       console.log('StockContext syncAll: ===== SYNCING REQUESTS =====');
@@ -3490,11 +3511,18 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
         syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted }),
         syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
+        syncData('liveInventorySnapshots', snapshotsToSync, currentUser.id, { fetchOnly, includeDeleted }),
       ]);
       
       const syncedProducts = syncResults[0].status === 'fulfilled' ? syncResults[0].value : productsToSync;
       const syncedStockChecks = syncResults[1].status === 'fulfilled' ? syncResults[1].value : stockChecksToSync;
       let syncedRequests = syncResults[2].status === 'fulfilled' ? syncResults[2].value : requestsToSync;
+      const syncedOutlets = syncResults[3].status === 'fulfilled' ? syncResults[3].value : outletsToSync;
+      const syncedConversions = syncResults[4].status === 'fulfilled' ? syncResults[4].value : conversionsToSync;
+      const syncedInventory = syncResults[5].status === 'fulfilled' ? syncResults[5].value : inventoryToSync;
+      const syncedSalesDeductions = syncResults[6].status === 'fulfilled' ? syncResults[6].value : salesDeductionsToSync;
+      const syncedReconcileHistory = syncResults[7].status === 'fulfilled' ? syncResults[7].value : reconcileHistoryToSync;
+      const syncedSnapshots = syncResults[8].status === 'fulfilled' ? syncResults[8].value : snapshotsToSync;
       
       console.log('StockContext syncAll: ===== REQUESTS SYNC RESULT =====');
       if (syncResults[2].status === 'fulfilled') {
@@ -3549,15 +3577,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.log('StockContext syncAll: Post-sync cleanup - removed', beforeCount - (syncedRequests as any[]).length, 'old requests');
         }
       }
-      const syncedOutlets = syncResults[3].status === 'fulfilled' ? syncResults[3].value : outletsToSync;
-      const syncedConversions = syncResults[4].status === 'fulfilled' ? syncResults[4].value : conversionsToSync;
-      const syncedInventory = syncResults[5].status === 'fulfilled' ? syncResults[5].value : inventoryToSync;
-      const syncedSalesDeductions = syncResults[6].status === 'fulfilled' ? syncResults[6].value : salesDeductionsToSync;
-      const syncedReconcileHistory = syncResults[7].status === 'fulfilled' ? syncResults[7].value : reconcileHistoryToSync;
       
       const failedSyncs = syncResults.filter((r, i) => {
         if (r.status === 'rejected') {
-          const labels = ['products', 'stockChecks', 'requests', 'outlets', 'conversions', 'inventory', 'salesDeductions', 'reconcileHistory'];
+          const labels = ['products', 'stockChecks', 'requests', 'outlets', 'conversions', 'inventory', 'salesDeductions', 'reconcileHistory', 'snapshots'];
           console.error('StockContext syncAll: Failed to sync', labels[i], ':', r.reason);
           return true;
         }
@@ -3604,6 +3627,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(syncedConversions));
       await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(syncedInventory));
       await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(syncedSalesDeductions));
+      await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(syncedSnapshots));
       
       try {
         await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(syncedReconcileHistory));
@@ -3631,6 +3655,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext syncAll: Current outlets count:', outlets.length);
       console.log('StockContext syncAll: Current products count:', products.length);
       console.log('StockContext syncAll: Current reconcile history count:', reconcileHistory.length);
+      console.log('StockContext syncAll: Current live inventory snapshots count:', liveInventorySnapshots.length);
       
       // CRITICAL: Specialized merge for reconciliation history that compares by ACTUAL reconciliation timestamp
       // NOT by updatedAt (sync time) - this ensures the most recent reconciliation wins, not the most recent sync
@@ -3955,6 +3980,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const activeSalesDeductions = (finalSalesDeductions as any[]).filter(d => !d?.deleted);
       const activeReconcileHistory = (finalReconcileHistory as any[]).filter(h => !h?.deleted);
       
+      // Merge snapshots using timestamp-based logic
+      const finalSnapshots = mergeByTimestamp(liveInventorySnapshots, syncedSnapshots, 'snapshots');
+      const activeSnapshots = (finalSnapshots as any[]).filter(s => !s?.deleted);
+      
       console.log('StockContext syncAll: Active (non-deleted) counts:');
       console.log('  - products:', activeProducts.length);
       console.log('  - stockChecks:', activeStockChecks.length);
@@ -3969,6 +3998,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.error('  This will cause Live Inventory sold column to be EMPTY!');
       }
       console.log('  - reconcileHistory:', activeReconcileHistory.length);
+      console.log('  - liveInventorySnapshots:', activeSnapshots.length, '← SNAPSHOT DATA FOR LIVE INVENTORY');
       
       let newStockMap = new Map<string, number>();
       if (activeStockChecks.length > 0) {
@@ -3994,6 +4024,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         inventory: JSON.stringify(inventoryStocks.map(i => ({ id: i.productId, updatedAt: i.updatedAt }))) !== JSON.stringify(activeInventory.map((i: any) => ({ id: i.productId, updatedAt: i.updatedAt }))),
         salesDeductions: JSON.stringify(salesDeductions.map(d => ({ id: d.id, updatedAt: d.updatedAt }))) !== JSON.stringify(activeSalesDeductions.map((d: any) => ({ id: d.id, updatedAt: d.updatedAt }))),
         reconcileHistory: JSON.stringify(reconcileHistory.map(h => ({ id: h.id, updatedAt: h.updatedAt }))) !== JSON.stringify(activeReconcileHistory.map((h: any) => ({ id: h.id, updatedAt: h.updatedAt }))),
+        snapshots: JSON.stringify(liveInventorySnapshots.map(s => ({ id: s.id, updatedAt: s.updatedAt }))) !== JSON.stringify(activeSnapshots.map((s: any) => ({ id: s.id, updatedAt: s.updatedAt }))),
       };
       
       const changedItems = Object.entries(hasChanges).filter(([_, changed]) => changed).map(([name]) => name);
@@ -4016,13 +4047,15 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         if (hasChanges.conversions || !silent) setProductConversions(activeConversions);
         if (hasChanges.inventory || !silent) setInventoryStocks(activeInventory);
         
-        // CRITICAL FIX: Always update salesDeductions and reconcileHistory for cross-device sync
+        // CRITICAL FIX: Always update salesDeductions, reconcileHistory, and snapshots for cross-device sync
         // Menu products (with/without conversions) need salesDeductions to show sold amounts
         // Raw materials need reconcileHistory.rawConsumption to show sold amounts
+        // Snapshots preserve historical live inventory state even if data is lost
         // Force update even if change detection says no changes to ensure cross-device data appears
-        console.log('StockContext syncAll: FORCE updating salesDeductions and reconcileHistory for cross-device menu/raw product sales');
+        console.log('StockContext syncAll: FORCE updating salesDeductions, reconcileHistory, and snapshots for cross-device data');
         setSalesDeductions(activeSalesDeductions);
         setReconcileHistory(activeReconcileHistory);
+        setLiveInventorySnapshots(activeSnapshots);
         
         // Only update stock counts map if there are changes to stock checks
         if (hasChanges.stockChecks || !silent) {
@@ -4033,12 +4066,13 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.log('StockContext syncAll: ✓ React state updated with changed data');
         console.log('StockContext syncAll: ✓ salesDeductions count in state:', activeSalesDeductions.length, '(for menu products sold)');
         console.log('StockContext syncAll: ✓ reconcileHistory count in state:', activeReconcileHistory.length, '(for raw materials consumed)');
+        console.log('StockContext syncAll: ✓ liveInventorySnapshots count in state:', activeSnapshots.length, '(snapshot history preserved)');
       } else {
         console.log('StockContext syncAll: No changes detected during silent sync - preserving UI state and scroll position');
         setLastSyncTime(Date.now()); // Still update sync time to show sync happened
       }
-      console.log('StockContext syncAll: Complete - synced all 8 data types including product conversions and reconcile history');
-      console.log('StockContext syncAll: Final counts - products:', activeProducts.length, 'stockChecks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'salesDeductions:', activeSalesDeductions.length, 'reconcileHistory:', activeReconcileHistory.length);
+      console.log('StockContext syncAll: Complete - synced all 9 data types including product conversions, reconcile history, and live inventory snapshots');
+      console.log('StockContext syncAll: Final counts - products:', activeProducts.length, 'stockChecks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'salesDeductions:', activeSalesDeductions.length, 'reconcileHistory:', activeReconcileHistory.length, 'snapshots:', activeSnapshots.length);
     } catch (error) {
       console.error('StockContext syncAll: Failed:', error);
       if (!silent) {
@@ -4050,7 +4084,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         setIsSyncing(false);
       }
     }
-  }, [currentUser, products, stockChecks, requests, outlets, productConversions, inventoryStocks, salesDeductions, reconcileHistory]);
+  }, [currentUser, products, stockChecks, requests, outlets, productConversions, inventoryStocks, salesDeductions, reconcileHistory, liveInventorySnapshots]);
 
   useEffect(() => {
     syncAllRef.current = syncAll;
@@ -4073,7 +4107,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         'productConversions',
         'inventoryStocks',
         'salesDeductions',
-        'reconcileHistory'
+        'reconcileHistory',
+        'liveInventorySnapshots'
       ];
       
 
