@@ -117,6 +117,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
 
   const syncAllRef = useRef<(() => Promise<void>) | null>(null);
   const syncInProgressRef = useRef<boolean>(false);
+  const createSnapshotRef = useRef<((triggeredBy: LiveInventorySnapshot['triggeredBy'], triggerDetails?: string) => Promise<LiveInventorySnapshot>) | null>(null);
 
   const toggleSyncPause = useCallback(async () => {
     const newPausedState = !isSyncPaused;
@@ -740,6 +741,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       });
       
       setCurrentStockCounts(stockMap);
+      
+      // Create live inventory snapshot after stock check save
+      if (createSnapshotRef.current) {
+        try {
+          await createSnapshotRef.current('stock_check', `Stock check ${stockCheck.id} saved for ${stockCheck.outlet} on ${stockCheck.date}`);
+          console.log('saveStockCheck: Live inventory snapshot created');
+        } catch (snapshotError) {
+          console.error('saveStockCheck: Failed to create snapshot:', snapshotError);
+        }
+      }
 
       if (!skipInventoryUpdate) {
         console.log('\n=== INVENTORY UPDATE START ===');
@@ -2840,6 +2851,17 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
       
       console.log('deductInventoryFromApproval: Success - moved', requestedWhole, 'whole +', requestedSlices, 'slices from Stores/Kitchen to', request.toOutlet);
+      
+      // Create live inventory snapshot after successful transfer approval
+      if (createSnapshotRef.current) {
+        try {
+          await createSnapshotRef.current('transfer_approved', `Transfer ${request.id} approved: ${requestedWhole} whole + ${requestedSlices} slices to ${request.toOutlet}`);
+          console.log('deductInventoryFromApproval: Live inventory snapshot created');
+        } catch (snapshotError) {
+          console.error('deductInventoryFromApproval: Failed to create snapshot:', snapshotError);
+        }
+      }
+      
       return { success: true };
     } catch (error) {
       console.error('Deduct inventory error:', error);
@@ -3131,6 +3153,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     
     const updated = [...reconcileHistory, historyWithTimestamp];
     await saveReconcileHistory(updated);
+    
+    // Create live inventory snapshot after sales reconciliation
+    if (createSnapshotRef.current) {
+      try {
+        await createSnapshotRef.current('sales_reconciliation', `Reconciliation ${history.id} for ${history.outlet} on ${history.date}`);
+        console.log('[addReconcileHistory] Live inventory snapshot created');
+      } catch (snapshotError) {
+        console.error('[addReconcileHistory] Failed to create snapshot:', snapshotError);
+      }
+    }
     
     // CRITICAL: Trigger IMMEDIATE sync to server so other devices can get this data
     console.log('[addReconcileHistory] Triggering immediate sync to server...');
@@ -4125,6 +4157,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       current.date > latest.date ? current : latest
     );
   }, [liveInventorySnapshots]);
+
+  useEffect(() => {
+    createSnapshotRef.current = createLiveInventorySnapshot;
+  }, [createLiveInventorySnapshot]);
 
   const value = useMemo(() => ({
     products,
