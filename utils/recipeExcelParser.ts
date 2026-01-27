@@ -98,7 +98,7 @@ export function parseRecipeExcelFile(
     
     if (workbook.SheetNames.length === 0) {
       errors.push('Excel file has no sheets');
-      return { recipes: [], errors, warnings };
+      return { recipes: [], errors, warnings, unmatchedItems: [] };
     }
 
     const menuProducts = existingProducts.filter(p => p.type === 'menu');
