@@ -12,6 +12,7 @@ export interface UnmatchedItem {
   type: 'menu' | 'ingredient';
   originalName: string;
   originalUnit: string;
+  menuProductUnit?: string; // For menu items, the unit from Column B
   forProduct?: string; // For ingredients, the menu product name
   forProductId?: string; // For ingredients, the menu product id
   quantity?: number; // For ingredients
@@ -141,15 +142,19 @@ export function parseRecipeExcelFile(
 
         const productName = String(productNameCell.v).trim();
         
-        // Column B: Ingredient name
-        const ingredientNameCell = sheet[`B${row + 1}`];
+        // Column B: Menu product unit (Whole/Slice) - optional
+        const productUnitCell = sheet[`B${row + 1}`];
+        const productUnit = productUnitCell && productUnitCell.v ? String(productUnitCell.v).trim() : '';
+        
+        // Column C: Ingredient name
+        const ingredientNameCell = sheet[`C${row + 1}`];
         if (!ingredientNameCell || !ingredientNameCell.v) {
           continue;
         }
         const ingredientName = String(ingredientNameCell.v).trim();
         
-        // Column C: Quantity and unit mixed together
-        const quantityWithUnitCell = sheet[`C${row + 1}`];
+        // Column D: Quantity and unit mixed together
+        const quantityWithUnitCell = sheet[`D${row + 1}`];
         if (!quantityWithUnitCell || !quantityWithUnitCell.v) {
           continue;
         }
@@ -161,12 +166,20 @@ export function parseRecipeExcelFile(
           continue;
         }
 
-        // Try to match menu product by name only (more flexible matching)
+        // Try to match menu product by name and optionally unit
         let matchedProduct = menuProducts.find(p => 
-          p.name.toLowerCase() === productName.toLowerCase()
+          p.name.toLowerCase() === productName.toLowerCase() &&
+          (!productUnit || p.unit.toLowerCase().includes(productUnit.toLowerCase()) || productUnit.toLowerCase().includes(p.unit.toLowerCase()))
         );
         
-        // If no exact match, try partial match
+        // If no exact match with unit, try name-only exact match
+        if (!matchedProduct) {
+          matchedProduct = menuProducts.find(p => 
+            p.name.toLowerCase() === productName.toLowerCase()
+          );
+        }
+        
+        // If still no match, try partial match
         if (!matchedProduct) {
           matchedProduct = menuProducts.find(p => 
             p.name.toLowerCase().includes(productName.toLowerCase()) ||
@@ -176,7 +189,7 @@ export function parseRecipeExcelFile(
         
         if (!matchedProduct) {
           // Menu product not found - add to unmatched
-          const possibleMatches = findClosestMatches(productName, '', menuProducts);
+          const possibleMatches = findClosestMatches(productName, productUnit, menuProducts);
           const menuKey = `${productName.toLowerCase()}`;
           
           // Check if we already have this unmatched menu item
@@ -188,13 +201,14 @@ export function parseRecipeExcelFile(
             unmatchedItems.push({
               type: 'menu',
               originalName: productName,
-              originalUnit: '', // We don't have unit info in column A anymore
+              originalUnit: productUnit,
+              menuProductUnit: productUnit,
               possibleMatches,
             });
             if (possibleMatches.length > 0) {
-              warnings.push(`Menu product "${productName}" - possible match: ${possibleMatches[0].name}`);
+              warnings.push(`Menu product "${productName}"${productUnit ? ` (${productUnit})` : ''} - possible match: ${possibleMatches[0].name} (${possibleMatches[0].unit})`);
             } else {
-              warnings.push(`Menu product "${productName}" - no matches found in system`);
+              warnings.push(`Menu product "${productName}"${productUnit ? ` (${productUnit})` : ''} - no matches found in system`);
             }
           }
           
