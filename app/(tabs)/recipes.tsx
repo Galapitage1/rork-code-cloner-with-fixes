@@ -43,6 +43,8 @@ export default function RecipesScreen() {
   const [parsedBase64Data, setParsedBase64Data] = useState<string>('');
   const [savedMatches, setSavedMatches] = useState<Record<string, string>>({});
   const [modalExpanded, setModalExpanded] = useState<boolean>(false);
+  const [showConfirmationModal, setShowConfirmationModal] = useState<boolean>(false);
+  const [recipesToConfirm, setRecipesToConfirm] = useState<Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }>>([]);
 
   const SAVED_MATCHES_KEY = '@recipe_import_saved_matches';
   const MODAL_EXPANDED_KEY = '@recipe_import_modal_expanded';
@@ -282,16 +284,15 @@ export default function RecipesScreen() {
         return;
       }
 
-      // No unmatched items, proceed with import
-      let successCount = 0;
-      for (const recipe of parsed.recipes) {
-        await addOrUpdateRecipe(recipe);
-        successCount++;
+      // No unmatched items, show confirmation for auto-matched recipes
+      if (parsed.recipes.length > 0) {
+        showConfirmationScreen(parsed.recipes);
+        setIsImporting(false);
+      } else {
+        setImportResults({ success: 0, warnings: parsed.warnings, errors: ['No recipes to import'] });
+        setShowImportResults(true);
+        setIsImporting(false);
       }
-
-      setImportResults({ success: successCount, warnings: parsed.warnings, errors: [] });
-      setShowImportResults(true);
-      setIsImporting(false);
 
     } catch (error) {
       console.error('Import error:', error);
@@ -348,9 +349,110 @@ export default function RecipesScreen() {
       setShowManualSelection(false);
       setManualSearchQuery('');
     } else {
-      // All items resolved, finalize import
-      await finalizeImport();
+      // All items resolved, prepare confirmation screen
+      prepareConfirmationScreen();
     }
+  };
+
+  const showConfirmationScreen = (recipes: Recipe[]) => {
+    const recipesWithDetails: Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    
+    for (const recipe of recipes) {
+      const menuProduct = menuItems.find(m => m.id === recipe.menuProductId);
+      if (!menuProduct) continue;
+      
+      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      for (const component of recipe.components) {
+        const rawProduct = rawItems.find(r => r.id === component.rawProductId);
+        if (rawProduct) {
+          ingredients.push({ rawProduct, quantity: component.quantityPerUnit });
+        }
+      }
+      
+      if (ingredients.length > 0) {
+        recipesWithDetails.push({ menuProduct, ingredients });
+      }
+    }
+    
+    setRecipesToConfirm(recipesWithDetails);
+    setShowConfirmationModal(true);
+  };
+
+  const prepareConfirmationScreen = () => {
+    // Build confirmation list from both pendingRecipes and resolved items
+    const recipesWithDetails: Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    
+    // Process pending recipes (auto-matched)
+    for (const recipe of pendingRecipes) {
+      const menuProduct = menuItems.find(m => m.id === recipe.menuProductId);
+      if (!menuProduct) continue;
+      
+      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      for (const component of recipe.components) {
+        const rawProduct = rawItems.find(r => r.id === component.rawProductId);
+        if (rawProduct) {
+          ingredients.push({ rawProduct, quantity: component.quantityPerUnit });
+        }
+      }
+      
+      // Also add any manually resolved ingredients for this product
+      resolvedIngredients.forEach((resolved) => {
+        if (resolved.forProductId === recipe.menuProductId) {
+          const rawProduct = rawItems.find(r => r.id === resolved.productId);
+          if (rawProduct && !ingredients.find(i => i.rawProduct.id === rawProduct.id)) {
+            ingredients.push({ rawProduct, quantity: resolved.quantity });
+          }
+        }
+      });
+      
+      if (ingredients.length > 0) {
+        recipesWithDetails.push({ menuProduct, ingredients });
+      }
+    }
+    
+    // Process manually resolved menu products
+    resolvedMenuProducts.forEach((resolved) => {
+      const menuProduct = menuItems.find(m => m.id === resolved.menuProductId);
+      if (!menuProduct) return;
+      
+      // Skip if already in the list from pendingRecipes
+      if (recipesWithDetails.find(r => r.menuProduct.id === menuProduct.id)) return;
+      
+      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      
+      // Add resolved ingredients for this menu product
+      resolvedIngredients.forEach((resolvedIng) => {
+        if (resolvedIng.forProductId === menuProduct.id) {
+          const rawProduct = rawItems.find(r => r.id === resolvedIng.productId);
+          if (rawProduct) {
+            ingredients.push({ rawProduct, quantity: resolvedIng.quantity });
+          }
+        }
+      });
+      
+      // Try to auto-match pending ingredients
+      resolved.pendingIngredients.forEach(pending => {
+        const matchedRaw = rawItems.find(p => 
+          p.name.toLowerCase() === pending.ingredientName.toLowerCase()
+        );
+        if (matchedRaw && !ingredients.find(i => i.rawProduct.id === matchedRaw.id)) {
+          ingredients.push({ rawProduct: matchedRaw, quantity: pending.quantity });
+        }
+      });
+      
+      if (ingredients.length > 0) {
+        recipesWithDetails.push({ menuProduct, ingredients });
+      }
+    });
+    
+    setRecipesToConfirm(recipesWithDetails);
+    setShowMatchingModal(false);
+    setShowConfirmationModal(true);
+  };
+
+  const confirmAndImport = async () => {
+    setShowConfirmationModal(false);
+    await finalizeImport();
   };
 
   const finalizeImport = async () => {
@@ -762,6 +864,72 @@ export default function RecipesScreen() {
             </View>
           </Modal>
 
+          {/* Confirmation Modal */}
+          <Modal visible={showConfirmationModal} transparent animationType="fade" onRequestClose={() => {}}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalContent, { maxWidth: 700, maxHeight: screenHeight * 0.85 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Confirm Import ({recipesToConfirm.length} recipe{recipesToConfirm.length !== 1 ? 's' : ''})</Text>
+                  <TouchableOpacity onPress={() => {
+                    setShowConfirmationModal(false);
+                    setRecipesToConfirm([]);
+                    setPendingRecipes([]);
+                    setResolvedIngredients(new Map());
+                    setResolvedMenuProducts(new Map());
+                    setIsImporting(false);
+                  }}>
+                    <X size={22} color={Colors.light.text} />
+                  </TouchableOpacity>
+                </View>
+                
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+                  <Text style={styles.confirmationSubtitle}>Review the recipes that will be imported:</Text>
+                  
+                  {recipesToConfirm.map((item, idx) => (
+                    <View key={idx} style={styles.confirmationCard}>
+                      <View style={styles.confirmationHeader}>
+                        <Text style={styles.confirmationMenuName}>{item.menuProduct.name}</Text>
+                        <Text style={styles.confirmationMenuUnit}>({item.menuProduct.unit})</Text>
+                      </View>
+                      
+                      <View style={styles.confirmationIngredients}>
+                        {item.ingredients.map((ing, ingIdx) => (
+                          <View key={ingIdx} style={styles.confirmationIngredientRow}>
+                            <View style={styles.confirmationIngDot} />
+                            <Text style={styles.confirmationIngName}>{ing.rawProduct.name}</Text>
+                            <Text style={styles.confirmationIngQty}>{ing.quantity} {ing.rawProduct.unit}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+                
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity 
+                    style={[styles.matchActionBtn, styles.matchSkipBtn, { flex: 1 }]} 
+                    onPress={() => {
+                      setShowConfirmationModal(false);
+                      setRecipesToConfirm([]);
+                      setPendingRecipes([]);
+                      setResolvedIngredients(new Map());
+                      setResolvedMenuProducts(new Map());
+                      setIsImporting(false);
+                    }}
+                  >
+                    <Text style={styles.matchSkipBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.primaryBtn, { flex: 1 }]} 
+                    onPress={confirmAndImport}
+                  >
+                    <Text style={styles.primaryBtnText}>Import All</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
           {/* Product Matching Modal */}
           <Modal visible={showMatchingModal} transparent animationType="fade" onRequestClose={() => {}}>
             <View style={styles.modalOverlay}>
@@ -995,4 +1163,14 @@ const styles = StyleSheet.create({
   previousMatchTitle: { fontSize: 13, fontWeight: '700' as const, color: Colors.light.success, marginBottom: 8 },
   previousMatchOption: { borderColor: Colors.light.success, borderWidth: 2, backgroundColor: Colors.light.success + '10' },
   previousMatchBadge: { backgroundColor: Colors.light.success, color: '#fff', fontSize: 10, fontWeight: '700' as const, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, overflow: 'hidden' },
+  confirmationSubtitle: { fontSize: 14, color: Colors.light.muted, marginBottom: 16 },
+  confirmationCard: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, padding: 14, marginBottom: 12 },
+  confirmationHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, paddingBottom: 8 },
+  confirmationMenuName: { fontSize: 16, fontWeight: '700' as const, color: Colors.light.text, flex: 1 },
+  confirmationMenuUnit: { fontSize: 13, color: Colors.light.muted, fontWeight: '600' as const },
+  confirmationIngredients: { gap: 6 },
+  confirmationIngredientRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  confirmationIngDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.light.tint },
+  confirmationIngName: { flex: 1, fontSize: 14, color: Colors.light.text },
+  confirmationIngQty: { fontSize: 13, fontWeight: '700' as const, color: Colors.light.accent },
 });
