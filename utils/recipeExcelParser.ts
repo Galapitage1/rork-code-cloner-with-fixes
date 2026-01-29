@@ -128,10 +128,17 @@ export function parseRecipeExcelFile(
     }>>();
 
     for (const sheetName of workbook.SheetNames) {
-      console.log(`[RecipeParser] Processing sheet: ${sheetName}`);
+      console.log(`\n[RecipeParser] ========================================`);
+      console.log(`[RecipeParser] Processing sheet: "${sheetName}"`);
       
       const sheet = workbook.Sheets[sheetName];
       const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
+      
+      console.log(`[RecipeParser] Sheet has ${range.e.r + 1} rows (0-${range.e.r})`);
+      
+      let rowsWithProducts = 0;
+      let rowsProcessed = 0;
+      let ingredientsFound = 0;
       
       for (let row = 0; row <= range.e.r; row++) {
         const productNameCell = sheet[`A${row + 1}`];
@@ -141,6 +148,7 @@ export function parseRecipeExcelFile(
         }
 
         const productName = String(productNameCell.v).trim();
+        rowsWithProducts++;
         
         // Column B: Menu product unit (Whole/Slice) - optional
         const productUnitCell = sheet[`B${row + 1}`];
@@ -149,9 +157,11 @@ export function parseRecipeExcelFile(
         // Column C: Ingredient name
         const ingredientNameCell = sheet[`C${row + 1}`];
         if (!ingredientNameCell || !ingredientNameCell.v) {
+          console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Product "${productName}" found in Column A, but no ingredient in Column C - skipping`);
           continue;
         }
         const ingredientName = String(ingredientNameCell.v).trim();
+        ingredientsFound++;
         
         // Column D: Quantity and unit mixed together
         const quantityWithUnitCell = sheet[`D${row + 1}`];
@@ -162,9 +172,11 @@ export function parseRecipeExcelFile(
         const { quantity, unit } = parseQuantityWithUnit(quantityWithUnit);
 
         if (quantity <= 0) {
-          console.log(`[RecipeParser] Skipping row ${row + 1} - invalid quantity: ${quantityWithUnit}`);
+          console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Invalid quantity "${quantityWithUnit}" - skipping`);
           continue;
         }
+        
+        console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Processing "${productName}" + "${ingredientName}" (${quantity} ${unit})`);
 
         // Try to match menu product by name and optionally unit
         let matchedProduct = menuProducts.find(p => 
@@ -188,6 +200,7 @@ export function parseRecipeExcelFile(
         }
         
         if (!matchedProduct) {
+          console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Menu product "${productName}" not found in system`);
           // Menu product not found - add to unmatched
           const possibleMatches = findClosestMatches(productName, productUnit, menuProducts);
           const menuKey = `${productName.toLowerCase()}`;
@@ -226,6 +239,8 @@ export function parseRecipeExcelFile(
           
           continue;
         }
+        
+        console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: ✓ Matched menu product "${productName}" → "${matchedProduct.name}"`);
 
         // Menu product matched - now process the ingredient
         const existingRecipeInSystem = existingRecipes.find(r => r.menuProductId === matchedProduct!.id);
@@ -252,6 +267,7 @@ export function parseRecipeExcelFile(
         }
 
         if (!matchedRaw) {
+          console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Ingredient "${ingredientName}" not found in system`);
           const possibleMatches = findClosestMatches(ingredientName, unit, rawProducts);
           // Check if we already have this unmatched item for the same product
           const existingUnmatched = unmatchedItems.find(
@@ -284,6 +300,9 @@ export function parseRecipeExcelFile(
           }
           continue;
         }
+        
+        console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: ✓ Matched ingredient "${ingredientName}" → "${matchedRaw.name}"`);
+        rowsProcessed++;
 
         // Check if ingredient already exists in the system recipe
         if (existingRecipeInSystem) {
@@ -323,7 +342,17 @@ export function parseRecipeExcelFile(
           recipes.push(recipe);
         }
       }
+      
+      console.log(`[RecipeParser] Sheet "${sheetName}" Summary:`);
+      console.log(`[RecipeParser]   - Rows with products in Column A: ${rowsWithProducts}`);
+      console.log(`[RecipeParser]   - Rows with valid ingredients in Column C: ${ingredientsFound}`);
+      console.log(`[RecipeParser]   - Rows successfully processed: ${rowsProcessed}`);
+      console.log(`[RecipeParser] ========================================\n`);
     }
+    
+    console.log(`[RecipeParser] \n*** FINISHED PROCESSING ALL ${workbook.SheetNames.length} SHEETS ***`);
+    console.log(`[RecipeParser] Total recipes created/updated: ${recipes.length}`);
+    console.log(`[RecipeParser] Total unmatched items: ${unmatchedItems.length}\n`);
     
     // Store pending ingredients info in unmatched menu items for later resolution
     unmatchedItems.forEach(item => {
