@@ -140,6 +140,7 @@ export function parseRecipeExcelFile(
       let rowsProcessed = 0;
       let ingredientsFound = 0;
       
+      // NEW FORMAT: Check columns A, B, C, D
       for (let row = 0; row <= range.e.r; row++) {
         const productNameCell = sheet[`A${row + 1}`];
         
@@ -150,11 +151,9 @@ export function parseRecipeExcelFile(
         const productName = String(productNameCell.v).trim();
         rowsWithProducts++;
         
-        // Column B: Menu product unit (Whole/Slice) - optional
         const productUnitCell = sheet[`B${row + 1}`];
         const productUnit = productUnitCell && productUnitCell.v ? String(productUnitCell.v).trim() : '';
         
-        // Column C: Ingredient name
         const ingredientNameCell = sheet[`C${row + 1}`];
         if (!ingredientNameCell || !ingredientNameCell.v) {
           console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Product "${productName}" found in Column A, but no ingredient in Column C - skipping`);
@@ -163,7 +162,6 @@ export function parseRecipeExcelFile(
         const ingredientName = String(ingredientNameCell.v).trim();
         ingredientsFound++;
         
-        // Column D: Quantity and unit mixed together
         const quantityWithUnitCell = sheet[`D${row + 1}`];
         if (!quantityWithUnitCell || !quantityWithUnitCell.v) {
           continue;
@@ -176,22 +174,19 @@ export function parseRecipeExcelFile(
           continue;
         }
         
-        console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Processing "${productName}" + "${ingredientName}" (${quantity} ${unit})`);
+        console.log(`[RecipeParser] NEW FORMAT - Sheet "${sheetName}" Row ${row + 1}: Processing "${productName}" + "${ingredientName}" (${quantity} ${unit})`);
 
-        // Try to match menu product by name and optionally unit
         let matchedProduct = menuProducts.find(p => 
           p.name.toLowerCase() === productName.toLowerCase() &&
           (!productUnit || p.unit.toLowerCase().includes(productUnit.toLowerCase()) || productUnit.toLowerCase().includes(p.unit.toLowerCase()))
         );
         
-        // If no exact match with unit, try name-only exact match
         if (!matchedProduct) {
           matchedProduct = menuProducts.find(p => 
             p.name.toLowerCase() === productName.toLowerCase()
           );
         }
         
-        // If still no match, try partial match
         if (!matchedProduct) {
           matchedProduct = menuProducts.find(p => 
             p.name.toLowerCase().includes(productName.toLowerCase()) ||
@@ -201,11 +196,9 @@ export function parseRecipeExcelFile(
         
         if (!matchedProduct) {
           console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Menu product "${productName}" not found in system`);
-          // Menu product not found - add to unmatched
           const possibleMatches = findClosestMatches(productName, productUnit, menuProducts);
           const menuKey = `${productName.toLowerCase()}`;
           
-          // Check if we already have this unmatched menu item
           const existingUnmatched = unmatchedItems.find(
             u => u.type === 'menu' && u.originalName.toLowerCase() === productName.toLowerCase()
           );
@@ -225,7 +218,6 @@ export function parseRecipeExcelFile(
             }
           }
           
-          // Store the ingredient for this unmatched menu product
           const pendingKey = productName.toLowerCase();
           if (!pendingIngredientsForUnmatchedMenu.has(pendingKey)) {
             pendingIngredientsForUnmatchedMenu.set(pendingKey, []);
@@ -242,23 +234,19 @@ export function parseRecipeExcelFile(
         
         console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: ✓ Matched menu product "${productName}" → "${matchedProduct.name}"`);
 
-        // Menu product matched - now process the ingredient
         const existingRecipeInSystem = existingRecipes.find(r => r.menuProductId === matchedProduct!.id);
         
-        // Try to match raw product
         let matchedRaw = rawProducts.find(p => 
           p.name.toLowerCase() === ingredientName.toLowerCase() && 
           p.unit.toLowerCase() === unit.toLowerCase()
         );
         
-        // If no exact match with unit, try name-only match
         if (!matchedRaw) {
           matchedRaw = rawProducts.find(p => 
             p.name.toLowerCase() === ingredientName.toLowerCase()
           );
         }
         
-        // If still no match, try partial name match
         if (!matchedRaw) {
           matchedRaw = rawProducts.find(p => 
             p.name.toLowerCase().includes(ingredientName.toLowerCase()) ||
@@ -269,7 +257,6 @@ export function parseRecipeExcelFile(
         if (!matchedRaw) {
           console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: Ingredient "${ingredientName}" not found in system`);
           const possibleMatches = findClosestMatches(ingredientName, unit, rawProducts);
-          // Check if we already have this unmatched item for the same product
           const existingUnmatched = unmatchedItems.find(
             u => u.type === 'ingredient' && 
                  u.originalName.toLowerCase() === ingredientName.toLowerCase() && 
@@ -304,7 +291,6 @@ export function parseRecipeExcelFile(
         console.log(`[RecipeParser] Sheet "${sheetName}" Row ${row + 1}: ✓ Matched ingredient "${ingredientName}" → "${matchedRaw.name}"`);
         rowsProcessed++;
 
-        // Check if ingredient already exists in the system recipe
         if (existingRecipeInSystem) {
           const ingredientAlreadyInSystemRecipe = existingRecipeInSystem.components.find(
             c => c.rawProductId === matchedRaw!.id
@@ -313,13 +299,11 @@ export function parseRecipeExcelFile(
             console.log(`[RecipeParser] Ingredient ${matchedRaw.name} already in recipe for ${matchedProduct.name}, skipping`);
             continue;
           }
-          // Ingredient not in system recipe - will be added below
           console.log(`[RecipeParser] Adding new ingredient ${matchedRaw.name} to existing recipe for ${matchedProduct.name}`);
         }
 
         const existingRecipeForProduct = recipes.find(r => r.menuProductId === matchedProduct!.id);
         if (existingRecipeForProduct) {
-          // Check if this ingredient already exists in the recipe
           const existingComponent = existingRecipeForProduct.components.find(
             c => c.rawProductId === matchedRaw!.id
           );
@@ -343,10 +327,171 @@ export function parseRecipeExcelFile(
         }
       }
       
+      // OLD FORMAT: Check columns P, F, I, O, R
+      let oldFormatRowsProcessed = 0;
+      for (let row = 0; row <= range.e.r; row++) {
+        const menuProductNameCell = sheet[`P${row + 1}`];
+        
+        if (!menuProductNameCell || !menuProductNameCell.v || String(menuProductNameCell.v).trim() === '') {
+          continue;
+        }
+
+        const menuProductName = String(menuProductNameCell.v).trim();
+        
+        const menuProductUnitCell = sheet[`F${row + 3}`];
+        const menuProductUnit = menuProductUnitCell && menuProductUnitCell.v ? String(menuProductUnitCell.v).trim() : '';
+        
+        console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${row + 1}: Found menu product "${menuProductName}" (${menuProductUnit})`);
+        
+        let matchedMenuProduct = menuProducts.find(p => 
+          p.name.toLowerCase() === menuProductName.toLowerCase() &&
+          (!menuProductUnit || p.unit.toLowerCase().includes(menuProductUnit.toLowerCase()) || menuProductUnit.toLowerCase().includes(p.unit.toLowerCase()))
+        );
+        
+        if (!matchedMenuProduct) {
+          matchedMenuProduct = menuProducts.find(p => 
+            p.name.toLowerCase() === menuProductName.toLowerCase()
+          );
+        }
+        
+        if (!matchedMenuProduct) {
+          matchedMenuProduct = menuProducts.find(p => 
+            p.name.toLowerCase().includes(menuProductName.toLowerCase()) ||
+            menuProductName.toLowerCase().includes(p.name.toLowerCase())
+          );
+        }
+        
+        if (!matchedMenuProduct) {
+          console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${row + 1}: Menu product "${menuProductName}" not found`);
+          const possibleMatches = findClosestMatches(menuProductName, menuProductUnit, menuProducts);
+          const existingUnmatched = unmatchedItems.find(
+            u => u.type === 'menu' && u.originalName.toLowerCase() === menuProductName.toLowerCase()
+          );
+          if (!existingUnmatched) {
+            unmatchedItems.push({
+              type: 'menu',
+              originalName: menuProductName,
+              originalUnit: menuProductUnit,
+              menuProductUnit: menuProductUnit,
+              possibleMatches,
+            });
+          }
+          continue;
+        }
+        
+        console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${row + 1}: ✓ Matched menu product "${menuProductName}" → "${matchedMenuProduct.name}"`);
+        
+        for (let ingredientRow = row + 6; ingredientRow <= range.e.r; ingredientRow++) {
+          const ingredientNameCell = sheet[`I${ingredientRow + 1}`];
+          
+          if (!ingredientNameCell || !ingredientNameCell.v || String(ingredientNameCell.v).trim() === '') {
+            console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: Empty ingredient, stopping for this menu product`);
+            break;
+          }
+          
+          const ingredientName = String(ingredientNameCell.v).trim();
+          
+          const ingredientUnitCell = sheet[`O${ingredientRow + 1}`];
+          const ingredientUnit = ingredientUnitCell && ingredientUnitCell.v ? String(ingredientUnitCell.v).trim() : '';
+          
+          const quantityCell = sheet[`R${ingredientRow + 1}`];
+          if (!quantityCell || !quantityCell.v) {
+            console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: No quantity for ingredient "${ingredientName}" - skipping`);
+            continue;
+          }
+          
+          const quantity = typeof quantityCell.v === 'number' ? quantityCell.v : parseFloat(String(quantityCell.v));
+          
+          if (quantity <= 0 || isNaN(quantity)) {
+            console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: Invalid quantity "${quantityCell.v}" - skipping`);
+            continue;
+          }
+          
+          console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: Processing ingredient "${ingredientName}" (${quantity} ${ingredientUnit})`);
+          
+          let matchedRaw = rawProducts.find(p => 
+            p.name.toLowerCase() === ingredientName.toLowerCase() && 
+            p.unit.toLowerCase() === ingredientUnit.toLowerCase()
+          );
+          
+          if (!matchedRaw) {
+            matchedRaw = rawProducts.find(p => 
+              p.name.toLowerCase() === ingredientName.toLowerCase()
+            );
+          }
+          
+          if (!matchedRaw) {
+            matchedRaw = rawProducts.find(p => 
+              p.name.toLowerCase().includes(ingredientName.toLowerCase()) ||
+              ingredientName.toLowerCase().includes(p.name.toLowerCase())
+            );
+          }
+          
+          if (!matchedRaw) {
+            console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: Ingredient "${ingredientName}" not found`);
+            const possibleMatches = findClosestMatches(ingredientName, ingredientUnit, rawProducts);
+            const existingUnmatched = unmatchedItems.find(
+              u => u.type === 'ingredient' && 
+                   u.originalName.toLowerCase() === ingredientName.toLowerCase() && 
+                   u.forProductId === matchedMenuProduct!.id
+            );
+            if (!existingUnmatched) {
+              unmatchedItems.push({
+                type: 'ingredient',
+                originalName: ingredientName,
+                originalUnit: ingredientUnit,
+                forProduct: menuProductName,
+                forProductId: matchedMenuProduct.id,
+                quantity,
+                rowData: {
+                  productName: menuProductName,
+                  productUnit: matchedMenuProduct.unit,
+                  ingredientName,
+                  quantity,
+                  unit: ingredientUnit,
+                },
+                possibleMatches,
+              });
+            }
+            continue;
+          }
+          
+          console.log(`[RecipeParser] OLD FORMAT - Sheet "${sheetName}" Row ${ingredientRow + 1}: ✓ Matched ingredient "${ingredientName}" → "${matchedRaw.name}"`);
+          oldFormatRowsProcessed++;
+          
+          const existingRecipeForProduct = recipes.find(r => r.menuProductId === matchedMenuProduct!.id);
+          if (existingRecipeForProduct) {
+            const existingComponent = existingRecipeForProduct.components.find(
+              c => c.rawProductId === matchedRaw!.id
+            );
+            if (!existingComponent) {
+              existingRecipeForProduct.components.push({
+                rawProductId: matchedRaw.id,
+                quantityPerUnit: quantity
+              });
+            } else {
+              existingComponent.quantityPerUnit = quantity;
+            }
+          } else {
+            const recipe: Recipe = {
+              id: `rcp-${matchedMenuProduct.id}`,
+              menuProductId: matchedMenuProduct.id,
+              components: [{
+                rawProductId: matchedRaw.id,
+                quantityPerUnit: quantity
+              }],
+              updatedAt: Date.now()
+            };
+            recipes.push(recipe);
+          }
+        }
+      }
+      
       console.log(`[RecipeParser] Sheet "${sheetName}" Summary:`);
-      console.log(`[RecipeParser]   - Rows with products in Column A: ${rowsWithProducts}`);
-      console.log(`[RecipeParser]   - Rows with valid ingredients in Column C: ${ingredientsFound}`);
-      console.log(`[RecipeParser]   - Rows successfully processed: ${rowsProcessed}`);
+      console.log(`[RecipeParser]   NEW FORMAT - Rows with products in Column A: ${rowsWithProducts}`);
+      console.log(`[RecipeParser]   NEW FORMAT - Rows with valid ingredients in Column C: ${ingredientsFound}`);
+      console.log(`[RecipeParser]   NEW FORMAT - Rows successfully processed: ${rowsProcessed}`);
+      console.log(`[RecipeParser]   OLD FORMAT - Rows successfully processed: ${oldFormatRowsProcessed}`);
       console.log(`[RecipeParser] ========================================\n`);
     }
     
