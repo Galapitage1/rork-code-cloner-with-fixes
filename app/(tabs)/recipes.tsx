@@ -44,7 +44,7 @@ export default function RecipesScreen() {
   const [savedMatches, setSavedMatches] = useState<Record<string, string>>({});
   const [modalExpanded, setModalExpanded] = useState<boolean>(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState<boolean>(false);
-  const [recipesToConfirm, setRecipesToConfirm] = useState<Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }>>([]);
+  const [recipesToConfirm, setRecipesToConfirm] = useState<Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }>>([]);
 
   const SAVED_MATCHES_KEY = '@recipe_import_saved_matches';
   const MODAL_EXPANDED_KEY = '@recipe_import_modal_expanded';
@@ -387,8 +387,33 @@ export default function RecipesScreen() {
     }
   };
 
+  const getAvailableUnitsForProduct = useCallback((productId: string): Array<{ productId: string; unit: string }> => {
+    const product = menuItems.find(p => p.id === productId);
+    if (!product) return [];
+    
+    const units: Array<{ productId: string; unit: string }> = [{ productId: product.id, unit: product.unit }];
+    
+    const conversionsFrom = productConversions.filter(c => c.fromProductId === productId);
+    conversionsFrom.forEach(conv => {
+      const toProduct = menuItems.find(p => p.id === conv.toProductId);
+      if (toProduct && !units.find(u => u.productId === toProduct.id)) {
+        units.push({ productId: toProduct.id, unit: toProduct.unit });
+      }
+    });
+    
+    const conversionsTo = productConversions.filter(c => c.toProductId === productId);
+    conversionsTo.forEach(conv => {
+      const fromProduct = menuItems.find(p => p.id === conv.fromProductId);
+      if (fromProduct && !units.find(u => u.productId === fromProduct.id)) {
+        units.push({ productId: fromProduct.id, unit: fromProduct.unit });
+      }
+    });
+    
+    return units;
+  }, [menuItems, productConversions]);
+
   const showConfirmationScreen = (recipes: Recipe[]) => {
-    const recipesWithDetails: Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    const recipesWithDetails: Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
     
     for (const recipe of recipes) {
       const menuProduct = menuItems.find(m => m.id === recipe.menuProductId);
@@ -403,7 +428,13 @@ export default function RecipesScreen() {
       }
       
       if (ingredients.length > 0) {
-        recipesWithDetails.push({ menuProduct, ingredients });
+        const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        recipesWithDetails.push({ 
+          menuProduct, 
+          selectedProductId: menuProduct.id,
+          availableUnits,
+          ingredients 
+        });
       }
     }
     
@@ -413,7 +444,7 @@ export default function RecipesScreen() {
 
   const prepareConfirmationScreen = () => {
     // Build confirmation list from both pendingRecipes and resolved items
-    const recipesWithDetails: Array<{ menuProduct: Product; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    const recipesWithDetails: Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
     
     // Process pending recipes (auto-matched)
     for (const recipe of pendingRecipes) {
@@ -439,7 +470,13 @@ export default function RecipesScreen() {
       });
       
       if (ingredients.length > 0) {
-        recipesWithDetails.push({ menuProduct, ingredients });
+        const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        recipesWithDetails.push({ 
+          menuProduct, 
+          selectedProductId: menuProduct.id,
+          availableUnits,
+          ingredients 
+        });
       }
     }
     
@@ -474,7 +511,13 @@ export default function RecipesScreen() {
       });
       
       if (ingredients.length > 0) {
-        recipesWithDetails.push({ menuProduct, ingredients });
+        const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        recipesWithDetails.push({ 
+          menuProduct, 
+          selectedProductId: menuProduct.id,
+          availableUnits,
+          ingredients 
+        });
       }
     });
     
@@ -485,7 +528,95 @@ export default function RecipesScreen() {
 
   const confirmAndImport = async () => {
     setShowConfirmationModal(false);
-    await finalizeImport();
+    setIsImporting(true);
+    
+    try {
+      const recipesToSave: Recipe[] = [];
+      
+      for (const item of recipesToConfirm) {
+        const selectedProductId = item.selectedProductId;
+        const selectedProduct = menuItems.find(p => p.id === selectedProductId);
+        
+        if (!selectedProduct) {
+          console.log(`[Recipes] Could not find product with ID: ${selectedProductId}`);
+          continue;
+        }
+        
+        let components: RecipeComponent[] = item.ingredients.map(ing => ({
+          rawProductId: ing.rawProduct.id,
+          quantityPerUnit: ing.quantity,
+        }));
+        
+        if (selectedProductId !== item.menuProduct.id) {
+          const conversion = productConversions.find(
+            c => (c.fromProductId === item.menuProduct.id && c.toProductId === selectedProductId) ||
+                 (c.toProductId === item.menuProduct.id && c.fromProductId === selectedProductId)
+          );
+          
+          if (conversion) {
+            const factor = conversion.fromProductId === item.menuProduct.id 
+              ? conversion.conversionFactor 
+              : 1 / conversion.conversionFactor;
+            
+            components = components.map(c => ({
+              ...c,
+              quantityPerUnit: c.quantityPerUnit / factor,
+            }));
+            
+            console.log(`[Recipes] Applied conversion factor ${factor} for unit change`);
+          }
+        }
+        
+        const existingRecipe = recipes.find(r => r.menuProductId === selectedProductId);
+        
+        if (existingRecipe) {
+          const updatedComponents = [...existingRecipe.components];
+          
+          components.forEach(newComp => {
+            const existingComp = updatedComponents.find(c => c.rawProductId === newComp.rawProductId);
+            if (!existingComp) {
+              updatedComponents.push(newComp);
+            }
+          });
+          
+          recipesToSave.push({
+            ...existingRecipe,
+            components: updatedComponents,
+            updatedAt: Date.now(),
+          });
+        } else {
+          recipesToSave.push({
+            id: `rcp-${selectedProductId}`,
+            menuProductId: selectedProductId,
+            components,
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      
+      console.log(`[Recipes] Saving ${recipesToSave.length} recipes...`);
+      
+      for (const recipe of recipesToSave) {
+        await addOrUpdateRecipe(recipe);
+        console.log(`[Recipes] ✓ Saved recipe for product ID: ${recipe.menuProductId}`);
+      }
+      
+      const warnings: string[] = [];
+      warnings.push(`✓ ${recipesToSave.length} recipe${recipesToSave.length !== 1 ? 's' : ''} imported successfully`);
+      
+      setImportResults({ success: recipesToSave.length, warnings, errors: [] });
+      setShowImportResults(true);
+      
+      setRecipesToConfirm([]);
+      setPendingRecipes([]);
+      setResolvedIngredients(new Map());
+      setResolvedMenuProducts(new Map());
+    } catch (error) {
+      console.error('[Recipes] Import error:', error);
+      Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to import recipes');
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const finalizeImport = async () => {
@@ -928,7 +1059,35 @@ export default function RecipesScreen() {
                     <View key={idx} style={styles.confirmationCard}>
                       <View style={styles.confirmationHeader}>
                         <Text style={styles.confirmationMenuName}>{item.menuProduct.name}</Text>
-                        <Text style={styles.confirmationMenuUnit}>({item.menuProduct.unit})</Text>
+                        {item.availableUnits.length > 1 ? (
+                          <View style={styles.unitSelector}>
+                            <Text style={styles.unitSelectorLabel}>Unit:</Text>
+                            {item.availableUnits.map((unitOption) => {
+                              const isSelected = unitOption.productId === item.selectedProductId;
+                              return (
+                                <TouchableOpacity
+                                  key={unitOption.productId}
+                                  style={[
+                                    styles.unitOption,
+                                    isSelected && styles.unitOptionSelected,
+                                  ]}
+                                  onPress={() => {
+                                    setRecipesToConfirm(prev => prev.map((r, i) => 
+                                      i === idx ? { ...r, selectedProductId: unitOption.productId } : r
+                                    ));
+                                  }}
+                                >
+                                  <Text style={[
+                                    styles.unitOptionText,
+                                    isSelected && styles.unitOptionTextSelected,
+                                  ]}>{unitOption.unit}</Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        ) : (
+                          <Text style={styles.confirmationMenuUnit}>({item.menuProduct.unit})</Text>
+                        )}
                       </View>
                       
                       <View style={styles.confirmationIngredients}>
@@ -1202,6 +1361,12 @@ const styles = StyleSheet.create({
   previousMatchTitle: { fontSize: 13, fontWeight: '700' as const, color: Colors.light.success, marginBottom: 8 },
   previousMatchOption: { borderColor: Colors.light.success, borderWidth: 2, backgroundColor: Colors.light.success + '10' },
   previousMatchBadge: { backgroundColor: Colors.light.success, color: '#fff', fontSize: 10, fontWeight: '700' as const, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, overflow: 'hidden' },
+  unitSelector: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  unitSelectorLabel: { fontSize: 12, color: Colors.light.muted, fontWeight: '600' as const },
+  unitOption: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
+  unitOptionSelected: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  unitOptionText: { fontSize: 12, color: Colors.light.text, fontWeight: '600' as const },
+  unitOptionTextSelected: { color: '#fff', fontWeight: '700' as const },
   confirmationSubtitle: { fontSize: 14, color: Colors.light.muted, marginBottom: 16 },
   confirmationCard: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, padding: 14, marginBottom: 12 },
   confirmationHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, paddingBottom: 8 },
