@@ -16,7 +16,7 @@ import { formatCurrency } from '@/utils/currencyHelper';
 
 export default function RecipesScreen() {
   const { isAdmin, currency } = useAuth();
-  const { products, productConversions } = useStock();
+  const { products, productConversions, addProduct, syncAll } = useStock();
   const { recipes, addOrUpdateRecipe, getRecipeFor, syncRecipes } = useRecipes();
   const { storeProducts } = useStores();
 
@@ -45,6 +45,11 @@ export default function RecipesScreen() {
   const [modalExpanded, setModalExpanded] = useState<boolean>(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState<boolean>(false);
   const [recipesToConfirm, setRecipesToConfirm] = useState<Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }>>([]);
+  const [showAddProductForm, setShowAddProductForm] = useState<boolean>(false);
+  const [newProductName, setNewProductName] = useState<string>('');
+  const [newProductUnit, setNewProductUnit] = useState<string>('');
+  const [newProductCategory, setNewProductCategory] = useState<string>('');
+  const [isAddingProduct, setIsAddingProduct] = useState<boolean>(false);
 
   const SAVED_MATCHES_KEY = '@recipe_import_saved_matches';
   const MODAL_EXPANDED_KEY = '@recipe_import_modal_expanded';
@@ -331,6 +336,46 @@ export default function RecipesScreen() {
       console.error('Import error:', error);
       Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to import recipes');
       setIsImporting(false);
+    }
+  };
+
+  const handleAddNewProduct = async () => {
+    if (!newProductName.trim() || !newProductUnit.trim()) {
+      Alert.alert('Validation Error', 'Please enter both product name and unit');
+      return;
+    }
+    
+    setIsAddingProduct(true);
+    
+    try {
+      const currentItem = unmatchedItems[currentUnmatchedIndex];
+      const productType = currentItem.type === 'menu' ? 'menu' : 'raw';
+      
+      const newProduct: Product = {
+        id: `${productType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        name: newProductName.trim(),
+        type: productType,
+        unit: newProductUnit.trim(),
+        category: newProductCategory.trim() || 'Uncategorized',
+        showInStock: true,
+        updatedAt: Date.now(),
+      };
+      
+      console.log(`[Recipes] Adding new ${productType} product:`, newProduct);
+      await addProduct(newProduct);
+      await syncAll(true);
+      
+      setShowAddProductForm(false);
+      setNewProductName('');
+      setNewProductUnit('');
+      setNewProductCategory('');
+      
+      await handleMatchSelection(newProduct.id);
+    } catch (error) {
+      console.error('[Recipes] Error adding product:', error);
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to add product');
+    } finally {
+      setIsAddingProduct(false);
     }
   };
 
@@ -1220,6 +1265,19 @@ export default function RecipesScreen() {
                       </TouchableOpacity>
                       
                       <TouchableOpacity
+                        style={[styles.matchActionBtn, styles.matchAddBtn]}
+                        onPress={() => {
+                          setShowAddProductForm(true);
+                          setNewProductName(currentUnmatched.originalName);
+                          setNewProductUnit(currentUnmatched.originalUnit || currentUnmatched.menuProductUnit || '');
+                          setNewProductCategory('');
+                        }}
+                      >
+                        <Plus size={16} color="#fff" />
+                        <Text style={styles.matchActionBtnText}>Add New</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
                         style={[styles.matchActionBtn, styles.matchSkipBtn]}
                         onPress={() => handleMatchSelection(null)}
                       >
@@ -1229,7 +1287,76 @@ export default function RecipesScreen() {
                   </ScrollView>
                 )}
                 
-                {currentUnmatched && showManualSelection && (
+                {currentUnmatched && showAddProductForm && (
+                  <View style={{ maxHeight: modalMaxHeight - 80, padding: 16 }}>
+                    <View style={styles.manualHeader}>
+                      <TouchableOpacity onPress={() => {
+                        setShowAddProductForm(false);
+                        setNewProductName('');
+                        setNewProductUnit('');
+                        setNewProductCategory('');
+                      }}>
+                        <Text style={styles.backLink}>← Back to suggestions</Text>
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <Text style={styles.addProductTitle}>
+                      Add New {currentUnmatched.type === 'menu' ? 'Menu Product' : 'Ingredient'}
+                    </Text>
+                    
+                    <View style={styles.addProductForm}>
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Product Name *</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder="Enter product name"
+                          value={newProductName}
+                          onChangeText={setNewProductName}
+                          placeholderTextColor={Colors.light.muted}
+                        />
+                      </View>
+                      
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Unit *</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder={currentUnmatched.type === 'menu' ? 'e.g., Whole, Slice, Piece' : 'e.g., kg, L, pieces'}
+                          value={newProductUnit}
+                          onChangeText={setNewProductUnit}
+                          placeholderTextColor={Colors.light.muted}
+                        />
+                      </View>
+                      
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Category (Optional)</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          placeholder="e.g., Bakery, Beverages, Raw Materials"
+                          value={newProductCategory}
+                          onChangeText={setNewProductCategory}
+                          placeholderTextColor={Colors.light.muted}
+                        />
+                      </View>
+                      
+                      <TouchableOpacity
+                        style={[styles.primaryBtn, { marginTop: 16 }]}
+                        onPress={handleAddNewProduct}
+                        disabled={isAddingProduct}
+                      >
+                        {isAddingProduct ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <>
+                            <Plus size={16} color="#fff" />
+                            <Text style={styles.primaryBtnText}>Add & Use This Product</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+                
+                {currentUnmatched && showManualSelection && !showAddProductForm && (
                   <View style={{ maxHeight: modalMaxHeight - 80, padding: 16 }}>
                     <View style={styles.manualHeader}>
                       <TouchableOpacity onPress={() => setShowManualSelection(false)}>
@@ -1342,8 +1469,9 @@ const styles = StyleSheet.create({
   bestMatchBadge: { backgroundColor: Colors.light.tint, color: '#fff', fontSize: 10, fontWeight: '700' as const, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, overflow: 'hidden' },
   noMatchesText: { color: Colors.light.muted, fontSize: 14, textAlign: 'center' as const, marginVertical: 16 },
   matchActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  matchActionBtn: { flex: 1, backgroundColor: Colors.light.accent, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  matchActionBtn: { flex: 1, backgroundColor: Colors.light.accent, paddingVertical: 12, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
   matchActionBtnText: { color: '#fff', fontWeight: '700' as const, fontSize: 14 },
+  matchAddBtn: { backgroundColor: Colors.light.tint },
   matchSkipBtn: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
   matchSkipBtnText: { color: Colors.light.muted, fontWeight: '600' as const, fontSize: 14 },
   manualHeader: { marginBottom: 12 },
@@ -1381,4 +1509,9 @@ const styles = StyleSheet.create({
   confirmationIngDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.light.tint },
   confirmationIngName: { flex: 1, fontSize: 14, color: Colors.light.text },
   confirmationIngQty: { fontSize: 13, fontWeight: '700' as const, color: Colors.light.accent },
+  addProductTitle: { fontSize: 18, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 16 },
+  addProductForm: { gap: 12 },
+  formField: { gap: 6 },
+  formLabel: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text },
+  formInput: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, fontSize: 14, color: Colors.light.text },
 });
