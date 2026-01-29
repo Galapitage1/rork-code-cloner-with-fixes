@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useStores } from '@/contexts/StoresContext';
 import Colors from '@/constants/colors';
 import { Plus, Save, X, Upload, AlertCircle } from 'lucide-react-native';
-import { RecipeComponent, Recipe } from '@/types';
+import { RecipeComponent, Recipe, Product } from '@/types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { parseRecipeExcelFile, UnmatchedItem, PendingIngredient } from '@/utils/recipeExcelParser';
