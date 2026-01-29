@@ -458,11 +458,14 @@ export default function RecipesScreen() {
       // Combine new recipes with updated existing recipes
       const allRecipesToSave: Recipe[] = [...finalRecipes];
       existingRecipesToUpdate.forEach((recipe, menuProductId) => {
-        // Only add if not already in finalRecipes and has been modified
+        // Only add if not already in finalRecipes
         if (!finalRecipes.find(r => r.menuProductId === menuProductId)) {
           const originalRecipe = recipes.find(r => r.menuProductId === menuProductId);
-          if (originalRecipe && recipe.components.length > originalRecipe.components.length) {
+          // Save if: (a) it's a new recipe with components, OR (b) it has more components than before
+          if ((!originalRecipe && recipe.components.length > 0) || 
+              (originalRecipe && recipe.components.length > originalRecipe.components.length)) {
             allRecipesToSave.push(recipe);
+            console.log(`[Recipes] Saving recipe for menu product ID ${menuProductId}: ${recipe.components.length} ingredients`);
           }
         }
       });
