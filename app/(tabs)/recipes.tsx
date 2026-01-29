@@ -273,12 +273,45 @@ export default function RecipesScreen() {
         ...parsed.unmatchedItems.filter(u => u.type === 'ingredient'),
       ];
       
+      // Auto-resolve items with saved matches
+      const initialResolvedIngredients = new Map<string, { productId: string; quantity: number; forProductId: string }>();
+      const initialResolvedMenuProducts = new Map<string, { menuProductId: string; pendingIngredients: PendingIngredient[] }>();
+      const itemsNeedingConfirmation: UnmatchedItem[] = [];
+      
+      sortedUnmatched.forEach(item => {
+        const savedMatchId = getSavedMatch(item.originalName, item.type);
+        
+        if (savedMatchId) {
+          // Auto-apply saved match
+          if (item.type === 'menu') {
+            const key = item.originalName.toLowerCase();
+            initialResolvedMenuProducts.set(key, {
+              menuProductId: savedMatchId,
+              pendingIngredients: item.pendingIngredients || [],
+            });
+            console.log(`[Recipes] Auto-matched menu "${item.originalName}" using saved match`);
+          } else if (item.type === 'ingredient' && item.forProductId && item.quantity) {
+            const key = `${item.forProductId}-${item.originalName}-${item.originalUnit}`;
+            initialResolvedIngredients.set(key, {
+              productId: savedMatchId,
+              quantity: item.quantity,
+              forProductId: item.forProductId,
+            });
+            console.log(`[Recipes] Auto-matched ingredient "${item.originalName}" using saved match`);
+          }
+        } else {
+          // No saved match, needs user confirmation
+          itemsNeedingConfirmation.push(item);
+        }
+      });
+      
+      setResolvedIngredients(initialResolvedIngredients);
+      setResolvedMenuProducts(initialResolvedMenuProducts);
+      
       // Check if there are unmatched items that need resolution
-      if (sortedUnmatched.length > 0) {
-        setUnmatchedItems(sortedUnmatched);
+      if (itemsNeedingConfirmation.length > 0) {
+        setUnmatchedItems(itemsNeedingConfirmation);
         setCurrentUnmatchedIndex(0);
-        setResolvedIngredients(new Map());
-        setResolvedMenuProducts(new Map());
         setShowMatchingModal(true);
         setIsImporting(false);
         return;
@@ -578,14 +611,20 @@ export default function RecipesScreen() {
         successCount++;
       }
       
-      const menuSkipped = unmatchedItems.filter(u => u.type === 'menu').length - resolvedMenuProducts.size;
-      const ingredientSkipped = unmatchedItems.filter(u => u.type === 'ingredient').length - resolvedIngredients.size;
+      // Calculate statistics for import summary
+      const autoMatchedCount = pendingRecipes.length;
+      const manuallyMatchedCount = resolvedMenuProducts.size;
+      const totalMenuProducts = autoMatchedCount + manuallyMatchedCount;
+      
       const warnings: string[] = [];
-      if (menuSkipped > 0) {
-        warnings.push(`${menuSkipped} menu product(s) were skipped`);
-      }
-      if (ingredientSkipped > 0) {
-        warnings.push(`${ingredientSkipped} ingredient(s) were skipped`);
+      if (totalMenuProducts > 0) {
+        warnings.push(`✓ ${totalMenuProducts} recipe${totalMenuProducts !== 1 ? 's' : ''} imported`);
+        if (autoMatchedCount > 0) {
+          warnings.push(`  - ${autoMatchedCount} auto-matched`);
+        }
+        if (manuallyMatchedCount > 0) {
+          warnings.push(`  - ${manuallyMatchedCount} manually matched`);
+        }
       }
       
       setImportResults({ success: successCount, warnings, errors: [] });
