@@ -11,6 +11,7 @@ type RecipeContextType = {
   isSyncing: boolean;
   lastSyncTime: number;
   addOrUpdateRecipe: (recipe: Recipe) => Promise<void>;
+  batchAddOrUpdateRecipes: (recipes: Recipe[]) => Promise<void>;
   deleteRecipe: (menuProductId: string) => Promise<void>;
   getRecipeFor: (menuProductId: string) => Recipe | undefined;
   computeConsumption: (sales: { productId: string; sold: number }[]) => Map<string, number>;
@@ -64,6 +65,20 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     const next = [...recipes];
     const withTs = { ...recipe, updatedAt: Date.now() };
     if (idx >= 0) next[idx] = withTs; else next.push(withTs);
+    await save(next);
+  }, [recipes, save]);
+
+  const batchAddOrUpdateRecipes = useCallback(async (newRecipes: Recipe[]) => {
+    const next = [...recipes];
+    newRecipes.forEach(recipe => {
+      const withTs = { ...recipe, updatedAt: Date.now() };
+      const idx = next.findIndex(r => r.menuProductId === recipe.menuProductId);
+      if (idx >= 0) {
+        next[idx] = withTs;
+      } else {
+        next.push(withTs);
+      }
+    });
     await save(next);
   }, [recipes, save]);
 
@@ -124,11 +139,12 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     isSyncing,
     lastSyncTime,
     addOrUpdateRecipe,
+    batchAddOrUpdateRecipes,
     deleteRecipe,
     getRecipeFor,
     computeConsumption,
     syncRecipes,
-  }), [recipes, isLoading, isSyncing, lastSyncTime, addOrUpdateRecipe, deleteRecipe, getRecipeFor, computeConsumption, syncRecipes]);
+  }), [recipes, isLoading, isSyncing, lastSyncTime, addOrUpdateRecipe, batchAddOrUpdateRecipes, deleteRecipe, getRecipeFor, computeConsumption, syncRecipes]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

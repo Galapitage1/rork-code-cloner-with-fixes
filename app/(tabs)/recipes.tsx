@@ -17,7 +17,7 @@ import { formatCurrency } from '@/utils/currencyHelper';
 export default function RecipesScreen() {
   const { isAdmin, currency } = useAuth();
   const { products, productConversions, addProduct, syncAll } = useStock();
-  const { recipes, addOrUpdateRecipe, getRecipeFor, syncRecipes } = useRecipes();
+  const { recipes, addOrUpdateRecipe, batchAddOrUpdateRecipes, getRecipeFor, syncRecipes } = useRecipes();
   const { storeProducts } = useStores();
 
   const menuItems = useMemo(() => products.filter(p => p.type === 'menu'), [products]);
@@ -639,10 +639,8 @@ export default function RecipesScreen() {
       
       console.log(`[Recipes] Saving ${recipesToSave.length} recipes...`);
       
-      for (const recipe of recipesToSave) {
-        await addOrUpdateRecipe(recipe);
-        console.log(`[Recipes] ✓ Saved recipe for product ID: ${recipe.menuProductId}`);
-      }
+      await batchAddOrUpdateRecipes(recipesToSave);
+      console.log(`[Recipes] ✓ Saved all recipes`);
       
       console.log(`[Recipes] Syncing to server...`);
       await syncRecipes(true);
