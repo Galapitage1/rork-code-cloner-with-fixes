@@ -49,22 +49,28 @@ export default function RecipesScreen() {
   const [newProductUnit, setNewProductUnit] = useState<string>('');
   const [newProductCategory, setNewProductCategory] = useState<string>('');
   const [isAddingProduct, setIsAddingProduct] = useState<boolean>(false);
+  const [preferredUnits, setPreferredUnits] = useState<Record<string, string>>({});
 
   const SAVED_MATCHES_KEY = '@recipe_import_saved_matches';
   const MODAL_EXPANDED_KEY = '@recipe_import_modal_expanded';
+  const PREFERRED_UNITS_KEY = '@recipe_import_preferred_units';
 
   useEffect(() => {
     const loadSavedPreferences = async () => {
       try {
-        const [matchesStr, expandedStr] = await Promise.all([
+        const [matchesStr, expandedStr, unitsStr] = await Promise.all([
           AsyncStorage.getItem(SAVED_MATCHES_KEY),
           AsyncStorage.getItem(MODAL_EXPANDED_KEY),
+          AsyncStorage.getItem(PREFERRED_UNITS_KEY),
         ]);
         if (matchesStr) {
           setSavedMatches(JSON.parse(matchesStr));
         }
         if (expandedStr) {
           setModalExpanded(JSON.parse(expandedStr));
+        }
+        if (unitsStr) {
+          setPreferredUnits(JSON.parse(unitsStr));
         }
       } catch (e) {
         console.log('[Recipes] Failed to load saved preferences:', e);
@@ -98,6 +104,35 @@ export default function RecipesScreen() {
     const key = `${type}:${originalName.toLowerCase()}`;
     return savedMatches[key] || null;
   }, [savedMatches]);
+
+  const saveUnitPreference = useCallback(async (menuProductId: string, selectedUnitProductId: string) => {
+    const updated = { ...preferredUnits, [menuProductId]: selectedUnitProductId };
+    setPreferredUnits(updated);
+    try {
+      await AsyncStorage.setItem(PREFERRED_UNITS_KEY, JSON.stringify(updated));
+      console.log(`[Recipes] Saved unit preference for ${menuProductId}: ${selectedUnitProductId}`);
+    } catch (e) {
+      console.log('[Recipes] Failed to save unit preference:', e);
+    }
+  }, [preferredUnits]);
+
+  const getPreferredUnit = useCallback((menuProductId: string, availableUnits: { productId: string; unit: string }[]): string => {
+    if (preferredUnits[menuProductId]) {
+      const savedUnit = availableUnits.find(u => u.productId === preferredUnits[menuProductId]);
+      if (savedUnit) {
+        console.log(`[Recipes] Using saved unit preference for ${menuProductId}: ${savedUnit.unit}`);
+        return preferredUnits[menuProductId];
+      }
+    }
+    
+    const wholeUnit = availableUnits.find(u => u.unit.toLowerCase() === 'whole');
+    if (wholeUnit) {
+      console.log(`[Recipes] Auto-selecting "Whole" unit for ${menuProductId}`);
+      return wholeUnit.productId;
+    }
+    
+    return menuProductId;
+  }, [preferredUnits]);
 
   const calculateProductCost = useCallback((menuProductId: string): number | null => {
     const recipe = recipes.find(r => r.menuProductId === menuProductId);
@@ -472,9 +507,10 @@ export default function RecipesScreen() {
       
       if (ingredients.length > 0) {
         const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        const preferredUnitId = getPreferredUnit(menuProduct.id, availableUnits);
         recipesWithDetails.push({ 
           menuProduct, 
-          selectedProductId: menuProduct.id,
+          selectedProductId: preferredUnitId,
           availableUnits,
           ingredients 
         });
@@ -514,9 +550,10 @@ export default function RecipesScreen() {
       
       if (ingredients.length > 0) {
         const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        const preferredUnitId = getPreferredUnit(menuProduct.id, availableUnits);
         recipesWithDetails.push({ 
           menuProduct, 
-          selectedProductId: menuProduct.id,
+          selectedProductId: preferredUnitId,
           availableUnits,
           ingredients 
         });
@@ -555,9 +592,10 @@ export default function RecipesScreen() {
       
       if (ingredients.length > 0) {
         const availableUnits = getAvailableUnitsForProduct(menuProduct.id);
+        const preferredUnitId = getPreferredUnit(menuProduct.id, availableUnits);
         recipesWithDetails.push({ 
           menuProduct, 
-          selectedProductId: menuProduct.id,
+          selectedProductId: preferredUnitId,
           availableUnits,
           ingredients 
         });
@@ -961,9 +999,13 @@ export default function RecipesScreen() {
                                     isSelected && styles.unitOptionSelected,
                                   ]}
                                   onPress={() => {
-                                    setRecipesToConfirm(prev => prev.map((r, i) => 
-                                      i === idx ? { ...r, selectedProductId: unitOption.productId } : r
-                                    ));
+                                    setRecipesToConfirm(prev => prev.map((r, i) => {
+                                      if (i === idx) {
+                                        saveUnitPreference(r.menuProduct.id, unitOption.productId);
+                                        return { ...r, selectedProductId: unitOption.productId };
+                                      }
+                                      return r;
+                                    }));
                                   }}
                                 >
                                   <Text style={[
@@ -1035,7 +1077,7 @@ export default function RecipesScreen() {
                         {currentUnmatched.type === 'menu' ? 'Menu Product not found:' : 'Ingredient not found:'}
                       </Text>
                       <Text style={styles.unmatchedName}>
-                        &quot;{currentUnmatched.originalName}&quot;
+                        {currentUnmatched.originalName}
                         {currentUnmatched.originalUnit ? ` (${currentUnmatched.originalUnit})` : ''}
                       </Text>
                       {currentUnmatched.type === 'menu' && currentUnmatched.pendingIngredients && currentUnmatched.pendingIngredients.length > 0 && (
