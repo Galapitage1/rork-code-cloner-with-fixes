@@ -112,8 +112,12 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
       if (!silent) {
         setIsSyncing(true);
       }
+      
+      const localRaw = await AsyncStorage.getItem(STORAGE_KEY);
+      const localRecipes = localRaw ? JSON.parse(localRaw) : [];
+      
       const remoteData = await getFromServer<Recipe>({ userId: currentUser.id, dataType: 'recipes' });
-      const merged = mergeData(recipes, remoteData);
+      const merged = mergeData(localRecipes, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'recipes' });
       
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(synced));
@@ -129,7 +133,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
         setIsSyncing(false);
       }
     }
-  }, [currentUser, recipes]);
+  }, [currentUser]);
 
 
 
