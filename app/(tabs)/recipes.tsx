@@ -40,11 +40,10 @@ export default function RecipesScreen() {
   const [pendingRecipes, setPendingRecipes] = useState<Recipe[]>([]);
   const [resolvedIngredients, setResolvedIngredients] = useState<Map<string, { productId: string; quantity: number; forProductId: string }>>(new Map());
   const [resolvedMenuProducts, setResolvedMenuProducts] = useState<Map<string, { menuProductId: string; pendingIngredients: PendingIngredient[] }>>(new Map());
-  const [parsedBase64Data, setParsedBase64Data] = useState<string>('');
   const [savedMatches, setSavedMatches] = useState<Record<string, string>>({});
   const [modalExpanded, setModalExpanded] = useState<boolean>(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState<boolean>(false);
-  const [recipesToConfirm, setRecipesToConfirm] = useState<Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }>>([]);
+  const [recipesToConfirm, setRecipesToConfirm] = useState<{ menuProduct: Product; selectedProductId: string; availableUnits: { productId: string; unit: string }[]; ingredients: { rawProduct: Product; quantity: number }[] }[]>([]);
   const [showAddProductForm, setShowAddProductForm] = useState<boolean>(false);
   const [newProductName, setNewProductName] = useState<string>('');
   const [newProductUnit, setNewProductUnit] = useState<string>('');
@@ -268,9 +267,8 @@ export default function RecipesScreen() {
         return;
       }
 
-      // Store pending recipes and base64 data for re-parsing after menu resolution
+      // Store pending recipes for re-parsing after menu resolution
       setPendingRecipes(parsed.recipes);
-      setParsedBase64Data(base64Data);
       
       // Sort unmatched items: menu products first, then ingredients
       const sortedUnmatched = [
@@ -432,11 +430,11 @@ export default function RecipesScreen() {
     }
   };
 
-  const getAvailableUnitsForProduct = useCallback((productId: string): Array<{ productId: string; unit: string }> => {
+  const getAvailableUnitsForProduct = useCallback((productId: string): { productId: string; unit: string }[] => {
     const product = menuItems.find(p => p.id === productId);
     if (!product) return [];
     
-    const units: Array<{ productId: string; unit: string }> = [{ productId: product.id, unit: product.unit }];
+    const units: { productId: string; unit: string }[] = [{ productId: product.id, unit: product.unit }];
     
     const conversionsFrom = productConversions.filter(c => c.fromProductId === productId);
     conversionsFrom.forEach(conv => {
@@ -458,13 +456,13 @@ export default function RecipesScreen() {
   }, [menuItems, productConversions]);
 
   const showConfirmationScreen = (recipes: Recipe[]) => {
-    const recipesWithDetails: Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    const recipesWithDetails: { menuProduct: Product; selectedProductId: string; availableUnits: { productId: string; unit: string }[]; ingredients: { rawProduct: Product; quantity: number }[] }[] = [];
     
     for (const recipe of recipes) {
       const menuProduct = menuItems.find(m => m.id === recipe.menuProductId);
       if (!menuProduct) continue;
       
-      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      const ingredients: { rawProduct: Product; quantity: number }[] = [];
       for (const component of recipe.components) {
         const rawProduct = rawItems.find(r => r.id === component.rawProductId);
         if (rawProduct) {
@@ -489,14 +487,14 @@ export default function RecipesScreen() {
 
   const prepareConfirmationScreen = () => {
     // Build confirmation list from both pendingRecipes and resolved items
-    const recipesWithDetails: Array<{ menuProduct: Product; selectedProductId: string; availableUnits: Array<{ productId: string; unit: string }>; ingredients: Array<{ rawProduct: Product; quantity: number }> }> = [];
+    const recipesWithDetails: { menuProduct: Product; selectedProductId: string; availableUnits: { productId: string; unit: string }[]; ingredients: { rawProduct: Product; quantity: number }[] }[] = [];
     
     // Process pending recipes (auto-matched)
     for (const recipe of pendingRecipes) {
       const menuProduct = menuItems.find(m => m.id === recipe.menuProductId);
       if (!menuProduct) continue;
       
-      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      const ingredients: { rawProduct: Product; quantity: number }[] = [];
       for (const component of recipe.components) {
         const rawProduct = rawItems.find(r => r.id === component.rawProductId);
         if (rawProduct) {
@@ -533,7 +531,7 @@ export default function RecipesScreen() {
       // Skip if already in the list from pendingRecipes
       if (recipesWithDetails.find(r => r.menuProduct.id === menuProduct.id)) return;
       
-      const ingredients: Array<{ rawProduct: Product; quantity: number }> = [];
+      const ingredients: { rawProduct: Product; quantity: number }[] = [];
       
       // Add resolved ingredients for this menu product
       resolvedIngredients.forEach((resolvedIng) => {
@@ -668,162 +666,6 @@ export default function RecipesScreen() {
     }
   };
 
-  const finalizeImport = async () => {
-    try {
-      setShowMatchingModal(false);
-      setIsImporting(true);
-      
-      // Apply resolved ingredients to recipes
-      // Start with pending recipes and also include existing recipes that need updates
-      const finalRecipes = [...pendingRecipes];
-      const existingRecipesToUpdate = new Map<string, Recipe>();
-      
-      // Load existing recipes that may need new ingredients added
-      recipes.forEach(r => {
-        existingRecipesToUpdate.set(r.menuProductId, { ...r, components: [...r.components] });
-      });
-      
-      // Helper function to add ingredient to a recipe (handles both new and existing)
-      const addIngredientToRecipe = (menuProductId: string, rawProductId: string, quantity: number) => {
-        // First check if it's in finalRecipes (new recipes from this import)
-        let existingRecipe = finalRecipes.find(r => r.menuProductId === menuProductId);
-        
-        if (existingRecipe) {
-          const existingComponent = existingRecipe.components.find(c => c.rawProductId === rawProductId);
-          if (!existingComponent) {
-            existingRecipe.components.push({
-              rawProductId: rawProductId,
-              quantityPerUnit: quantity,
-            });
-          }
-          return;
-        }
-        
-        // Check if it's an existing recipe in the system
-        const systemRecipe = existingRecipesToUpdate.get(menuProductId);
-        if (systemRecipe) {
-          const existingComponent = systemRecipe.components.find(c => c.rawProductId === rawProductId);
-          if (!existingComponent) {
-            systemRecipe.components.push({
-              rawProductId: rawProductId,
-              quantityPerUnit: quantity,
-            });
-            systemRecipe.updatedAt = Date.now();
-          }
-          return;
-        }
-        
-        // Create new recipe
-        finalRecipes.push({
-          id: `rcp-${menuProductId}`,
-          menuProductId: menuProductId,
-          components: [{
-            rawProductId: rawProductId,
-            quantityPerUnit: quantity,
-          }],
-          updatedAt: Date.now(),
-        });
-      };
-      
-      // First, process resolved menu products and their pending ingredients
-      resolvedMenuProducts.forEach((resolved, _key) => {
-        const menuProductId = resolved.menuProductId;
-        const matchedMenuProduct = products.find(p => p.id === menuProductId);
-        
-        if (!matchedMenuProduct) {
-          console.log(`[Recipes] Could not find menu product with ID: ${menuProductId}`);
-          return;
-        }
-        
-        // Process pending ingredients for this menu product
-        resolved.pendingIngredients.forEach(pending => {
-          // First check if this ingredient was manually resolved
-          const resolvedKey = `${menuProductId}-${pending.ingredientName}-${pending.unit}`;
-          const manuallyResolved = resolvedIngredients.get(resolvedKey);
-          
-          if (manuallyResolved) {
-            // Use the manually resolved product
-            addIngredientToRecipe(menuProductId, manuallyResolved.productId, pending.quantity);
-            console.log(`[Recipes] Added manually resolved ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
-            return;
-          }
-          
-          // Try to auto-match the ingredient
-          const matchedRaw = rawItems.find(p => 
-            p.name.toLowerCase() === pending.ingredientName.toLowerCase()
-          ) || rawItems.find(p => 
-            p.name.toLowerCase().includes(pending.ingredientName.toLowerCase()) ||
-            pending.ingredientName.toLowerCase().includes(p.name.toLowerCase())
-          );
-          
-          if (matchedRaw) {
-            addIngredientToRecipe(menuProductId, matchedRaw.id, pending.quantity);
-            console.log(`[Recipes] Added auto-matched ingredient "${pending.ingredientName}" to menu product "${matchedMenuProduct.name}"`);
-          } else {
-            console.log(`[Recipes] Could not match ingredient "${pending.ingredientName}" for menu product "${matchedMenuProduct.name}"`);
-          }
-        });
-      });
-      
-      // Then, process resolved ingredients (for already matched menu products)
-      resolvedIngredients.forEach((resolved, _key) => {
-        addIngredientToRecipe(resolved.forProductId, resolved.productId, resolved.quantity);
-      });
-      
-      // Combine new recipes with updated existing recipes
-      const allRecipesToSave: Recipe[] = [...finalRecipes];
-      existingRecipesToUpdate.forEach((recipe, menuProductId) => {
-        // Only add if not already in finalRecipes
-        if (!finalRecipes.find(r => r.menuProductId === menuProductId)) {
-          const originalRecipe = recipes.find(r => r.menuProductId === menuProductId);
-          // Save if: (a) it's a new recipe with components, OR (b) it has more components than before
-          if ((!originalRecipe && recipe.components.length > 0) || 
-              (originalRecipe && recipe.components.length > originalRecipe.components.length)) {
-            allRecipesToSave.push(recipe);
-            console.log(`[Recipes] Saving recipe for menu product ID ${menuProductId}: ${recipe.components.length} ingredients`);
-          }
-        }
-      });
-      
-      let successCount = 0;
-      for (const recipe of allRecipesToSave) {
-        await addOrUpdateRecipe(recipe);
-        successCount++;
-      }
-      
-      // Calculate statistics for import summary
-      const autoMatchedCount = pendingRecipes.length;
-      const manuallyMatchedCount = resolvedMenuProducts.size;
-      const totalMenuProducts = autoMatchedCount + manuallyMatchedCount;
-      
-      const warnings: string[] = [];
-      if (totalMenuProducts > 0) {
-        warnings.push(`✓ ${totalMenuProducts} recipe${totalMenuProducts !== 1 ? 's' : ''} imported`);
-        if (autoMatchedCount > 0) {
-          warnings.push(`  - ${autoMatchedCount} auto-matched`);
-        }
-        if (manuallyMatchedCount > 0) {
-          warnings.push(`  - ${manuallyMatchedCount} manually matched`);
-        }
-      }
-      
-      setImportResults({ success: successCount, warnings, errors: [] });
-      setShowImportResults(true);
-      setIsImporting(false);
-      
-      // Reset state
-      setUnmatchedItems([]);
-      setCurrentUnmatchedIndex(0);
-      setResolvedIngredients(new Map());
-      setResolvedMenuProducts(new Map());
-      setPendingRecipes([]);
-      setParsedBase64Data('');
-    } catch (error) {
-      console.error('Finalize import error:', error);
-      Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to finalize import');
-      setIsImporting(false);
-    }
-  };
 
   const currentUnmatched = unmatchedItems[currentUnmatchedIndex];
   const filteredProductsForManual = useMemo(() => {
@@ -1195,7 +1037,7 @@ export default function RecipesScreen() {
                         {currentUnmatched.type === 'menu' ? 'Menu Product not found:' : 'Ingredient not found:'}
                       </Text>
                       <Text style={styles.unmatchedName}>
-                        "{currentUnmatched.originalName}"
+                        &quot;{currentUnmatched.originalName}&quot;
                         {currentUnmatched.originalUnit ? ` (${currentUnmatched.originalUnit})` : ''}
                       </Text>
                       {currentUnmatched.type === 'menu' && currentUnmatched.pendingIngredients && currentUnmatched.pendingIngredients.length > 0 && (
