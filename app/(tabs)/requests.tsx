@@ -57,6 +57,8 @@ export default function RequestsScreen() {
   const [selectedForRestore, setSelectedForRestore] = useState<Set<string>>(new Set());
   const [isLoadingDeleted, setIsLoadingDeleted] = useState<boolean>(false);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
+  const [showRestoreStartCalendar, setShowRestoreStartCalendar] = useState<boolean>(false);
+  const [showRestoreEndCalendar, setShowRestoreEndCalendar] = useState<boolean>(false);
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [importFromOutlet, setImportFromOutlet] = useState<string>('');
@@ -2003,6 +2005,28 @@ export default function RequestsScreen() {
             </View>
           </View>
         </Modal>
+
+        <CalendarModal
+          visible={showRestoreStartCalendar}
+          initialDate={restoreStartDate}
+          onClose={() => setShowRestoreStartCalendar(false)}
+          onSelect={(iso) => {
+            setRestoreStartDate(iso);
+            setShowRestoreStartCalendar(false);
+          }}
+          testID="calendar-restore-start"
+        />
+
+        <CalendarModal
+          visible={showRestoreEndCalendar}
+          initialDate={restoreEndDate}
+          onClose={() => setShowRestoreEndCalendar(false)}
+          onSelect={(iso) => {
+            setRestoreEndDate(iso);
+            setShowRestoreEndCalendar(false);
+          }}
+          testID="calendar-restore-end"
+        />
 
         </>
         )}

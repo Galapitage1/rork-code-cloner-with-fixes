@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, FlatList, ActivityIndicator, Alert, Switch, Modal, ScrollView, Dimensions, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
-import { FileSpreadsheet, UploadCloud, Download, ChevronDown, ChevronUp, Trash2, Calendar, AlertTriangle } from 'lucide-react-native';
+import { FileSpreadsheet, UploadCloud, Download, ChevronDown, ChevronUp, Trash2, Calendar, AlertTriangle, CalendarDays, X } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useStock } from '@/contexts/StockContext';
@@ -11,6 +11,7 @@ import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
 import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport } from '@/utils/reconciliationSync';
+import { CalendarModal } from '@/components/CalendarModal';
 
 
 function base64FromUri(uri: string): Promise<string> {
@@ -72,6 +73,7 @@ export default function SalesUploadScreen() {
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState<boolean>(false);
   const [deleteTargetIndex, setDeleteTargetIndex] = useState<number | null>(null);
   const [showClearDataModal, setShowClearDataModal] = useState<boolean>(false);
+  const [showClearDateCalendar, setShowClearDateCalendar] = useState<boolean>(false);
   const [clearDateInput, setClearDateInput] = useState<string>('');
   const [isClearing, setIsClearing] = useState<boolean>(false);
   const [showDeleteAllReconcileConfirm, setShowDeleteAllReconcileConfirm] = useState<boolean>(false);
@@ -2345,16 +2347,15 @@ export default function SalesUploadScreen() {
               Enter the date (DD/MM/YYYY) to clear all reconciliation data. This will:
               {`\n`}• Remove reconciliation history{`\n`}• Delete sales deduction records{`\n`}• Restore inventory quantities{`\n`}• Update live inventory
             </Text>
-            <View style={styles.dateInputContainer}>
-              <Calendar size={20} color={Colors.light.tint} />
-              <TextInput
-                style={styles.dateInput}
-                placeholder="DD/MM/YYYY (e.g., 13/11/2025)"
-                value={clearDateInput}
-                onChangeText={setClearDateInput}
-                placeholderTextColor={Colors.light.tabIconDefault}
-              />
-            </View>
+            <TouchableOpacity 
+              style={styles.dateInputContainer}
+              onPress={() => setShowClearDateCalendar(true)}
+            >
+              <CalendarDays size={20} color={Colors.light.tint} />
+              <Text style={[styles.dateInput, !clearDateInput && { color: Colors.light.tabIconDefault }]}>
+                {clearDateInput || 'Select date...'}
+              </Text>
+            </TouchableOpacity>
             <View style={styles.confirmModalButtons}>
               <TouchableOpacity
                 style={[styles.confirmModalButton, styles.confirmModalButtonCancel]}
@@ -2381,6 +2382,17 @@ export default function SalesUploadScreen() {
           </View>
         </View>
       </Modal>
+
+      <CalendarModal
+        visible={showClearDateCalendar}
+        initialDate={clearDateInput}
+        onClose={() => setShowClearDateCalendar(false)}
+        onSelect={(iso) => {
+          setClearDateInput(iso);
+          setShowClearDateCalendar(false);
+        }}
+        testID="calendar-clear-reconciliation"
+      />
 
       <Modal
         visible={showDeleteAllReconcileConfirm}

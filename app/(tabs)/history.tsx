@@ -14,6 +14,7 @@ import { parseStockCheckExcelFile } from '@/utils/excelParser';
 import { StockCheck, StockCount, ProductRequest } from '@/types';
 import { getFromServer } from '@/utils/directSync';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { CalendarModal } from '@/components/CalendarModal';
 
 export default function HistoryScreen() {
   const { stockChecks, products, requests, outlets, isLoading, deleteRequest, updateRequest, updateStockCheck, deleteAllStockChecks, deleteStockCheck, deleteAllRequests, saveStockCheck, productConversions } = useStock();
@@ -66,6 +67,9 @@ export default function HistoryScreen() {
   const [pullDataResults, setPullDataResults] = useState<{ stockChecks: StockCheck[]; requests: ProductRequest[] } | null>(null);
   const [pullAllData, setPullAllData] = useState<boolean>(false);
   const [pullIncludeDeleted, setPullIncludeDeleted] = useState<boolean>(false);
+  const [showImportStockCalendar, setShowImportStockCalendar] = useState<boolean>(false);
+  const [showPullStartCalendar, setShowPullStartCalendar] = useState<boolean>(false);
+  const [showPullEndCalendar, setShowPullEndCalendar] = useState<boolean>(false);
 
   const sortedChecks = useMemo(() => 
     [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
@@ -1847,16 +1851,15 @@ export default function HistoryScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Stock Check Date *</Text>
-                <View style={styles.dateEditButtonWrapper}>
+                <TouchableOpacity 
+                  style={styles.dateEditButtonWrapper}
+                  onPress={() => setShowImportStockCalendar(true)}
+                >
                   <Calendar size={16} color={Colors.light.tint} />
-                  <TextInput
-                    style={styles.dateEditInput}
-                    value={importStockDate}
-                    onChangeText={setImportStockDate}
-                    placeholder="YYYY-MM-DD"
-                    placeholderTextColor={Colors.light.muted}
-                  />
-                </View>
+                  <Text style={[styles.dateEditInput, !importStockDate && { color: Colors.light.muted }]}>
+                    {importStockDate || 'Select date...'}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <View style={styles.inputGroup}>
@@ -2031,30 +2034,28 @@ export default function HistoryScreen() {
                 <>
                   <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Start Date *</Text>
-                    <View style={styles.dateEditButtonWrapper}>
+                    <TouchableOpacity 
+                      style={styles.dateEditButtonWrapper}
+                      onPress={() => setShowPullStartCalendar(true)}
+                    >
                       <Calendar size={16} color={Colors.light.tint} />
-                      <TextInput
-                        style={styles.dateEditInput}
-                        value={pullStartDate}
-                        onChangeText={setPullStartDate}
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor={Colors.light.muted}
-                      />
-                    </View>
+                      <Text style={[styles.dateEditInput, !pullStartDate && { color: Colors.light.muted }]}>
+                        {pullStartDate || 'Select start date...'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
 
                   <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>End Date *</Text>
-                    <View style={styles.dateEditButtonWrapper}>
+                    <TouchableOpacity 
+                      style={styles.dateEditButtonWrapper}
+                      onPress={() => setShowPullEndCalendar(true)}
+                    >
                       <Calendar size={16} color={Colors.light.tint} />
-                      <TextInput
-                        style={styles.dateEditInput}
-                        value={pullEndDate}
-                        onChangeText={setPullEndDate}
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor={Colors.light.muted}
-                      />
-                    </View>
+                      <Text style={[styles.dateEditInput, !pullEndDate && { color: Colors.light.muted }]}>
+                        {pullEndDate || 'Select end date...'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </>
               )}
@@ -2217,6 +2218,39 @@ export default function HistoryScreen() {
           </View>
         </View>
       </Modal>
+
+      <CalendarModal
+        visible={showImportStockCalendar}
+        initialDate={importStockDate}
+        onClose={() => setShowImportStockCalendar(false)}
+        onSelect={(iso) => {
+          setImportStockDate(iso);
+          setShowImportStockCalendar(false);
+        }}
+        testID="calendar-import-stock"
+      />
+
+      <CalendarModal
+        visible={showPullStartCalendar}
+        initialDate={pullStartDate}
+        onClose={() => setShowPullStartCalendar(false)}
+        onSelect={(iso) => {
+          setPullStartDate(iso);
+          setShowPullStartCalendar(false);
+        }}
+        testID="calendar-pull-start"
+      />
+
+      <CalendarModal
+        visible={showPullEndCalendar}
+        initialDate={pullEndDate}
+        onClose={() => setShowPullEndCalendar(false)}
+        onSelect={(iso) => {
+          setPullEndDate(iso);
+          setShowPullEndCalendar(false);
+        }}
+        testID="calendar-pull-end"
+      />
     </View>
   );
 }

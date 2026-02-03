@@ -88,6 +88,12 @@ export default function ProductConversionsScreen() {
     });
   };
 
+  const productHasConversion = (productId: string): boolean => {
+    return productConversions.some(c => 
+      c.fromProductId === productId || c.toProductId === productId
+    );
+  };
+
   const handleSaveConversion = async () => {
     if (!conversionFromProductId || !conversionToProductId) {
       Alert.alert('Error', 'Please select both products.');
@@ -770,11 +776,18 @@ export default function ProductConversionsScreen() {
                           const searchLower = searchFromProduct.toLowerCase();
                           return p.name.toLowerCase().includes(searchLower) || p.unit.toLowerCase().includes(searchLower);
                         })
-                        .map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} ({p.unit})
-                        </option>
-                      ))}
+                        .map(p => {
+                          const hasConversion = productHasConversion(p.id);
+                          return (
+                            <option 
+                              key={p.id} 
+                              value={p.id}
+                              style={{ color: hasConversion ? '#22c55e' : undefined }}
+                            >
+                              {p.name} ({p.unit}){hasConversion ? ' ✓' : ''}
+                            </option>
+                          );
+                        })}
                     </select>
                   ) : (
                     <TouchableOpacity
@@ -790,10 +803,13 @@ export default function ProductConversionsScreen() {
                           'Select From Product',
                           '',
                           [
-                            ...filteredProducts.map(p => ({
-                              text: `${p.name} (${p.unit})`,
-                              onPress: () => setConversionFromProductId(p.id),
-                            })),
+                            ...filteredProducts.map(p => {
+                              const hasConversion = productHasConversion(p.id);
+                              return {
+                                text: `${p.name} (${p.unit})${hasConversion ? ' ✓' : ''}`,
+                                onPress: () => setConversionFromProductId(p.id),
+                              };
+                            }),
                             { text: 'Cancel', style: 'cancel' as const }
                           ]
                         );
@@ -849,11 +865,18 @@ export default function ProductConversionsScreen() {
                           const fromProduct = products.find(prod => prod.id === conversionFromProductId);
                           return fromProduct && p.name.toLowerCase() === fromProduct.name.toLowerCase() && p.unit !== fromProduct.unit;
                         })
-                        .map(p => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} ({p.unit})
-                          </option>
-                        ))}
+                        .map(p => {
+                          const hasConversion = productHasConversion(p.id);
+                          return (
+                            <option 
+                              key={p.id} 
+                              value={p.id}
+                              style={{ color: hasConversion ? '#22c55e' : undefined }}
+                            >
+                              {p.name} ({p.unit}){hasConversion ? ' ✓' : ''}
+                            </option>
+                          );
+                        })}
                     </select>
                   ) : (
                     <TouchableOpacity
@@ -869,10 +892,13 @@ export default function ProductConversionsScreen() {
                           'Select To Product',
                           '',
                           [
-                            ...filteredProducts.map(p => ({
-                              text: `${p.name} (${p.unit})`,
-                              onPress: () => setConversionToProductId(p.id),
-                            })),
+                            ...filteredProducts.map(p => {
+                              const hasConversion = productHasConversion(p.id);
+                              return {
+                                text: `${p.name} (${p.unit})${hasConversion ? ' ✓' : ''}`,
+                                onPress: () => setConversionToProductId(p.id),
+                              };
+                            }),
                             { text: 'Cancel', style: 'cancel' as const }
                           ]
                         );
