@@ -701,6 +701,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('replaceAllInventory flag:', stockCheck.replaceAllInventory);
       console.log('skipInventoryUpdate:', skipInventoryUpdate);
       
+      // CRITICAL: Block background syncs during this operation to prevent data loss
+      console.log('saveStockCheck: BLOCKING background sync');
+      syncInProgressRef.current = true;
+      
       const checkWithTimestamp = {
         ...stockCheck,
         updatedAt: stockCheck.updatedAt || Date.now(),
@@ -1057,7 +1061,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('saveStockCheck: Saved locally, will sync on next interval');
     } catch (error) {
       console.error('Failed to save stock check:', error);
+      syncInProgressRef.current = false;
       throw error;
+    } finally {
+      console.log('saveStockCheck: UNBLOCKING background sync');
+      syncInProgressRef.current = false;
     }
   }, [stockChecks, currentUser, outlets, inventoryStocks, saveInventoryStocks, addInventoryStock, getConversionFactor, getProductPairForInventory, products]);
 
@@ -1894,9 +1902,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('\n=== updateStockCheck START ===');
       console.log('Updating stock check ID:', checkId);
       
+      // CRITICAL: Block background syncs during this operation to prevent data loss
+      console.log('updateStockCheck: BLOCKING background sync');
+      syncInProgressRef.current = true;
+      
       const originalCheck = stockChecks.find(c => c.id === checkId);
       if (!originalCheck) {
         console.log('updateStockCheck: Stock check not found:', checkId);
+        syncInProgressRef.current = false;
         return;
       }
       
@@ -2051,7 +2064,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
     } catch (error) {
       console.error('Failed to update stock check:', error);
+      syncInProgressRef.current = false;
       throw error;
+    } finally {
+      console.log('updateStockCheck: UNBLOCKING background sync');
+      syncInProgressRef.current = false;
     }
   }, [stockChecks, inventoryStocks, getProductPairForInventory, getConversionFactor, saveInventoryStocks, currentUser]);
 
@@ -3145,14 +3162,20 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     console.log('[addReconcileHistory] Date:', history.date, 'Outlet:', history.outlet);
     console.log('[addReconcileHistory] Raw consumption entries:', history.rawConsumption?.length || 0);
     
-    const historyWithTimestamp = {
-      ...history,
-      updatedAt: Date.now(),
-      timestamp: history.timestamp || Date.now()
-    };
+    // CRITICAL: Block background syncs during this operation to prevent data loss
+    console.log('[addReconcileHistory] BLOCKING background sync');
+    const wasBlocked = syncInProgressRef.current;
+    syncInProgressRef.current = true;
     
-    const updated = [...reconcileHistory, historyWithTimestamp];
-    await saveReconcileHistory(updated);
+    try {
+      const historyWithTimestamp = {
+        ...history,
+        updatedAt: Date.now(),
+        timestamp: history.timestamp || Date.now()
+      };
+      
+      const updated = [...reconcileHistory, historyWithTimestamp];
+      await saveReconcileHistory(updated);
     
     // Create live inventory snapshot after sales reconciliation
     if (createSnapshotRef.current) {
@@ -3164,20 +3187,22 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
     }
     
-    // CRITICAL: Trigger IMMEDIATE sync to server so other devices can get this data
-    console.log('[addReconcileHistory] Triggering immediate sync to server...');
-    if (currentUser?.id && syncAllRef.current && !syncInProgressRef.current) {
-      try {
-        syncInProgressRef.current = true;
-        await syncData('reconcileHistory', updated, currentUser.id);
-        console.log('[addReconcileHistory] ✓ Reconciliation synced to server successfully');
-      } catch (syncError) {
-        console.error('[addReconcileHistory] ❌ Failed to sync to server:', syncError);
-      } finally {
-        syncInProgressRef.current = false;
+      // CRITICAL: Trigger IMMEDIATE sync to server so other devices can get this data
+      console.log('[addReconcileHistory] Triggering immediate sync to server...');
+      if (currentUser?.id) {
+        try {
+          await syncData('reconcileHistory', updated, currentUser.id);
+          console.log('[addReconcileHistory] ✓ Reconciliation synced to server successfully');
+        } catch (syncError) {
+          console.error('[addReconcileHistory] ❌ Failed to sync to server:', syncError);
+        }
+      } else {
+        console.log('[addReconcileHistory] ⚠️ Cannot sync - no user logged in');
       }
-    } else {
-      console.log('[addReconcileHistory] ⚠️ Cannot sync - no user or sync already in progress');
+    } finally {
+      // CRITICAL: Restore previous sync block state
+      console.log('[addReconcileHistory] UNBLOCKING background sync');
+      syncInProgressRef.current = wasBlocked;
     }
   }, [reconcileHistory, saveReconcileHistory, currentUser]);
 
