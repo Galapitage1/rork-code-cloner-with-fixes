@@ -3576,6 +3576,42 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         if (beforeCount > (syncedRequests as any[]).length) {
           console.log('StockContext syncAll: Post-sync cleanup - removed', beforeCount - (syncedRequests as any[]).length, 'old requests');
         }
+        
+        // CRITICAL: Clean up old reconciliation history (keep only last 40 days)
+        console.log('StockContext syncAll: Cleaning up old reconciliation history (keeping last 40 days)...');
+        const fortyDaysAgo = new Date();
+        fortyDaysAgo.setDate(fortyDaysAgo.getDate() - 40);
+        const fortyDaysAgoStr = fortyDaysAgo.toISOString().split('T')[0];
+        
+        const beforeReconcileCount = (syncedReconcileHistory as any[]).length;
+        syncedReconcileHistory = (syncedReconcileHistory as any[]).filter((history: any) => {
+          // Keep deleted items for 30 days to prevent resurrection
+          if (history.deleted) {
+            const deletedAt = history.updatedAt || 0;
+            return deletedAt > deletedRetentionTime;
+          }
+          return !history.date || history.date >= fortyDaysAgoStr;
+        });
+        
+        if (beforeReconcileCount > (syncedReconcileHistory as any[]).length) {
+          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeReconcileCount - (syncedReconcileHistory as any[]).length, 'old reconciliation entries (older than 40 days)');
+        }
+        
+        // CRITICAL: Clean up old sales deductions (keep only last 40 days)
+        console.log('StockContext syncAll: Cleaning up old sales deductions (keeping last 40 days)...');
+        const beforeDeductionsCount = (syncedSalesDeductions as any[]).length;
+        syncedSalesDeductions = (syncedSalesDeductions as any[]).filter((deduction: any) => {
+          // Keep deleted items for 30 days to prevent resurrection
+          if (deduction.deleted) {
+            const deletedAt = deduction.updatedAt || 0;
+            return deletedAt > deletedRetentionTime;
+          }
+          return !deduction.salesDate || deduction.salesDate >= fortyDaysAgoStr;
+        });
+        
+        if (beforeDeductionsCount > (syncedSalesDeductions as any[]).length) {
+          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeDeductionsCount - (syncedSalesDeductions as any[]).length, 'old sales deductions (older than 40 days)');
+        }
       }
       
       const failedSyncs = syncResults.filter((r, i) => {

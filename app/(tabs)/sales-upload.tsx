@@ -1229,12 +1229,32 @@ export default function SalesUploadScreen() {
 
     try {
       setIsClearing(true);
+      console.log('\n=== CLEAR RECONCILIATION DATA BY DATE START ===');
       console.log('Clearing reconciliation data for date:', clearDateInput);
 
+      // STEP 1: Clear local reconciliation history (UI view)
+      console.log('Step 1: Clearing local reconciliation history...');
       const updatedHistory = reconciliationHistory.filter(h => h.date !== clearDateInput);
       await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(updatedHistory));
       setReconciliationHistory(updatedHistory);
+      console.log('✓ Local reconciliation history cleared');
 
+      // STEP 2: Mark reconciliation entries for this date as deleted in StockContext
+      console.log('Step 2: Marking reconciliation entries as deleted in StockContext...');
+      const reconcileToDelete = reconcileHistory.filter(h => h.date === clearDateInput);
+      console.log(`Found ${reconcileToDelete.length} reconciliation entries to delete for ${clearDateInput}`);
+      
+      for (const entry of reconcileToDelete) {
+        try {
+          await deleteReconcileHistory(entry.id);
+          console.log(`✓ Marked reconciliation entry ${entry.id} as deleted`);
+        } catch (err) {
+          console.error(`Failed to delete reconciliation entry ${entry.id}:`, err);
+        }
+      }
+
+      // STEP 3: Restore inventory and mark sales deductions as deleted
+      console.log('Step 3: Restoring inventory and marking sales deductions as deleted...');
       const deductionsForDate = salesDeductions.filter(d => d.salesDate === clearDateInput);
       console.log(`Found ${deductionsForDate.length} sales deductions to restore for ${clearDateInput}`);
 
@@ -1268,22 +1288,43 @@ export default function SalesUploadScreen() {
         }
       }
 
-      const updatedDeductions = salesDeductions.filter(d => d.salesDate !== clearDateInput);
+      // Mark sales deductions as deleted (not removed) so they sync to server
+      const updatedDeductions = salesDeductions.map(d => 
+        d.salesDate === clearDateInput 
+          ? { ...d, deleted: true as const, updatedAt: Date.now() }
+          : d
+      );
       await AsyncStorage.setItem('@stock_app_sales_deductions', JSON.stringify(updatedDeductions));
+      console.log('✓ Marked sales deductions as deleted');
 
       const updatedInventory = [...inventoryStocks];
       await AsyncStorage.setItem('@stock_app_inventory_stocks', JSON.stringify(updatedInventory));
+      console.log('✓ Restored inventory');
+
+      // STEP 4: Sync deletions to server
+      console.log('Step 4: Syncing deletions to server...');
+      try {
+        await syncAll(false);
+        console.log('✓ Deletions synced to server successfully');
+      } catch (syncError) {
+        console.error('Failed to sync deletions to server:', syncError);
+        console.log('Data deleted locally but may not sync to server');
+      }
+      console.log('=== CLEAR RECONCILIATION DATA BY DATE COMPLETE ===\n');
 
       setShowClearDataModal(false);
       setClearDateInput('');
-      Alert.alert('Success', `Reconciliation data for ${clearDateInput} has been cleared and inventory restored.`);
+      Alert.alert(
+        'Success', 
+        `Reconciliation data for ${clearDateInput} has been cleared and synced to server. Other devices will sync this deletion on their next sync cycle.`
+      );
     } catch (error) {
       console.error('Failed to clear reconciliation data:', error);
       Alert.alert('Error', `Failed to clear reconciliation data: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsClearing(false);
     }
-  }, [clearDateInput, reconciliationHistory, salesDeductions, products, inventoryStocks, productConversions]);
+  }, [clearDateInput, reconciliationHistory, salesDeductions, products, inventoryStocks, productConversions, reconcileHistory, deleteReconcileHistory, syncAll]);
 
   const discrepanciesCount = useMemo(() => {
     if (!result) return 0;
