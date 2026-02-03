@@ -42,7 +42,7 @@ const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
-  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory, clearAllReconcileHistory } = useStock();
+  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory, clearAllReconcileHistory, deleteReconcileHistory } = useStock();
   const { recipes } = useRecipes();
   const { isSuperAdmin } = useAuth();
   

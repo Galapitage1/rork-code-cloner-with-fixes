@@ -3520,8 +3520,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const syncedOutlets = syncResults[3].status === 'fulfilled' ? syncResults[3].value : outletsToSync;
       const syncedConversions = syncResults[4].status === 'fulfilled' ? syncResults[4].value : conversionsToSync;
       const syncedInventory = syncResults[5].status === 'fulfilled' ? syncResults[5].value : inventoryToSync;
-      const syncedSalesDeductions = syncResults[6].status === 'fulfilled' ? syncResults[6].value : salesDeductionsToSync;
-      const syncedReconcileHistory = syncResults[7].status === 'fulfilled' ? syncResults[7].value : reconcileHistoryToSync;
+      let syncedSalesDeductions = syncResults[6].status === 'fulfilled' ? syncResults[6].value : salesDeductionsToSync;
+      let syncedReconcileHistory = syncResults[7].status === 'fulfilled' ? syncResults[7].value : reconcileHistoryToSync;
       const syncedSnapshots = syncResults[8].status === 'fulfilled' ? syncResults[8].value : snapshotsToSync;
       
       console.log('StockContext syncAll: ===== REQUESTS SYNC RESULT =====');
