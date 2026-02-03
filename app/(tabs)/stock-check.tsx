@@ -14,12 +14,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/contexts/AuthContext';
 import { ButtonViewMode } from '@/components/ButtonViewMode';
 import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, syncAllReconciliationData, KitchenStockReport } from '@/utils/reconciliationSync';
+import { useRecipes } from '@/contexts/RecipeContext';
+import { useStores } from '@/contexts/StoresContext';
 
 export default function StockCheckScreen() {
   const { products, outlets, saveStockCheck, stockChecks, isLoading, inventoryStocks, productConversions, requests, viewMode, reconcileHistory, syncAll } = useStock();
   const { getSortedProducts, trackUsage } = useProductUsage();
   const { currentUser, isSuperAdmin, enableReceivedAutoLoad } = useAuth();
   const { logActivity } = useActivityLog();
+  const { recipes } = useRecipes();
+  const { storeProducts } = useStores();
   
   const getProductPairForInventory = useCallback((productId: string) => {
     const fromConversion = productConversions.find(c => c.fromProductId === productId);
@@ -857,7 +861,22 @@ export default function StockCheckScreen() {
       
       setIsSaving(false);
 
-      Alert.alert('Success', 'Stock check saved successfully! You can export it from the History tab.');
+      // Automatically export stock check to Excel
+      console.log('performSave: Starting automatic Excel export...');
+      try {
+        await exportStockCheckToExcel(
+          stockCheck,
+          products,
+          recipes,
+          storeProducts,
+          productConversions
+        );
+        console.log('performSave: ✓ Excel export completed successfully');
+        Alert.alert('Success', 'Stock check saved and exported successfully!');
+      } catch (exportError) {
+        console.error('performSave: Excel export failed:', exportError);
+        Alert.alert('Success', 'Stock check saved successfully! However, Excel export failed. You can export it from the History tab.');
+      }
     } catch (error) {
       console.error('Save error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

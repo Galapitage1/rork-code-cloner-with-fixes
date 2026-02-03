@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ProductionRequest, ApprovedProduction } from '@/types';
 import { syncData } from '@/utils/syncData';
+import { saveToServer } from '@/utils/directSync';
 
 const STORAGE_KEYS = {
   PRODUCTION_REQUESTS: '@stock_app_production_requests',
@@ -140,15 +141,41 @@ export const [ProductionProvider, useProduction] = createContextHook(() => {
   }, [productionRequests, saveProductionRequests]);
 
   const approveProductionRequest = useCallback(async (approval: ApprovedProduction) => {
+    console.log('ProductionContext: Approving production request:', approval.requestId);
     
+    const now = Date.now();
     const updatedRequests = productionRequests.map(r =>
-      r.id === approval.requestId ? { ...r, status: 'approved' as const, updatedAt: Date.now() } : r
+      r.id === approval.requestId ? { ...r, status: 'approved' as const, updatedAt: now } : r
     );
-    await saveProductionRequests(updatedRequests as any);
     
     const updatedApprovals = [...approvedProductions, approval];
-    await saveApprovedProductions(updatedApprovals);
-  }, [productionRequests, saveProductionRequests, approvedProductions, saveApprovedProductions]);
+    
+    try {
+      if (currentUser?.id) {
+        console.log('ProductionContext: Immediately pushing approval to server to prevent sync conflicts');
+        
+        await Promise.all([
+          saveToServer(updatedRequests, { userId: currentUser.id, dataType: 'productionRequests' }),
+          saveToServer(updatedApprovals, { userId: currentUser.id, dataType: 'approvedProductions' })
+        ]);
+        
+        console.log('ProductionContext: ✓ Approval synced to server successfully');
+      }
+    } catch (serverError) {
+      console.error('ProductionContext: Failed to sync approval to server:', serverError);
+    }
+    
+    await AsyncStorage.setItem(STORAGE_KEYS.PRODUCTION_REQUESTS, JSON.stringify(updatedRequests));
+    await AsyncStorage.setItem(STORAGE_KEYS.APPROVED_PRODUCTIONS, JSON.stringify(updatedApprovals));
+    
+    const filteredRequests = updatedRequests.filter(r => !r.deleted);
+    const filteredApprovals = updatedApprovals.filter(a => !a.deleted);
+    
+    setProductionRequests(filteredRequests);
+    setApprovedProductions(filteredApprovals);
+    
+    console.log('ProductionContext: Local state updated with approval');
+  }, [productionRequests, approvedProductions, currentUser]);
 
   const syncAll = useCallback(async (silent: boolean = false) => {
     if (!currentUser || syncInProgressRef.current) {
