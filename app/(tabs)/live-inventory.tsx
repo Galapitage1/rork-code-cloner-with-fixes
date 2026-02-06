@@ -440,25 +440,31 @@ function LiveInventoryScreen() {
               console.log('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
               console.log('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
               
-              // Check BOTH whole and slices units separately
+              // CRITICAL FIX: For products with unit conversions, the sales report stores
+              // BOTH soldWhole AND soldSlices in a SINGLE entry (either the whole or slices product)
+              // We need to check BOTH product IDs and combine their sold data
               const wholeSalesData = salesReport.salesData.find(sd => sd.productId === pair.wholeId);
               const slicesSalesData = salesReport.salesData.find(sd => sd.productId === pair.slicesId);
               
               console.log('[SALES OUTLET] Found wholeSalesData?', !!wholeSalesData);
               console.log('[SALES OUTLET] Found slicesSalesData?', !!slicesSalesData);
               
+              // Add up sold data from BOTH entries (if they exist)
+              // Each entry contains BOTH whole and slices components
               if (wholeSalesData) {
-                soldWhole = wholeSalesData.soldWhole;
-                console.log(`[SALES OUTLET] ✓ Sold (Whole): ${soldWhole} for ${wholeProduct.name}`);
+                soldWhole += wholeSalesData.soldWhole || 0;
+                soldSlices += wholeSalesData.soldSlices || 0;
+                console.log(`[SALES OUTLET] ✓ From whole product entry: ${wholeSalesData.soldWhole}W + ${wholeSalesData.soldSlices}S`);
                 console.log(`[SALES OUTLET]   Product ID: ${wholeSalesData.productId}`);
                 console.log(`[SALES OUTLET]   Product Name: ${wholeSalesData.productName}`);
                 console.log(`[SALES OUTLET]   Unit: ${wholeSalesData.unit}`);
               }
               
               if (slicesSalesData) {
-                soldSlices = slicesSalesData.soldSlices;
+                soldWhole += slicesSalesData.soldWhole || 0;
+                soldSlices += slicesSalesData.soldSlices || 0;
                 const slicesProduct = products.find(p => p.id === pair.slicesId);
-                console.log(`[SALES OUTLET] ✓ Sold (Slices): ${soldSlices} for ${slicesProduct?.name}`);
+                console.log(`[SALES OUTLET] ✓ From slices product entry: ${slicesSalesData.soldWhole}W + ${slicesSalesData.soldSlices}S`);
                 console.log(`[SALES OUTLET]   Product ID: ${slicesSalesData.productId}`);
                 console.log(`[SALES OUTLET]   Product Name: ${slicesSalesData.productName}`);
                 console.log(`[SALES OUTLET]   Unit: ${slicesSalesData.unit}`);
@@ -474,7 +480,7 @@ function LiveInventoryScreen() {
                 });
               }
               
-              console.log(`[SALES OUTLET] FINAL SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
+              console.log(`[SALES OUTLET] FINAL COMBINED SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
             } else {
               console.log(`[SALES OUTLET] ⚠️ No sales report found for ${date}`);
               console.log(`[SALES OUTLET] Available sales reports:`);
