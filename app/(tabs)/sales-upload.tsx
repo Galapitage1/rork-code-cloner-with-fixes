@@ -1100,9 +1100,22 @@ export default function SalesUploadScreen() {
           // CRITICAL FIX: Trigger immediate sync and AWAIT it so reconciliation is on server BEFORE user can navigate away
           console.log('\n=== SYNCING RECONCILIATION TO SERVER (IMMEDIATE) ===');
           console.log('Triggering immediate sync to share reconciliation with other devices...');
+          console.log('⚠️ This sync must complete BEFORE any background sync to prevent data conflicts');
+          
           try {
+            // CRITICAL: First sync the NEW reconciliation system (sales reports)
+            // This must happen BEFORE StockContext sync to ensure fresh data is on server
+            console.log('Step 1: Syncing NEW reconciliation system (sales reports)...');
+            await syncAllReconciliationData();
+            console.log('✓ Sales reports synced to server');
+            
+            // Small delay to ensure server processes the sales report
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Now sync StockContext data
+            console.log('Step 2: Syncing StockContext data...');
             await syncAll(false); // Use manual sync (not silent) to ensure it completes
-            console.log('✓ Reconciliation synced to server successfully');
+            console.log('✓ StockContext synced to server successfully');
             console.log('✓ Other devices will receive it on their next sync');
           } catch (syncError) {
             console.error('❌ Failed to sync reconciliation to server:', syncError);

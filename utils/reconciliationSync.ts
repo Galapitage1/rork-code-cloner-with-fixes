@@ -218,12 +218,29 @@ export async function getLocalSalesReports(): Promise<SalesReport[]> {
 
 export async function syncKitchenStockReports(): Promise<void> {
   try {
+    console.log('\n[RECONCILIATION SYNC] Starting kitchen stock reports sync...');
+    
     const [localReports, serverReports] = await Promise.all([
       getLocalKitchenStockReports(),
       getKitchenStockReportsFromServer(),
     ]);
     
+    console.log('[RECONCILIATION SYNC] Local reports:', localReports.length);
+    console.log('[RECONCILIATION SYNC] Server reports:', serverReports.length);
+    
+    // Log any conflicts before merging
+    localReports.forEach(local => {
+      const server = serverReports.find(sr => sr.outlet === local.outlet && sr.date === local.date);
+      if (server && server.updatedAt !== local.updatedAt) {
+        console.log(`[RECONCILIATION SYNC] Conflict for ${local.outlet} ${local.date}:`);
+        console.log(`  Local updatedAt: ${new Date(local.updatedAt).toISOString()}`);
+        console.log(`  Server updatedAt: ${new Date(server.updatedAt).toISOString()}`);
+        console.log(`  Will keep: ${local.updatedAt > server.updatedAt ? 'LOCAL' : 'SERVER'}`);
+      }
+    });
+    
     const merged = mergeReports(localReports, serverReports);
+    console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
     await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(merged));
     
@@ -232,23 +249,57 @@ export async function syncKitchenStockReports(): Promise<void> {
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
     
+    console.log('[RECONCILIATION SYNC] Reports to push to server:', changedReports.length);
+    
     if (changedReports.length > 0) {
       for (const report of changedReports) {
+        console.log(`[RECONCILIATION SYNC] Pushing report to server: ${report.outlet} ${report.date}`);
         await saveKitchenStockReportToServer(report);
       }
     }
-  } catch {
+    
+    console.log('[RECONCILIATION SYNC] Kitchen stock reports sync complete\n');
+  } catch (error) {
+    console.error('[RECONCILIATION SYNC] Failed to sync kitchen stock reports:', error);
   }
 }
 
 export async function syncSalesReports(): Promise<void> {
   try {
+    console.log('\n[RECONCILIATION SYNC] Starting sales reports sync...');
+    
     const [localReports, serverReports] = await Promise.all([
       getLocalSalesReports(),
       getSalesReportsFromServer(),
     ]);
     
+    console.log('[RECONCILIATION SYNC] Local reports:', localReports.length);
+    console.log('[RECONCILIATION SYNC] Server reports:', serverReports.length);
+    
+    // Log any conflicts before merging
+    localReports.forEach(local => {
+      const server = serverReports.find(sr => sr.outlet === local.outlet && sr.date === local.date);
+      if (server && server.updatedAt !== local.updatedAt) {
+        console.log(`[RECONCILIATION SYNC] Conflict for ${local.outlet} ${local.date}:`);
+        console.log(`  Local updatedAt: ${new Date(local.updatedAt).toISOString()}`);
+        console.log(`  Server updatedAt: ${new Date(server.updatedAt).toISOString()}`);
+        console.log(`  Will keep: ${local.updatedAt > server.updatedAt ? 'LOCAL' : 'SERVER'}`);
+        
+        // Log sample sold data to see differences
+        if (local.salesData?.length > 0 && server.salesData?.length > 0) {
+          const localSample = local.salesData[0];
+          const serverSample = server.salesData.find(sd => sd.productId === localSample.productId);
+          if (serverSample) {
+            console.log(`  Sample product ${localSample.productName}:`);
+            console.log(`    Local: ${localSample.soldWhole}W/${localSample.soldSlices}S`);
+            console.log(`    Server: ${serverSample.soldWhole}W/${serverSample.soldSlices}S`);
+          }
+        }
+      }
+    });
+    
     const merged = mergeReports(localReports, serverReports);
+    console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
     await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(merged));
     
@@ -257,12 +308,18 @@ export async function syncSalesReports(): Promise<void> {
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
     
+    console.log('[RECONCILIATION SYNC] Reports to push to server:', changedReports.length);
+    
     if (changedReports.length > 0) {
       for (const report of changedReports) {
+        console.log(`[RECONCILIATION SYNC] Pushing report to server: ${report.outlet} ${report.date}`);
         await saveSalesReportToServer(report);
       }
     }
-  } catch {
+    
+    console.log('[RECONCILIATION SYNC] Sales reports sync complete\n');
+  } catch (error) {
+    console.error('[RECONCILIATION SYNC] Failed to sync sales reports:', error);
   }
 }
 

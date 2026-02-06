@@ -89,28 +89,61 @@ function LiveInventoryScreen() {
     const startDate = dates[0];
     const endDate = dates[dates.length - 1];
     
-    Promise.all([
-      syncAll(true),
-      syncAllReconciliationData()
-    ]).then(async () => {
-      console.log('[LIVE INVENTORY] ✓ Sync complete - now fetching reconciliation reports...');
-      
-      // Fetch the NEW reconciliation system data based on outlet type
-      if (outlet.outletType === 'production') {
-        const reports = await getKitchenStockReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
-        console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'kitchen stock reports for production outlet');
-        setKitchenStockReports(reports);
-        setSalesReports([]);
-      } else if (outlet.outletType === 'sales') {
-        const reports = await getSalesReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
-        console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'sales reports for sales outlet');
-        setSalesReports(reports);
-        setKitchenStockReports([]);
+    // CRITICAL: Sync in the correct order to prevent stale data
+    // 1. First sync NEW reconciliation system (sales/kitchen reports) - this is the SOURCE OF TRUTH
+    // 2. Then sync StockContext data (which might have older reconcileHistory)
+    // 3. Then fetch reports from the synced data
+    (async () => {
+      try {
+        console.log('[LIVE INVENTORY] Step 1: Syncing NEW reconciliation system...');
+        await syncAllReconciliationData();
+        console.log('[LIVE INVENTORY] ✓ NEW reconciliation system synced');
+        
+        console.log('[LIVE INVENTORY] Step 2: Syncing StockContext...');
+        await syncAll(true);
+        console.log('[LIVE INVENTORY] ✓ StockContext synced');
+        
+        console.log('[LIVE INVENTORY] Step 3: Fetching reconciliation reports...');
+        
+        // Small delay to ensure AsyncStorage has written the data
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Fetch the NEW reconciliation system data based on outlet type
+        if (outlet.outletType === 'production') {
+          const reports = await getKitchenStockReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
+          console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'kitchen stock reports for production outlet');
+          
+          // Log details of what we fetched
+          reports.forEach(r => {
+            console.log(`  - ${r.outlet} ${r.date}: ${r.products.length} products, updated ${new Date(r.updatedAt).toISOString()}`);
+          });
+          
+          setKitchenStockReports(reports);
+          setSalesReports([]);
+        } else if (outlet.outletType === 'sales') {
+          const reports = await getSalesReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
+          console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'sales reports for sales outlet');
+          
+          // Log details of what we fetched
+          reports.forEach(r => {
+            console.log(`  - ${r.outlet} ${r.date}: ${r.salesData?.length || 0} products, updated ${new Date(r.updatedAt).toISOString()}`);
+            if (r.salesData && r.salesData.length > 0) {
+              const sample = r.salesData[0];
+              console.log(`    Sample: ${sample.productName} -> ${sample.soldWhole}W/${sample.soldSlices}S`);
+            }
+          });
+          
+          setSalesReports(reports);
+          setKitchenStockReports([]);
+        }
+        
+        console.log('[LIVE INVENTORY] ✓ All data loaded and ready');
+      } catch (error) {
+        console.error('[LIVE INVENTORY] ❌ Sync/fetch failed:', error);
+      } finally {
+        setIsLoadingData(false);
       }
-    }).catch(error => {
-      console.error('[LIVE INVENTORY] Sync failed:', error);
-    }).finally(() => {      setIsLoadingData(false);
-    });
+    })();
   }, [selectedOutlet, selectedDate, dateRange, outlets, getDateRange, syncAll]);
 
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
@@ -404,6 +437,8 @@ function LiveInventoryScreen() {
             
             if (salesReport && salesReport.salesData) {
               console.log('[SALES OUTLET] salesData entries in report:', salesReport.salesData.length);
+              console.log('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
+              console.log('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
               
               // Check BOTH whole and slices units separately
               const wholeSalesData = salesReport.salesData.find(sd => sd.productId === pair.wholeId);
@@ -414,20 +449,38 @@ function LiveInventoryScreen() {
               
               if (wholeSalesData) {
                 soldWhole = wholeSalesData.soldWhole;
-                console.log(`[SALES OUTLET] Sold (Whole): ${soldWhole}`);
+                console.log(`[SALES OUTLET] ✓ Sold (Whole): ${soldWhole} for ${wholeProduct.name}`);
+                console.log(`[SALES OUTLET]   Product ID: ${wholeSalesData.productId}`);
+                console.log(`[SALES OUTLET]   Product Name: ${wholeSalesData.productName}`);
+                console.log(`[SALES OUTLET]   Unit: ${wholeSalesData.unit}`);
               }
               
               if (slicesSalesData) {
                 soldSlices = slicesSalesData.soldSlices;
-                console.log(`[SALES OUTLET] Sold (Slices): ${soldSlices}`);
+                const slicesProduct = products.find(p => p.id === pair.slicesId);
+                console.log(`[SALES OUTLET] ✓ Sold (Slices): ${soldSlices} for ${slicesProduct?.name}`);
+                console.log(`[SALES OUTLET]   Product ID: ${slicesSalesData.productId}`);
+                console.log(`[SALES OUTLET]   Product Name: ${slicesSalesData.productName}`);
+                console.log(`[SALES OUTLET]   Unit: ${slicesSalesData.unit}`);
               }
               
               if (!wholeSalesData && !slicesSalesData) {
-                console.log('[SALES OUTLET] No salesData found for either unit');
-                console.log('[SALES OUTLET] Available product IDs:', salesReport.salesData.map(sd => sd.productId).join(', '));
+                console.log('[SALES OUTLET] ⚠️ No salesData found for either unit');
+                console.log('[SALES OUTLET] Looking for wholeId:', pair.wholeId);
+                console.log('[SALES OUTLET] Looking for slicesId:', pair.slicesId);
+                console.log('[SALES OUTLET] Available products in report:');
+                salesReport.salesData.forEach(sd => {
+                  console.log(`  - ${sd.productName} (${sd.unit}): ${sd.productId} -> ${sd.soldWhole}W/${sd.soldSlices}S`);
+                });
               }
+              
+              console.log(`[SALES OUTLET] FINAL SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
             } else {
-              console.log(`[SALES OUTLET] No sales report found for ${date}`);
+              console.log(`[SALES OUTLET] ⚠️ No sales report found for ${date}`);
+              console.log(`[SALES OUTLET] Available sales reports:`);
+              salesReports.forEach(sr => {
+                console.log(`  - ${sr.outlet} ${sr.date} (${sr.salesData?.length || 0} products)`);
+              });
             }
           }
         }
