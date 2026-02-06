@@ -184,6 +184,17 @@ export const [ProductTrackerProvider, useProductTracker] = createContextHook(():
           if (sliceSaleData) {
             soldSlices = sliceSaleData.sold || 0;
           }
+          
+          // CRITICAL FIX: Convert total slices to whole + slices format
+          // Example: If 13 slices sold and 1 whole = 10 slices, then show 1 whole + 3 slices
+          if (soldSlices > 0 && wholeToSliceConv) {
+            const conversionFactor = wholeToSliceConv.conversionFactor;
+            const wholeFromSlices = Math.floor(soldSlices / conversionFactor);
+            const remainingSlices = Math.round(soldSlices % conversionFactor);
+            
+            soldWhole += wholeFromSlices;
+            soldSlices = remainingSlices;
+          }
         }
 
         if (reconcileForDate.rawConsumption && product.type === 'raw') {
