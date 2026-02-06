@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData } from '@/utils/reconciliationSync';
 import { CalendarModal } from '@/components/CalendarModal';
 
 
