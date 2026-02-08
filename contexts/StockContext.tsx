@@ -3187,12 +3187,26 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
     }
     
-      // CRITICAL: Trigger IMMEDIATE sync to server so other devices can get this data
+      // CRITICAL: Sync to server so other devices can get this data
+      // Must sync BOTH reconciliation AND current inventory/stock checks to prevent data loss
       console.log('[addReconcileHistory] Triggering immediate sync to server...');
       if (currentUser?.id) {
         try {
+          // CRITICAL FIX: Sync inventory stocks AND stock checks FIRST
+          // This ensures Prod.req (receivedStock) updates are on server BEFORE syncAll() pulls data
+          console.log('[addReconcileHistory] Step 1: Syncing inventory stocks to server (including Prod.req updates)...');
+          await syncData('inventoryStocks', inventoryStocks, currentUser.id);
+          console.log('[addReconcileHistory] ✓ Inventory stocks synced');
+          
+          console.log('[addReconcileHistory] Step 2: Syncing stock checks to server (including receivedStock/Prod.req)...');
+          await syncData('stockChecks', stockChecks, currentUser.id);
+          console.log('[addReconcileHistory] ✓ Stock checks synced');
+          
+          console.log('[addReconcileHistory] Step 3: Syncing reconciliation history to server...');
           await syncData('reconcileHistory', updated, currentUser.id);
           console.log('[addReconcileHistory] ✓ Reconciliation synced to server successfully');
+          
+          console.log('[addReconcileHistory] ✓ ALL data synced - Prod.req updates are now on server');
         } catch (syncError) {
           console.error('[addReconcileHistory] ❌ Failed to sync to server:', syncError);
         }
@@ -3204,7 +3218,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('[addReconcileHistory] UNBLOCKING background sync');
       syncInProgressRef.current = wasBlocked;
     }
-  }, [reconcileHistory, saveReconcileHistory, currentUser]);
+  }, [reconcileHistory, saveReconcileHistory, currentUser, inventoryStocks, stockChecks]);
 
   const deleteReconcileHistory = useCallback(async (historyId: string) => {
     const updated = reconcileHistory.map(h => 
