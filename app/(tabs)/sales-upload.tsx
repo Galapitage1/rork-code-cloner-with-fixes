@@ -1423,7 +1423,7 @@ export default function SalesUploadScreen() {
           const existingReport = existingReports.find(r => r.outlet === outletName && r.date === date && !r.deleted);
           
           // Build products array from discrepancies
-          const reportProducts = reconciled.discrepancies.map(d => {
+          const reportProductsRaw = reconciled.discrepancies.map(d => {
             const product = products.find((p: Product) => p.name === d.productName && p.unit === d.unit);
             
             if (!product) {
@@ -1454,7 +1454,7 @@ export default function SalesUploadScreen() {
               }
             }
             
-            console.log(`Kitchen report product: ${d.productName} - Storing with wholeId=${productIdToStore} - ${quantityWhole}W + ${quantitySlices}S`);
+            console.log(`Kitchen report product: ${d.productName} (${d.unit}) - Storing with wholeId=${productIdToStore} - ${quantityWhole}W + ${quantitySlices}S`);
             
             return {
               productId: productIdToStore,
@@ -1470,6 +1470,60 @@ export default function SalesUploadScreen() {
             quantityWhole: number;
             quantitySlices: number;
           }>;
+          
+          // CRITICAL FIX: Merge products with same productId (wholeId)
+          // This handles cases where Excel has both "Cake (whole)" and "Cake (slices)" in Column K
+          // They should be combined into a single entry
+          console.log('\n=== MERGING PRODUCTS WITH SAME WHOLE ID ===');
+          const productMap = new Map<string, {
+            productId: string;
+            productName: string;
+            unit: string;
+            quantityWhole: number;
+            quantitySlices: number;
+          }>();
+          
+          reportProductsRaw.forEach(p => {
+            const existing = productMap.get(p.productId);
+            
+            if (existing) {
+              console.log(`Merging duplicate entry for ${p.productName}:`);
+              console.log(`  Existing: ${existing.quantityWhole}W + ${existing.quantitySlices}S`);
+              console.log(`  Adding: ${p.quantityWhole}W + ${p.quantitySlices}S`);
+              
+              // Combine quantities
+              let totalWhole = existing.quantityWhole + p.quantityWhole;
+              let totalSlices = existing.quantitySlices + p.quantitySlices;
+              
+              // Normalize slices to whole if needed
+              const productConversion = productConversions.find(c => 
+                c.fromProductId === p.productId || c.toProductId === p.productId
+              );
+              
+              if (productConversion) {
+                const factor = productConversion.conversionFactor;
+                if (totalSlices >= factor) {
+                  const extraWhole = Math.floor(totalSlices / factor);
+                  totalWhole += extraWhole;
+                  totalSlices = Math.round(totalSlices % factor);
+                }
+              }
+              
+              console.log(`  Result: ${totalWhole}W + ${totalSlices}S`);
+              
+              productMap.set(p.productId, {
+                ...existing,
+                quantityWhole: totalWhole,
+                quantitySlices: totalSlices,
+              });
+            } else {
+              productMap.set(p.productId, p);
+            }
+          });
+          
+          const reportProducts = Array.from(productMap.values());
+          console.log(`Final report products: ${reportProducts.length} (merged from ${reportProductsRaw.length} raw entries)`);
+          console.log('=== MERGE COMPLETE ===\n');
           
           const now = Date.now();
           const reconsolidatedAt = new Date().toLocaleString('en-GB', {
