@@ -1355,8 +1355,10 @@ export default function SalesUploadScreen() {
       const steps = [
         { text: 'Selecting Excel file...', status: 'active' as const },
         { text: 'Reading file contents...', status: 'pending' as const },
+        { text: 'Syncing latest data from server...', status: 'pending' as const },
         { text: 'Parsing kitchen production data...', status: 'pending' as const },
         { text: 'Matching with stock checks...', status: 'pending' as const },
+        { text: 'Checking for existing reconciliation...', status: 'pending' as const },
         { text: 'Calculating discrepancies...', status: 'pending' as const },
       ];
       setProcessingSteps(steps);
@@ -1375,7 +1377,21 @@ export default function SalesUploadScreen() {
       console.log('KitchenStock: base64 length', base64.length);
       updateStep(1, 'complete');
       
+      // CRITICAL FIX: Sync BEFORE reconciliation to get latest kitchen stock reports from server
       updateStep(2, 'active');
+      console.log('\n=== SYNCING BEFORE KITCHEN RECONCILIATION ===');
+      console.log('Pulling latest kitchen stock reports from server...');
+      try {
+        await syncAllReconciliationData();
+        console.log('✓ Reconciliation sync complete');
+        await syncAll(true);
+        console.log('✓ StockContext sync complete');
+      } catch (syncError) {
+        console.error('Sync failed, proceeding with cached data:', syncError);
+      }
+      updateStep(2, 'complete');
+      
+      updateStep(3, 'active');
       let manualStockMap: Map<string, number> | undefined;
       if (kitchenManualMode && manualStockBase64) {
         try {
@@ -1387,29 +1403,57 @@ export default function SalesUploadScreen() {
           console.log('KitchenStock: failed to pre-parse manual stock', e);
         }
       }
-      updateStep(2, 'complete');
-      
-      updateStep(3, 'active');
-      const reconciled = reconcileKitchenStockFromExcelBase64(base64, stockChecks, products, { manualStockByProductId: manualStockMap });
-      console.log('KitchenStock: reconciled', reconciled);
       updateStep(3, 'complete');
       
       updateStep(4, 'active');
+      const reconciled = reconcileKitchenStockFromExcelBase64(base64, stockChecks, products, { manualStockByProductId: manualStockMap });
+      console.log('KitchenStock: reconciled', reconciled);
+      updateStep(4, 'complete');
+      
+      // CRITICAL FIX: Check if kitchen stock report already exists on server
+      updateStep(5, 'active');
+      const outletName = reconciled.outletName;
+      const date = reconciled.stockCheckDate;
+      let existingServerReport: any = null;
+      
+      if (outletName && date) {
+        console.log('\n=== CHECKING FOR EXISTING KITCHEN STOCK REPORT ===');
+        console.log('Outlet:', outletName, 'Date:', date);
+        
+        try {
+          const existingReports = await getLocalKitchenStockReports();
+          existingServerReport = existingReports.find(r => r.outlet === outletName && r.date === date && !r.deleted);
+          
+          if (existingServerReport) {
+            console.log('✓ FOUND EXISTING KITCHEN STOCK REPORT - Will apply Prods.Req from server');
+            console.log('  Report ID:', existingServerReport.id);
+            console.log('  Timestamp:', new Date(existingServerReport.timestamp).toISOString());
+            console.log('  Products:', existingServerReport.products?.length || 0);
+            console.log('=== WILL APPLY PRODS.REQ FROM SERVER DATA ===\n');
+          } else {
+            console.log('✗ NO EXISTING REPORT FOUND - This is first reconciliation');
+            console.log('=== WILL UPDATE PRODS.REQ WITH NEW DATA ===\n');
+          }
+        } catch (error) {
+          console.error('Failed to check for existing reports:', error);
+        }
+      }
+      updateStep(5, 'complete');
+      
+      updateStep(6, 'active');
       
       if (!reconciled.matched) {
         const msg = reconciled.errors.length > 0 ? reconciled.errors.join('\n') : 'No matching stock check found';
-        updateStep(4, 'error');
+        updateStep(6, 'error');
         setProcessingSteps(prev => [...prev, { text: `Error: ${msg}`, status: 'error' }]);
         setKitchenResult(null);
         return;
       }
       
       setKitchenResult(reconciled);
-      updateStep(4, 'complete');
+      updateStep(6, 'complete');
       
-      // Save kitchen stock report
-      const outletName = reconciled.outletName;
-      const date = reconciled.stockCheckDate;
+      // Save kitchen stock report and update Prods.Req
       
       if (outletName && date) {
         console.log('\n=== SAVING KITCHEN STOCK REPORT ===');
@@ -1418,9 +1462,8 @@ export default function SalesUploadScreen() {
         console.log('Items:', reconciled.discrepancies.length);
         
         try {
-          // Check for existing report
-          const existingReports = await getLocalKitchenStockReports();
-          const existingReport = existingReports.find(r => r.outlet === outletName && r.date === date && !r.deleted);
+          // Use the existing report we already found (from server sync)
+          const existingReport = existingServerReport;
           
           // Build products array from discrepancies
           const reportProductsRaw = reconciled.discrepancies.map(d => {
@@ -1578,6 +1621,24 @@ export default function SalesUploadScreen() {
             setProcessingSteps(prev => [...prev, { text: 'Updating Prods.Req in inventory...', status: 'active' }]);
             
             try {
+              // CRITICAL: Read FRESH inventory from AsyncStorage to prevent stale state issues
+              console.log('Reading FRESH inventory from AsyncStorage...');
+              const freshInventoryData = await AsyncStorage.getItem('@stock_app_inventory_stocks');
+              let freshInventory: InventoryStock[] = [];
+              
+              if (freshInventoryData) {
+                try {
+                  freshInventory = JSON.parse(freshInventoryData).filter((i: any) => !i?.deleted);
+                  console.log('✓ Loaded', freshInventory.length, 'inventory items from AsyncStorage');
+                } catch (parseError) {
+                  console.error('Failed to parse fresh inventory:', parseError);
+                  freshInventory = [...inventoryStocks];
+                }
+              } else {
+                console.log('No inventory data in AsyncStorage, using state');
+                freshInventory = [...inventoryStocks];
+              }
+              
               const inventoryUpdates: Array<{ productId: string; updates: Partial<InventoryStock> }> = [];
               
               for (const reportProduct of reportProducts) {
@@ -1586,7 +1647,7 @@ export default function SalesUploadScreen() {
                 const product = products.find(p => p.id === reportProduct.productId);
                 if (!product) continue;
                 
-                const invStock = inventoryStocks.find(s => s.productId === reportProduct.productId);
+                const invStock = freshInventory.find(s => s.productId === reportProduct.productId);
                 if (!invStock) {
                   console.log(`No inventory stock found for ${reportProduct.productName}, skipping`);
                   continue;
@@ -1655,6 +1716,17 @@ export default function SalesUploadScreen() {
                   await updateInventoryStock(update.productId, update.updates);
                 }
                 console.log('✓ All inventory updates applied');
+                
+                // CRITICAL: Immediately sync to server to prevent old data from overriding
+                console.log('\n=== SYNCING PRODS.REQ UPDATES TO SERVER ===');
+                try {
+                  await syncAll(false);
+                  console.log('✓ Prods.Req updates synced to server successfully');
+                } catch (syncError) {
+                  console.error('Failed to sync Prods.Req updates to server:', syncError);
+                }
+                console.log('=== SYNC COMPLETE ===\n');
+                
                 setProcessingSteps(prev => {
                   const updated = [...prev];
                   const lastIndex = updated.length - 1;
@@ -1700,7 +1772,7 @@ export default function SalesUploadScreen() {
     } finally {
       setIsPickingKitchen(false);
     }
-  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep]);
+  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep, productConversions, inventoryStocks, updateInventoryStock, getProductPair, syncAll]);
 
   const exportKitchenReport = useCallback(async () => {
     if (!kitchenResult) return;
