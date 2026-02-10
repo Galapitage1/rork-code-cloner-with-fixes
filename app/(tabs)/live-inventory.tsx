@@ -402,22 +402,37 @@ function LiveInventoryScreen() {
             
             if (reconcileForDate && reconcileForDate.rawConsumption) {
               console.log(`Product ${wholeProduct.name} is a RAW material - checking raw consumption from reconciliation`);
-              const rawConsumption = reconcileForDate.rawConsumption.find(
+              // CRITICAL: Check BOTH whole and slices product IDs (prefer whole)
+              const wholeRawConsumption = reconcileForDate.rawConsumption.find(
                 rc => rc.rawProductId === pair.wholeId
               );
+              const slicesRawConsumption = reconcileForDate.rawConsumption.find(
+                rc => rc.rawProductId === pair.slicesId
+              );
               
-              console.log(`[RAW MATERIAL CHECK] Looking for rawProductId: ${pair.wholeId}`);
+              const rawConsumption = wholeRawConsumption || slicesRawConsumption;
+              
+              console.log(`[RAW MATERIAL CHECK] Looking for wholeProductId: ${pair.wholeId}`);
+              console.log(`[RAW MATERIAL CHECK] Looking for slicesProductId: ${pair.slicesId}`);
               console.log(`[RAW MATERIAL CHECK] Found matching raw consumption?`, !!rawConsumption);
               
               if (rawConsumption) {
-                // Convert consumed quantity to whole + slices format
-                const consumedQty = rawConsumption.consumed;
-                const conversionFactor = pair.factor;
-                
-                soldWhole = Math.floor(consumedQty);
-                soldSlices = Math.round((consumedQty % 1) * conversionFactor);
-                
-                console.log(`  Raw consumption from reconciliation: ${consumedQty} = ${soldWhole}W + ${soldSlices}S`);
+                // Check if new format (with consumedWhole/consumedSlices) or old format (consumed only)
+                if ('consumedWhole' in rawConsumption && 'consumedSlices' in rawConsumption) {
+                  // New format - use directly
+                  soldWhole = (rawConsumption as any).consumedWhole || 0;
+                  soldSlices = (rawConsumption as any).consumedSlices || 0;
+                  console.log(`  Raw consumption (new format): ${soldWhole}W + ${soldSlices}S`);
+                } else {
+                  // Old format - convert
+                  const consumedQty = rawConsumption.consumed;
+                  const conversionFactor = pair.factor;
+                  
+                  soldWhole = Math.floor(consumedQty);
+                  soldSlices = Math.round((consumedQty % 1) * conversionFactor);
+                  
+                  console.log(`  Raw consumption (old format): ${consumedQty} = ${soldWhole}W + ${soldSlices}S`);
+                }
               } else {
                 console.log(`  No raw consumption data found in reconciliation for ${wholeProduct.name}`);
                 console.log(`  Available raw product IDs in reconciliation:`, reconcileForDate.rawConsumption.map(rc => rc.rawProductId).join(', '));
@@ -427,7 +442,7 @@ function LiveInventoryScreen() {
               console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), get sold data from NEW sales reports system
+            // For menu/kitchen products (not raw materials), get sold data from NEW sales reports
             console.log(`[SALES OUTLET] Product ${wholeProduct.name} on ${date} - checking NEW sales reports`);
             console.log('[SALES OUTLET] Total sales reports:', salesReports.length);
             
@@ -440,37 +455,34 @@ function LiveInventoryScreen() {
               console.log('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
               console.log('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
               
-              // CRITICAL FIX: For products with unit conversions, the sales report stores
-              // BOTH soldWhole AND soldSlices in a SINGLE entry (either the whole or slices product)
-              // We need to check BOTH product IDs and combine their sold data
+              // CRITICAL FIX: Sales report now contains DUPLICATE entries for products with unit conversions
+              // Both whole and slices product IDs have entries with the SAME soldWhole/soldSlices values
+              // We should use whichever entry we find (prefer whole product entry)
               const wholeSalesData = salesReport.salesData.find(sd => sd.productId === pair.wholeId);
               const slicesSalesData = salesReport.salesData.find(sd => sd.productId === pair.slicesId);
               
               console.log('[SALES OUTLET] Found wholeSalesData?', !!wholeSalesData);
               console.log('[SALES OUTLET] Found slicesSalesData?', !!slicesSalesData);
               
-              // Add up sold data from BOTH entries (if they exist)
-              // Each entry contains BOTH whole and slices components
-              if (wholeSalesData) {
-                soldWhole += wholeSalesData.soldWhole || 0;
-                soldSlices += wholeSalesData.soldSlices || 0;
-                console.log(`[SALES OUTLET] ✓ From whole product entry: ${wholeSalesData.soldWhole}W + ${wholeSalesData.soldSlices}S`);
-                console.log(`[SALES OUTLET]   Product ID: ${wholeSalesData.productId}`);
-                console.log(`[SALES OUTLET]   Product Name: ${wholeSalesData.productName}`);
-                console.log(`[SALES OUTLET]   Unit: ${wholeSalesData.unit}`);
+              // Use whichever entry we found (prefer whole product, but use slices if whole not found)
+              // IMPORTANT: Do NOT add them together - they contain the same data
+              const salesData = wholeSalesData || slicesSalesData;
+              
+              if (salesData) {
+                soldWhole = salesData.soldWhole || 0;
+                soldSlices = salesData.soldSlices || 0;
+                console.log(`[SALES OUTLET] ✓ Using sales data from: ${salesData.productName} (${salesData.unit})`);
+                console.log(`[SALES OUTLET]   Product ID: ${salesData.productId}`);
+                console.log(`[SALES OUTLET]   Sold: ${soldWhole}W + ${soldSlices}S`);
+                
+                if (wholeSalesData && slicesSalesData) {
+                  console.log(`[SALES OUTLET]   Note: Both whole and slices entries found (using whole entry)`);
+                  console.log(`[SALES OUTLET]   Whole entry: ${wholeSalesData.soldWhole}W/${wholeSalesData.soldSlices}S`);
+                  console.log(`[SALES OUTLET]   Slices entry: ${slicesSalesData.soldWhole}W/${slicesSalesData.soldSlices}S`);
+                }
               }
               
-              if (slicesSalesData) {
-                soldWhole += slicesSalesData.soldWhole || 0;
-                soldSlices += slicesSalesData.soldSlices || 0;
-                const slicesProduct = products.find(p => p.id === pair.slicesId);
-                console.log(`[SALES OUTLET] ✓ From slices product entry: ${slicesSalesData.soldWhole}W + ${slicesSalesData.soldSlices}S`);
-                console.log(`[SALES OUTLET]   Product ID: ${slicesSalesData.productId}`);
-                console.log(`[SALES OUTLET]   Product Name: ${slicesSalesData.productName}`);
-                console.log(`[SALES OUTLET]   Unit: ${slicesSalesData.unit}`);
-              }
-              
-              if (!wholeSalesData && !slicesSalesData) {
+              if (!salesData) {
                 console.log('[SALES OUTLET] ⚠️ No salesData found for either unit');
                 console.log('[SALES OUTLET] Looking for wholeId:', pair.wholeId);
                 console.log('[SALES OUTLET] Looking for slicesId:', pair.slicesId);
@@ -480,7 +492,7 @@ function LiveInventoryScreen() {
                 });
               }
               
-              console.log(`[SALES OUTLET] FINAL COMBINED SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
+              console.log(`[SALES OUTLET] FINAL SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
             } else {
               console.log(`[SALES OUTLET] ⚠️ No sales report found for ${date}`);
               console.log(`[SALES OUTLET] Available sales reports:`);
