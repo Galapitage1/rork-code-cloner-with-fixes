@@ -199,6 +199,11 @@ export interface SalesReconciliationHistory {
     rawProductId: string;
     consumed: number;
   }[];
+  prodsReqUpdates?: {
+    productId: string;
+    prodsReqWhole: number;
+    prodsReqSlices: number;
+  }[];
   timestamp: number;
   updatedAt?: number;
   deviceId?: string;

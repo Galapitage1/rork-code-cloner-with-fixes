@@ -4041,7 +4041,48 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const finalReconcileHistory = mergeReconcileHistoryByActualTimestamp(reconcileHistory, syncedReconcileHistory as any);
       console.log('  Final reconcile history after merge:', finalReconcileHistory.length);
       
-      console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
+      // CRITICAL FIX: Restore prodsReqUpdates from reconciliation history to inventory
+      // When reconciliation is done, production request values are saved in reconciliation history
+      // After sync, we need to re-apply these values to ensure they're not lost
+      console.log('StockContext syncAll: RESTORING prodsReq values from reconciliation history...');
+      let prodsReqRestoreCount = 0;
+      (finalReconcileHistory as any[]).forEach((history: any) => {
+        if (history.prodsReqUpdates && Array.isArray(history.prodsReqUpdates)) {
+          history.prodsReqUpdates.forEach((update: any) => {
+            const invIndex = (finalInventory as any[]).findIndex(inv => inv.productId === update.productId && !inv.deleted);
+            if (invIndex !== -1) {
+              const existing = (finalInventory as any[])[invIndex];
+              const existingProdsReqWhole = existing.prodsReqWhole || 0;
+              const existingProdsReqSlices = existing.prodsReqSlices || 0;
+              
+              // Only update if the values from history are different (indicates they were lost)
+              if (existingProdsReqWhole !== update.prodsReqWhole || existingProdsReqSlices !== update.prodsReqSlices) {
+                (finalInventory as any[])[invIndex] = {
+                  ...existing,
+                  prodsReqWhole: update.prodsReqWhole,
+                  prodsReqSlices: update.prodsReqSlices,
+                  updatedAt: Date.now(),
+                };
+                prodsReqRestoreCount++;
+                console.log(`  Restored Prods.Req for productId ${update.productId}: ${update.prodsReqWhole}W/${update.prodsReqSlices}S (from reconciliation: ${history.outlet} ${history.date})`);
+              }
+            }
+          });
+        }
+      });
+      console.log(`  ✓ Restored ${prodsReqRestoreCount} Prods.Req values from reconciliation history`);
+      
+      // Save the updated inventory stocks if we restored any prodsReq values
+      if (prodsReqRestoreCount > 0) {
+        console.log('StockContext syncAll: Saving restored inventory stocks to AsyncStorage...');
+        try {
+          await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(finalInventory));
+          console.log('✓ Saved inventory stocks with restored Prods.Req values');
+        } catch (saveError) {
+          console.error('Failed to save restored inventory stocks:', saveError);
+        }
+      }
+      
       console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
       console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, '← CRITICAL FOR LIVE INVENTORY', 'reconcile:', finalReconcileHistory.length, '← RECONCILE DATA', 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
       

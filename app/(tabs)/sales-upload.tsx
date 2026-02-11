@@ -377,6 +377,12 @@ export default function SalesUploadScreen() {
       updates: any;
     }> = [];
     
+    const prodsReqUpdatesForHistory: Array<{
+      productId: string;
+      prodsReqWhole: number;
+      prodsReqSlices: number;
+    }> = [];
+    
     const stockCheckUpdates: Map<string, any> = new Map();
     
     for (const row of reconciled.rows) {
@@ -476,6 +482,12 @@ export default function SalesUploadScreen() {
               prodsReqWhole: newProdsReqWhole,
               prodsReqSlices: newProdsReqSlices,
             }
+          });
+          
+          prodsReqUpdatesForHistory.push({
+            productId: productPair.wholeProductId,
+            prodsReqWhole: newProdsReqWhole,
+            prodsReqSlices: newProdsReqSlices,
           });
           
           console.log(`SalesUpload: Queued Prods.Req update - was ${currentProdsReqWhole}W/${currentProdsReqSlices}S, will be ${newProdsReqWhole}W/${newProdsReqSlices}S`);
@@ -596,6 +608,7 @@ export default function SalesUploadScreen() {
     await Promise.all(inventoryPromises);
     console.log(`✓ Completed ${inventoryUpdates.length} inventory stock updates`);
     
+    return prodsReqUpdatesForHistory;
   }, [products, inventoryStocks, outlets, stockChecks, salesDeductions, deductInventoryFromSales, updateStockCheck, getProductPair, updateInventoryStock]);
 
   const saveReconciliationToHistory = useCallback(async (reconciled: SalesReconcileResult) => {
@@ -787,20 +800,28 @@ export default function SalesUploadScreen() {
           
           updateStep(5, 'complete');
           updateStep(6, 'active');
-          await Promise.all([
+          const [prodsReqUpdates] = await Promise.all([
             processSalesInventoryDeductions(reconciled),
             processRawMaterialDeductions(reconciled, base64)
           ]);
+          
+          // Store prodsReqUpdates for later use in reconciliation history
+          (reconciled as any).prodsReqUpdatesFromDeductions = prodsReqUpdates;
+          
           updateStep(6, 'complete');
         }
       } else {
         console.log('⚠️ WARNING: Missing outlet or date - cannot check for existing reconciliation');
         updateStep(5, 'complete');
         updateStep(6, 'active');
-        await Promise.all([
+        const [prodsReqUpdates] = await Promise.all([
           processSalesInventoryDeductions(reconciled),
           processRawMaterialDeductions(reconciled, base64)
         ]);
+        
+        // Store prodsReqUpdates for later use in reconciliation history
+        (reconciled as any).prodsReqUpdatesFromDeductions = prodsReqUpdates;
+        
         updateStep(6, 'complete');
       }
       
@@ -950,6 +971,8 @@ export default function SalesUploadScreen() {
             return `${prod?.name} (${prod?.unit}): sold=${sd.sold}`;
           }).join(', '));
           
+          const prodsReqUpdates = (reconciled as any).prodsReqUpdatesFromDeductions || [];
+          
           const reconcileHistoryEntry = {
             id: `reconcile-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             date,
@@ -960,6 +983,7 @@ export default function SalesUploadScreen() {
               rawProductId: r.rawProductId,
               consumed: r.consumed,
             })) || [],
+            prodsReqUpdates: prodsReqUpdates.length > 0 ? prodsReqUpdates : undefined,
             timestamp: Date.now(),
             updatedAt: Date.now(),
           };
@@ -969,7 +993,9 @@ export default function SalesUploadScreen() {
             date: reconcileHistoryEntry.date,
             outlet: reconcileHistoryEntry.outlet,
             rawConsumptionCount: reconcileHistoryEntry.rawConsumption.length,
-            rawConsumption: reconcileHistoryEntry.rawConsumption
+            rawConsumption: reconcileHistoryEntry.rawConsumption,
+            prodsReqUpdatesCount: reconcileHistoryEntry.prodsReqUpdates?.length || 0,
+            prodsReqUpdates: reconcileHistoryEntry.prodsReqUpdates
           }, null, 2));
           
           await addReconcileHistory(reconcileHistoryEntry);
