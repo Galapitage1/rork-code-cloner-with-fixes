@@ -3497,9 +3497,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         }
       }
       
-      // CLEANUP: Keep only last 90 days of snapshots
+      // CLEANUP: Keep only last 30 days of snapshots (reduced from 90 to save storage)
+      // Snapshots contain full inventory details and can be very large
       if (snapshotsToSync.length > 0 && silent && !forceFullSync) {
-        const SNAPSHOT_RETENTION_DAYS = 90;
+        const SNAPSHOT_RETENTION_DAYS = 30;
         const retentionDate = new Date();
         retentionDate.setDate(retentionDate.getDate() - SNAPSHOT_RETENTION_DAYS);
         const retentionDateStr = retentionDate.toISOString().split('T')[0];
@@ -3511,8 +3512,13 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           return snapshot.date >= retentionDateStr;
         });
         
+        // Additional limit: keep max 30 snapshots even within retention period
+        if (snapshotsToSync.length > 30) {
+          snapshotsToSync = snapshotsToSync.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 30);
+        }
+        
         if (originalCount > snapshotsToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - snapshotsToSync.length, 'old snapshots (older than 90 days)');
+          console.log('StockContext syncAll: Cleaned up', originalCount - snapshotsToSync.length, 'old snapshots (keeping last 30 days, max 30 items)');
         }
       }
       
@@ -3715,7 +3721,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(syncedConversions));
       await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(syncedInventory));
       await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(syncedSalesDeductions));
-      await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(syncedSnapshots));
+      
+      try {
+        await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(syncedSnapshots));
+      } catch (quotaError: any) {
+        if (quotaError?.message?.includes('QuotaExceeded') || quotaError?.message?.includes('quota')) {
+          console.warn('StockContext syncAll: Live inventory snapshots exceeded quota, trimming to 15 most recent');
+          const sortedSnapshots = (syncedSnapshots as any[]).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+          const trimmedSnapshots = sortedSnapshots.slice(0, 15);
+          await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(trimmedSnapshots));
+        } else {
+          throw quotaError;
+        }
+      }
       
       try {
         await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(syncedReconcileHistory));
@@ -4302,10 +4320,22 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     };
     
     const updated = [...liveInventorySnapshots.filter(s => s.date !== dateStr), snapshot];
-    const sortedSnapshots = updated.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 90);
+    const sortedSnapshots = updated.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
     
     setLiveInventorySnapshots(sortedSnapshots);
-    await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(sortedSnapshots));
+    
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(sortedSnapshots));
+    } catch (quotaError: any) {
+      if (quotaError?.message?.includes('QuotaExceeded') || quotaError?.message?.includes('quota')) {
+        console.warn('StockContext: Live inventory snapshots exceeded quota, trimming to 15 most recent');
+        const trimmedSnapshots = sortedSnapshots.slice(0, 15);
+        setLiveInventorySnapshots(trimmedSnapshots);
+        await AsyncStorage.setItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS, JSON.stringify(trimmedSnapshots));
+      } else {
+        throw quotaError;
+      }
+    }
     
     console.log('StockContext: Created live inventory snapshot for', dateStr, 'triggered by', triggeredBy);
     return snapshot;
