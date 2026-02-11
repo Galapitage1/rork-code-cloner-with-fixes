@@ -43,7 +43,8 @@ const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
-  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory, clearAllReconcileHistory, deleteReconcileHistory } = useStock();
+  const stockContext = useStock();
+  const { stockChecks, products, productConversions, deductInventoryFromSales, inventoryStocks, outlets, salesDeductions, updateStockCheck, addReconcileHistory, syncAll, updateInventoryStock, reconcileHistory, clearAllReconcileHistory, deleteReconcileHistory } = stockContext;
   const { recipes } = useRecipes();
   const { isSuperAdmin } = useAuth();
   
@@ -1444,6 +1445,17 @@ export default function SalesUploadScreen() {
 
   const pickKitchenFile = useCallback(async () => {
     try {
+      console.log('\n=== KITCHEN RECONCILIATION START ===');
+      console.log('BLOCKING background syncs to prevent data conflicts...');
+      
+      // CRITICAL: Block background syncs to prevent data conflicts
+      // This prevents background sync from pulling old server data and overriding our Prods.Req updates
+      const syncInProgressRef = (stockContext as any).syncInProgressRef;
+      if (syncInProgressRef) {
+        syncInProgressRef.current = true;
+        console.log('✓ Background syncs BLOCKED');
+      }
+      
       setIsPickingKitchen(true);
       setKitchenResult(null);
       setShowProcessingModal(true);
@@ -1757,7 +1769,7 @@ export default function SalesUploadScreen() {
                 
                 if (previousReport) {
                   // Find the previous quantity for this product
-                  const prevProduct = previousReport.products.find(p => p.productId === reportProduct.productId);
+                  const prevProduct = previousReport.products.find((p: any) => p.productId === reportProduct.productId);
                   
                   if (prevProduct) {
                     const quantitiesChanged = 
@@ -1808,18 +1820,51 @@ export default function SalesUploadScreen() {
               // Apply all inventory updates
               if (inventoryUpdates.length > 0) {
                 console.log(`Applying ${inventoryUpdates.length} inventory updates...`);
+                
+                // CRITICAL: Update inventory stocks in AsyncStorage directly to ensure persistence
+                console.log('Reading current inventory from AsyncStorage for atomic update...');
+                const currentInventoryData = await AsyncStorage.getItem('@stock_app_inventory_stocks');
+                let currentInventory: InventoryStock[] = [];
+                
+                if (currentInventoryData) {
+                  currentInventory = JSON.parse(currentInventoryData).filter((i: any) => !i?.deleted);
+                }
+                
+                // Apply updates to fresh inventory data
+                const updatedInventory = currentInventory.map((inv: InventoryStock) => {
+                  const update = inventoryUpdates.find((u: { productId: string; updates: Partial<InventoryStock> }) => u.productId === inv.productId);
+                  if (update) {
+                    console.log(`Applying update to ${inv.productId}: prodsReqWhole=${update.updates.prodsReqWhole}, prodsReqSlices=${update.updates.prodsReqSlices}`);
+                    return {
+                      ...inv,
+                      ...update.updates,
+                      updatedAt: Date.now(),
+                    };
+                  }
+                  return inv;
+                });
+                
+                // Save updated inventory to AsyncStorage FIRST
+                console.log('Saving updated inventory to AsyncStorage...');
+                await AsyncStorage.setItem('@stock_app_inventory_stocks', JSON.stringify(updatedInventory));
+                console.log('✓ Inventory saved to AsyncStorage');
+                
+                // Then call updateInventoryStock to update state and trigger sync
                 for (const update of inventoryUpdates) {
                   await updateInventoryStock(update.productId, update.updates);
                 }
-                console.log('✓ All inventory updates applied');
+                console.log('✓ All inventory updates applied to state');
                 
                 // CRITICAL: Immediately sync to server to prevent old data from overriding
-                console.log('\n=== SYNCING PRODS.REQ UPDATES TO SERVER ===');
+                console.log('\n=== SYNCING PRODS.REQ UPDATES TO SERVER (IMMEDIATE) ===');
+                console.log('⚠️ This sync must complete to share Prods.Req with other devices');
                 try {
                   await syncAll(false);
                   console.log('✓ Prods.Req updates synced to server successfully');
+                  console.log('✓ Other devices will see Prods.Req updates on their next sync');
                 } catch (syncError) {
-                  console.error('Failed to sync Prods.Req updates to server:', syncError);
+                  console.error('❌ Failed to sync Prods.Req updates to server:', syncError);
+                  Alert.alert('Sync Warning', 'Prods.Req updated locally but could not sync to server. Other devices may not see these updates.');
                 }
                 console.log('=== SYNC COMPLETE ===\n');
                 
@@ -1862,13 +1907,23 @@ export default function SalesUploadScreen() {
       if (reconciled.errors.length > 0) {
         setProcessingSteps(prev => [...prev, { text: `Note: ${reconciled.errors.join(', ')}`, status: 'error' }]);
       }
+      
+      console.log('=== KITCHEN RECONCILIATION COMPLETE ===\n');
     } catch (e) {
       console.error('KitchenStock: pick error', e);
       setProcessingSteps(prev => [...prev, { text: `Fatal Error: ${e instanceof Error ? e.message : 'Failed to load file'}`, status: 'error' }]);
     } finally {
       setIsPickingKitchen(false);
+      
+      // CRITICAL: Re-enable background syncs after kitchen reconciliation is complete
+      console.log('RESUMING background syncs...');
+      const syncInProgressRef = (stockContext as any).syncInProgressRef;
+      if (syncInProgressRef) {
+        syncInProgressRef.current = false;
+        console.log('✓ Background syncs RESUMED');
+      }
     }
-  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep, productConversions, inventoryStocks, updateInventoryStock, getProductPair, syncAll]);
+  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep, productConversions, inventoryStocks, updateInventoryStock, getProductPair, syncAll, stockContext]);
 
   const exportKitchenReport = useCallback(async () => {
     if (!kitchenResult) return;
