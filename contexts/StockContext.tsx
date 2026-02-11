@@ -3263,10 +3263,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
       
       // CRITICAL: DO NOT remove from AsyncStorage
-      // Keep deleted items in storage for 30 days to prevent resurrection by old devices
+      // Keep deleted items in storage for 90 days to prevent resurrection by old devices
       // The 60-second sync cleanup will handle old deleted items automatically
       console.log('clearAllReconcileHistory: ⚠️ Keeping deleted items in AsyncStorage to prevent resurrection');
-      console.log('clearAllReconcileHistory: Deleted items will be auto-cleaned after 30 days by sync system');
+      console.log('clearAllReconcileHistory: Deleted items will be auto-cleaned after 90 days by sync system');
       console.log('clearAllReconcileHistory: Complete');
     } catch (error) {
       console.error('Failed to clear reconcile history:', error);
