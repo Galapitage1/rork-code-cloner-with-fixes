@@ -77,7 +77,7 @@ type StockContextType = {
   deleteAllRequests: () => Promise<void>;
   toggleShowProductList: (value: boolean) => Promise<void>;
   setViewMode: (mode: 'search' | 'button') => Promise<void>;
-  syncAll: (silent?: boolean) => Promise<void>;
+  syncAll: (silent?: boolean, forceFullSync?: boolean) => Promise<void>;
   getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
   restoreRequests: (requestIds: string[]) => Promise<number>;
   // Live Inventory Snapshot functions
@@ -3932,8 +3932,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext syncAll: Final sales deductions:', finalSalesDeductions.length);
       
       if (finalSalesDeductions.length > 0) {
-        console.log('  Sample:', (finalSalesDeductions as any[])[0]?.id || 'none', (finalSalesDeductions as any[])[1]?.id || ''
-        })));
+        console.log('  Sample:', (finalSalesDeductions as any[])[0]?.id || 'none', (finalSalesDeductions as any[])[1]?.id || '');
       } else {
         console.warn('  WARNING: No sales deductions after merge! This will cause sold column to be empty!');
       }
