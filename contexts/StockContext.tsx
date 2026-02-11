@@ -3373,6 +3373,13 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       return;
     }
     
+    // CRITICAL: For MANUAL sync (not silent), also restore deleted data from last 45 days
+    // This ensures stock checks, requests, and other data deleted locally are restored from server
+    const shouldRestoreDeletedData = !silent || forceFullSync;
+    if (shouldRestoreDeletedData && !forceFullSync) {
+      console.log('StockContext syncAll: MANUAL SYNC - Will restore deleted data from last 45 days');
+    }
+    
     try {
       syncInProgressRef.current = true;
       if (!silent) {
@@ -3532,25 +3539,31 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // This prevents empty local data from overwriting existing server data
       // We ONLY want to PULL data from server, not PUSH empty data to it
       // CRITICAL: Also set includeDeleted: true to restore deleted items that may have been lost
+      // MANUAL SYNC: Also include deleted items from last 45 days to restore data deleted locally
       const fetchOnly = forceFullSync;
-      const includeDeleted = forceFullSync; // Fetch deleted items when cache was cleared to allow restoration
+      const includeDeleted = forceFullSync || shouldRestoreDeletedData; // Fetch deleted items for cache clear OR manual sync
+      const minDaysForRestore = shouldRestoreDeletedData ? 45 : undefined; // Restore last 45 days on manual sync
+      
       if (fetchOnly) {
         console.log('StockContext syncAll: ⚠️ FETCH-ONLY MODE - Cache was cleared, will only pull from server');
         console.log('StockContext syncAll: This prevents empty local data from overwriting server history');
         console.log('StockContext syncAll: Will also fetch DELETED items from server for potential restoration');
         console.log('StockContext syncAll: Server retains data for 40+ days, so all recent history will be restored');
+      } else if (includeDeleted) {
+        console.log('StockContext syncAll: MANUAL SYNC - Will fetch DELETED items from last 45 days for restoration');
+        console.log('StockContext syncAll: This restores stock checks, requests, and other data deleted locally but still on server');
       }
       
       const syncResults = await Promise.allSettled([
-        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted }),
-        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays, fetchOnly, includeDeleted }),
-        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : undefined, fetchOnly, includeDeleted }),
-        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted }),
-        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted }),
-        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
-        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted }),
-        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted }),
-        syncData('liveInventorySnapshots', snapshotsToSync, currentUser.id, { fetchOnly, includeDeleted }),
+        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays || minDaysForRestore, fetchOnly, includeDeleted }),
+        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : minDaysForRestore, fetchOnly, includeDeleted }),
+        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('liveInventorySnapshots', snapshotsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
       ]);
       
       const syncedProducts = syncResults[0].status === 'fulfilled' ? syncResults[0].value : productsToSync;

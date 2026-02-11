@@ -1511,15 +1511,15 @@ export default function SalesUploadScreen() {
       console.log('KitchenStock: base64 length', base64.length);
       updateStep(1, 'complete');
       
-      // CRITICAL FIX: Sync BEFORE reconciliation to get latest kitchen stock reports from server
+      // CRITICAL FIX: Sync BEFORE reconciliation to get latest kitchen stock reports AND inventory from server
       updateStep(2, 'active');
       console.log('\n=== SYNCING BEFORE KITCHEN RECONCILIATION ===');
-      console.log('Pulling latest kitchen stock reports from server...');
+      console.log('Pulling latest data from server (kitchen reports + inventory)...');
       try {
         await syncAllReconciliationData();
         console.log('✓ Reconciliation sync complete');
         await syncAll(true);
-        console.log('✓ StockContext sync complete');
+        console.log('✓ StockContext sync complete - inventory and kitchen reports are fresh');
       } catch (syncError) {
         console.error('Sync failed, proceeding with cached data:', syncError);
       }
@@ -1884,10 +1884,17 @@ export default function SalesUploadScreen() {
                 // CRITICAL: Immediately sync to server to prevent old data from overriding
                 console.log('\n=== SYNCING PRODS.REQ UPDATES TO SERVER (IMMEDIATE) ===');
                 console.log('⚠️ This sync must complete to share Prods.Req with other devices');
+                console.log('⚠️ This includes both kitchen stock reports AND inventory Prods.Req values');
                 try {
+                  // First sync the kitchen stock reports
+                  await syncAllReconciliationData();
+                  console.log('✓ Kitchen stock reports synced to server');
+                  
+                  // Then sync inventory stocks with updated Prods.Req values
                   await syncAll(false);
-                  console.log('✓ Prods.Req updates synced to server successfully');
+                  console.log('✓ Inventory Prods.Req updates synced to server successfully');
                   console.log('✓ Other devices will see Prods.Req updates on their next sync');
+                  console.log('✓ Live Inventory will display updated Prods.Req values');
                 } catch (syncError) {
                   console.error('❌ Failed to sync Prods.Req updates to server:', syncError);
                   Alert.alert('Sync Warning', 'Prods.Req updated locally but could not sync to server. Other devices may not see these updates.');
