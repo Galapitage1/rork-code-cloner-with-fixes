@@ -3524,18 +3524,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       console.log('StockContext syncAll: Syncing all data including product conversions, reconcile history, and live inventory snapshots...');
       console.log('StockContext syncAll: Data to sync - products:', productsToSync.length, 'stockChecks:', stockChecksToSync.length, 'requests:', requestsToSync.length, 'outlets:', outletsToSync.length, 'conversions:', conversionsToSync.length, 'inventory:', inventoryToSync.length, 'salesDeductions:', salesDeductionsToSync.length, 'reconcileHistory:', reconcileHistoryToSync.length, 'snapshots:', snapshotsToSync.length);
-      console.log('StockContext syncAll: This is a', silent ? 'BACKGROUND' : 'MANUAL', 'sync - will', silent ? 'merge with server data preserving local data' : 'fetch from server and merge');
-      
-      console.log('StockContext syncAll: ===== SYNCING REQUESTS =====');
-      console.log('StockContext syncAll: Requests to sync:', requestsToSync.length);
-      console.log('StockContext syncAll: Sample requests:', requestsToSync.slice(0, 2).map((r: any) => ({
-        id: r.id,
-        product: r.productName,
-        from: r.fromOutlet,
-        to: r.toOutlet,
-        status: r.status,
-        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
-      })));
+      console.log('StockContext syncAll: This is a', silent ? 'BACKGROUND' : 'MANUAL', 'sync');
       
       // CRITICAL: Pass minDays: 40 for stockChecks when forceFullSync is true (cache was cleared)
       // This ensures the server returns up to 40 days of stock check history
@@ -3582,21 +3571,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       let syncedReconcileHistory = syncResults[7].status === 'fulfilled' ? syncResults[7].value : reconcileHistoryToSync;
       const syncedSnapshots = syncResults[8].status === 'fulfilled' ? syncResults[8].value : snapshotsToSync;
       
-      console.log('StockContext syncAll: ===== REQUESTS SYNC RESULT =====');
       if (syncResults[2].status === 'fulfilled') {
-        console.log('StockContext syncAll: Requests sync SUCCESS');
-        console.log('StockContext syncAll: Synced requests count:', Array.isArray(syncedRequests) ? syncedRequests.length : 'not array');
-        console.log('StockContext syncAll: Sample synced requests:', Array.isArray(syncedRequests) ? (syncedRequests as any[]).slice(0, 2).map(r => ({
-          id: r.id,
-          product: r.productName,
-          from: r.fromOutlet,
-          to: r.toOutlet,
-          status: r.status,
-          updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
-        })) : 'none');
+        console.log('StockContext syncAll: Requests synced:', Array.isArray(syncedRequests) ? syncedRequests.length : 'not array');
       } else {
         console.error('StockContext syncAll: Requests sync FAILED:', syncResults[2].reason);
-        console.log('StockContext syncAll: Keeping local requests:', requestsToSync.length);
       }
       
       // CLEANUP: After sync, keep only recent data locally
@@ -3750,18 +3728,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       // CRITICAL: For 60-second background sync, preserve inventory and sales data to prevent data loss
       // Manual sync (not silent) will also use smart merging to preserve local data
-      console.log('StockContext syncAll: SMART MERGE - Preserving all local data with newer timestamps');
-      console.log('StockContext syncAll: Current inventory count:', inventoryStocks.length);
-      console.log('StockContext syncAll: Current sales deductions count:', salesDeductions.length);
-      console.log('StockContext syncAll: CRITICAL - Ensuring sales deductions are preserved during sync');
-      console.log('StockContext syncAll: salesDeductions sample:', salesDeductions.slice(0, 3).map(d => ({ id: d.id, date: d.salesDate, productId: d.productId, whole: d.wholeDeducted, slices: d.slicesDeducted })));
-      console.log('StockContext syncAll: Current stock checks count:', stockChecks.length);
-      console.log('StockContext syncAll: Current requests count:', requests.length);
-      console.log('StockContext syncAll: Current product conversions count:', productConversions.length);
-      console.log('StockContext syncAll: Current outlets count:', outlets.length);
-      console.log('StockContext syncAll: Current products count:', products.length);
-      console.log('StockContext syncAll: Current reconcile history count:', reconcileHistory.length);
-      console.log('StockContext syncAll: Current live inventory snapshots count:', liveInventorySnapshots.length);
+      console.log('StockContext syncAll: SMART MERGE - Counts: inventory:', inventoryStocks.length, 'salesDeductions:', salesDeductions.length, 'stockChecks:', stockChecks.length, 'requests:', requests.length, 'conversions:', productConversions.length, 'outlets:', outlets.length, 'products:', products.length, 'reconcileHistory:', reconcileHistory.length, 'snapshots:', liveInventorySnapshots.length);
       
       // CRITICAL: Specialized merge for reconciliation history that compares by ACTUAL reconciliation timestamp
       // NOT by updatedAt (sync time) - this ensures the most recent reconciliation wins, not the most recent sync
@@ -3769,9 +3736,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         local: SalesReconciliationHistory[],
         synced: SalesReconciliationHistory[] | any
       ): SalesReconciliationHistory[] => {
-        console.log('\n[mergeReconcileHistory] ========== RECONCILIATION-SPECIFIC MERGE START ==========');
-        console.log('[mergeReconcileHistory] Local entries:', local.length);
-        console.log('[mergeReconcileHistory] Synced entries:', Array.isArray(synced) ? synced.length : 'not array');
+        console.log('[mergeReconcileHistory] Merging - Local:', local.length, 'Synced:', Array.isArray(synced) ? synced.length : 'not array');
         
         if (!Array.isArray(synced)) {
           console.log('[mergeReconcileHistory] Synced is not an array, keeping local');
@@ -3796,18 +3761,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         
         // First, add all local reconciliations
         local.forEach(item => {
-          const key = getKey(item);
-          const time = getReconcileTime(item);
-          
-          if (item.deleted) {
-            console.log(`[mergeReconcileHistory] Local ${key} is DELETED (time: ${new Date(time).toISOString()})`);
-          } else {
-            console.log(`[mergeReconcileHistory] Local ${key} - reconciled at: ${new Date(time).toISOString()}`);
-          }
-          merged.set(key, item);
+          merged.set(getKey(item), item);
         });
-        
-        console.log('[mergeReconcileHistory] Added', local.length, 'local reconciliations');
         
         // Then, only update if synced reconciliation has newer ACTUAL timestamp
         let remoteNewer = 0;
@@ -3821,30 +3776,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           const remoteTime = getReconcileTime(item);
           const localTime = existing ? getReconcileTime(existing) : 0;
           
-          // CRITICAL: Check deletion status
           if (existing && existing.deleted) {
-            // Local has deleted this reconciliation
             if (item.deleted) {
-              // Both deleted - keep the one with newer timestamp
               if (remoteTime > localTime) {
-                console.log(`[mergeReconcileHistory] ${key} - Both deleted, remote newer`);
                 merged.set(key, item);
-              } else {
-                console.log(`[mergeReconcileHistory] ${key} - Both deleted, local newer/same`);
               }
               deletionWins++;
               return;
             } else {
-              // Local deleted, remote not - only allow if remote is MUCH newer (resurrection)
-              const RESURRECTION_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+              const RESURRECTION_THRESHOLD = 5 * 60 * 1000;
               if (remoteTime > localTime + RESURRECTION_THRESHOLD) {
-                console.log(`[mergeReconcileHistory] ${key} - Remote resurrection (much newer)`);
-                console.log(`  Local deletion: ${new Date(localTime).toISOString()}`);
-                console.log(`  Remote reconciliation: ${new Date(remoteTime).toISOString()}`);
                 merged.set(key, item);
                 remoteNewer++;
               } else {
-                console.log(`[mergeReconcileHistory] ${key} - Preserving local deletion`);
                 deletionWins++;
               }
               return;
@@ -3852,50 +3796,27 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           }
           
           if (item.deleted) {
-            // Remote deleted, local not - apply deletion if remote is newer/equal
             if (remoteTime >= localTime) {
-              console.log(`[mergeReconcileHistory] ${key} - Applying remote DELETION`);
-              console.log(`  Remote deletion time: ${new Date(remoteTime).toISOString()}`);
               merged.set(key, item);
               deletionWins++;
             } else {
-              console.log(`[mergeReconcileHistory] ${key} - Local reconciliation NEWER than remote deletion`);
               localNewer++;
             }
             return;
           }
           
           if (!existing) {
-            // New reconciliation from server
-            console.log(`[mergeReconcileHistory] ${key} - NEW from server (reconciled at: ${new Date(remoteTime).toISOString()})`);
             merged.set(key, item);
             remoteNew++;
           } else if (remoteTime > localTime) {
-            // Remote reconciliation is MORE RECENT (based on actual reconciliation time)
-            console.log(`[mergeReconcileHistory] ${key} - Using REMOTE (newer actual reconciliation)`);
-            console.log(`  Remote reconciled at: ${new Date(remoteTime).toISOString()}`);
-            console.log(`  Local reconciled at: ${new Date(localTime).toISOString()}`);
             merged.set(key, item);
             remoteNewer++;
           } else {
-            // Local reconciliation is MORE RECENT or EQUAL
-            if (remoteTime === localTime) {
-              console.log(`[mergeReconcileHistory] ${key} - Keeping LOCAL (equal reconciliation time)`);
-            } else {
-              console.log(`[mergeReconcileHistory] ${key} - Keeping LOCAL (newer actual reconciliation)`);
-              console.log(`  Local reconciled at: ${new Date(localTime).toISOString()}`);
-              console.log(`  Remote reconciled at: ${new Date(remoteTime).toISOString()}`);
-            }
             localNewer++;
           }
         });
         
-        console.log('[mergeReconcileHistory] ========== MERGE STATISTICS ==========');
-        console.log('[mergeReconcileHistory]   New from server:', remoteNew);
-        console.log('[mergeReconcileHistory]   Remote was newer:', remoteNewer);
-        console.log('[mergeReconcileHistory]   Local was newer:', localNewer);
-        console.log('[mergeReconcileHistory]   Deletion wins:', deletionWins);
-        console.log('[mergeReconcileHistory]   Total merged:', merged.size);
+        console.log('[mergeReconcileHistory] Stats - New:', remoteNew, 'RemoteNewer:', remoteNewer, 'LocalNewer:', localNewer, 'Deleted:', deletionWins, 'Total:', merged.size);
         console.log('[mergeReconcileHistory] ⚠️ CRITICAL: Compared by ACTUAL reconciliation timestamp, not sync time');
         console.log('[mergeReconcileHistory] ========== MERGE COMPLETE ==========\n');
         
@@ -3955,28 +3876,20 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           const itemUpdatedAt = (item as any).updatedAt || 0;
           const existingUpdatedAt = existingItem ? ((existingItem as any).updatedAt || 0) : 0;
           
-          // CRITICAL: For sales deductions, use smart merging for cross-device scenarios
           if (label === 'salesDeductions' && existingItem) {
-            // Check if server version is deleted
             const isServerDeleted = (item as any).deleted;
             const isLocalDeleted = existingItem.deleted;
             
-            // If server says deleted but local is not, keep local (prevent accidental deletion)
             if (isServerDeleted && !isLocalDeleted) {
-              console.log(`  ${label}: Server has deleted ${key} but local is active - keeping local to prevent data loss`);
               keptLocal++;
               return;
             }
             
-            // Use normal timestamp comparison for sales deductions
-            // This allows pulling updates from other devices
             if (itemUpdatedAt > existingUpdatedAt) {
               merged.set(key, item);
               updated++;
-              console.log(`  ${label}: Updated ${key} with newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt})`);
             } else {
               keptLocal++;
-              console.log(`  ${label}: Kept local ${key} (local: ${existingUpdatedAt} >= server: ${itemUpdatedAt})`);
             }
             return;
           }
@@ -3984,26 +3897,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           if (!existingItem) {
             merged.set(key, item);
             addedFromServer++;
-            console.log(`  ${label}: Added new item ${key} from server (updatedAt: ${itemUpdatedAt})`);
           } else if (itemUpdatedAt > existingUpdatedAt) {
             merged.set(key, item);
             updated++;
-            console.log(`  ${label}: Updated item ${key} with newer server data (server: ${itemUpdatedAt} > local: ${existingUpdatedAt})`);
           } else {
             keptLocal++;
-            console.log(`  ${label}: Kept local item ${key} (local: ${existingUpdatedAt} >= server: ${itemUpdatedAt})`);
           }
         });
         
-        console.log(`StockContext syncAll: ${label} - merge complete:`, {
-          addedFromServer,
-          updated,
-          keptLocal,
-          totalAfterMerge: merged.size
-        });
-        
         const result = Array.from(merged.values());
-        console.log(`StockContext syncAll: ${label} - final count:`, result.length);
+        console.log(`StockContext syncAll: ${label} merged - added: ${addedFromServer}, updated: ${updated}, kept: ${keptLocal}, total: ${result.length}`);
         
         // CRITICAL VALIDATION: For sales deductions, verify we didn't lose data
         if (label === 'salesDeductions') {
@@ -4024,24 +3927,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // Use productId as the key for inventoryStocks since that's the unique identifier
       const finalInventory = mergeByTimestamp(inventoryStocks, syncedInventory, 'inventory', 'productId');
       
-      // CRITICAL: Sales deductions must ALWAYS be preserved during sync
-      // They contain the ACTUAL sold data from reconciliation reports
-      console.log('StockContext syncAll: CRITICAL - Merging sales deductions');
-      console.log('  Local sales deductions:', salesDeductions.length);
-      console.log('  Synced sales deductions:', Array.isArray(syncedSalesDeductions) ? syncedSalesDeductions.length : 'not array');
+      console.log('StockContext syncAll: Merging sales deductions - local:', salesDeductions.length, 'synced:', Array.isArray(syncedSalesDeductions) ? syncedSalesDeductions.length : 'not array');
       const finalSalesDeductions = mergeByTimestamp(salesDeductions, syncedSalesDeductions, 'salesDeductions');
-      console.log('  Final sales deductions after merge:', finalSalesDeductions.length);
+      console.log('StockContext syncAll: Final sales deductions:', finalSalesDeductions.length);
       
-      // VERIFY: Log a few sales deductions to confirm they're preserved
       if (finalSalesDeductions.length > 0) {
-        console.log('  Sample sales deductions after merge:', (finalSalesDeductions as any[]).slice(0, 3).map(d => ({
-          id: d.id,
-          outlet: d.outletName,
-          date: d.salesDate,
-          productId: d.productId,
-          whole: d.wholeDeducted,
-          slices: d.slicesDeducted,
-          deleted: d.deleted
+        console.log('  Sample:', (finalSalesDeductions as any[])[0]?.id || 'none', (finalSalesDeductions as any[])[1]?.id || ''
         })));
       } else {
         console.warn('  WARNING: No sales deductions after merge! This will cause sold column to be empty!');
@@ -4075,7 +3966,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // CRITICAL FIX: Restore prodsReqUpdates from reconciliation history to inventory
       // When reconciliation is done, production request values are saved in reconciliation history
       // After sync, we need to re-apply these values to ensure they're not lost
-      console.log('StockContext syncAll: RESTORING prodsReq values from reconciliation history...');
       let prodsReqRestoreCount = 0;
       (finalReconcileHistory as any[]).forEach((history: any) => {
         if (history.prodsReqUpdates && Array.isArray(history.prodsReqUpdates)) {
@@ -4086,7 +3976,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
               const existingProdsReqWhole = existing.prodsReqWhole || 0;
               const existingProdsReqSlices = existing.prodsReqSlices || 0;
               
-              // Only update if the values from history are different (indicates they were lost)
               if (existingProdsReqWhole !== update.prodsReqWhole || existingProdsReqSlices !== update.prodsReqSlices) {
                 (finalInventory as any[])[invIndex] = {
                   ...existing,
@@ -4095,27 +3984,24 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
                   updatedAt: Date.now(),
                 };
                 prodsReqRestoreCount++;
-                console.log(`  Restored Prods.Req for productId ${update.productId}: ${update.prodsReqWhole}W/${update.prodsReqSlices}S (from reconciliation: ${history.outlet} ${history.date})`);
               }
             }
           });
         }
       });
-      console.log(`  ✓ Restored ${prodsReqRestoreCount} Prods.Req values from reconciliation history`);
-      
-      // Save the updated inventory stocks if we restored any prodsReq values
       if (prodsReqRestoreCount > 0) {
-        console.log('StockContext syncAll: Saving restored inventory stocks to AsyncStorage...');
+        console.log('StockContext syncAll: Restored', prodsReqRestoreCount, 'Prods.Req values from reconciliation');
+      }
+      
+      if (prodsReqRestoreCount > 0) {
         try {
           await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(finalInventory));
-          console.log('✓ Saved inventory stocks with restored Prods.Req values');
         } catch (saveError) {
-          console.error('Failed to save restored inventory stocks:', saveError);
+          console.error('Failed to save restored inventory:', saveError);
         }
       }
       
-      console.log('StockContext syncAll: After smart merge - all data preserved with server updates applied');
-      console.log('StockContext syncAll: Final counts - inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, '← CRITICAL FOR LIVE INVENTORY', 'reconcile:', finalReconcileHistory.length, '← RECONCILE DATA', 'stockChecks:', finalStockChecks.length, 'requests:', finalRequests.length, 'conversions:', finalConversions.length, 'outlets:', finalOutlets.length, 'products:', finalProducts.length);
+      console.log('StockContext syncAll: Final counts - products:', finalProducts.length, 'checks:', finalStockChecks.length, 'requests:', finalRequests.length, 'outlets:', finalOutlets.length, 'conversions:', finalConversions.length, 'inventory:', finalInventory.length, 'sales:', finalSalesDeductions.length, 'reconcile:', finalReconcileHistory.length);
       
       // Batch all state updates together to prevent multiple re-renders
       const activeProducts = (finalProducts as any[]).filter(p => !p?.deleted);
@@ -4131,21 +4017,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const finalSnapshots = mergeByTimestamp(liveInventorySnapshots, syncedSnapshots, 'snapshots');
       const activeSnapshots = (finalSnapshots as any[]).filter(s => !s?.deleted);
       
-      console.log('StockContext syncAll: Active (non-deleted) counts:');
-      console.log('  - products:', activeProducts.length);
-      console.log('  - stockChecks:', activeStockChecks.length);
-      console.log('  - requests:', activeRequests.length);
-      console.log('  - outlets:', activeOutlets.length);
-      console.log('  - productConversions:', activeConversions.length);
-      console.log('  - inventory:', activeInventory.length);
-      console.log('  - salesDeductions:', activeSalesDeductions.length, '← SOLD DATA FOR LIVE INVENTORY');
+      console.log('StockContext syncAll: Active counts - products:', activeProducts.length, 'checks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'sales:', activeSalesDeductions.length, 'reconcile:', activeReconcileHistory.length, 'snapshots:', activeSnapshots.length);
       if (activeSalesDeductions.length === 0 && salesDeductions.length > 0) {
-        console.error('  ❌ CRITICAL ERROR: Sales deductions were LOST during sync!');
-        console.error('  Before sync:', salesDeductions.length, 'After sync:', activeSalesDeductions.length);
-        console.error('  This will cause Live Inventory sold column to be EMPTY!');
+        console.error('StockContext syncAll: CRITICAL - Sales deductions lost! Before:', salesDeductions.length, 'After:', activeSalesDeductions.length);
       }
-      console.log('  - reconcileHistory:', activeReconcileHistory.length);
-      console.log('  - liveInventorySnapshots:', activeSnapshots.length, '← SNAPSHOT DATA FOR LIVE INVENTORY');
       
       let newStockMap = new Map<string, number>();
       if (activeStockChecks.length > 0) {
