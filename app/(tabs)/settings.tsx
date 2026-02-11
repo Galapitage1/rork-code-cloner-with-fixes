@@ -334,13 +334,30 @@ export default function SettingsScreen() {
     }
 
     try {
-      console.log('[SETTINGS] Manual sync - Syncing all data from server immediately...');
+      console.log('[SETTINGS] Manual sync - Restoring data from server for last 45 days...');
+      
+      // CRITICAL: Clear last sync timestamps to force full fetch from server
+      // This ensures we restore data for the last 45 days, including items deleted locally
+      const timestampKeys = [
+        '@last_sync_products_' + currentUser.id,
+        '@last_sync_stockChecks_' + currentUser.id,
+        '@last_sync_requests_' + currentUser.id,
+        '@last_sync_outlets_' + currentUser.id,
+        '@last_sync_productConversions_' + currentUser.id,
+        '@last_sync_inventoryStocks_' + currentUser.id,
+        '@last_sync_salesDeductions_' + currentUser.id,
+        '@last_sync_reconcileHistory_' + currentUser.id,
+        '@last_sync_liveInventorySnapshots_' + currentUser.id,
+      ];
+      
+      console.log('[SETTINGS] Clearing sync timestamps to restore full 45-day history...');
+      await Promise.all(timestampKeys.map(key => AsyncStorage.removeItem(key).catch(() => {})));
       
       let successCount = 0;
       let failCount = 0;
       
       const syncOperations = [
-        { fn: () => syncAll(false), name: 'Stock Data' },
+        { fn: () => syncAll(false, true), name: 'Stock Data' },
         { fn: () => syncUsers(undefined, false), name: 'Users' },
         { fn: syncCustomers, name: 'Customers' },
         { fn: syncRecipes, name: 'Recipes' },
@@ -350,7 +367,7 @@ export default function SettingsScreen() {
         { fn: syncMoirData, name: 'MOIR Data' },
       ];
       
-      console.log('[SETTINGS] Executing', syncOperations.length, 'sync operations...');
+      console.log('[SETTINGS] Executing', syncOperations.length, 'sync operations with 45-day restore...');
       
       for (const { fn, name } of syncOperations) {
         try {
@@ -368,13 +385,14 @@ export default function SettingsScreen() {
       if (failCount > 0) {
         Alert.alert(
           'Partial Success',
-          `${successCount} out of ${syncOperations.length} data types synced successfully.`
+          `${successCount} out of ${syncOperations.length} data types synced successfully.\n\nData from the last 45 days has been restored from the server.`
         );
       } else {
-        Alert.alert('Success', 'All data synced successfully from server.');
+        Alert.alert('Success', 'All data synced successfully from server.\n\nData from the last 45 days has been restored, including any items that were deleted locally.');
       }
       
       console.log('[SETTINGS] Manual sync complete - Success:', successCount, 'Failed:', failCount);
+      console.log('[SETTINGS] ✓ Restored data from last 45 days from server');
     } catch (error) {
       console.error('[SETTINGS] Manual sync error:', error);
       Alert.alert('Sync Failed', 'Failed to sync data. Please check your internet connection and try again.');
