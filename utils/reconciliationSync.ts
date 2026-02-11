@@ -242,9 +242,12 @@ export async function syncKitchenStockReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(merged));
+    const pruned = pruneOldReports(merged, 45);
+    console.log('[RECONCILIATION SYNC] After pruning:', pruned.length);
     
-    const changedReports = merged.filter(r => {
+    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(pruned));
+    
+    const changedReports = pruned.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
@@ -301,9 +304,12 @@ export async function syncSalesReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(merged));
+    const pruned = pruneOldReports(merged, 45);
+    console.log('[RECONCILIATION SYNC] After pruning:', pruned.length);
     
-    const changedReports = merged.filter(r => {
+    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(pruned));
+    
+    const changedReports = pruned.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
@@ -344,6 +350,20 @@ function mergeReports<T extends { outlet: string; date: string; updatedAt: numbe
   });
   
   return Array.from(merged.values()).filter(r => !r.deleted);
+}
+
+function pruneOldReports<T extends { date: string }>(reports: T[], daysToKeep: number): T[] {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+  
+  const pruned = reports.filter(r => r.date >= cutoffDateStr);
+  
+  if (pruned.length < reports.length) {
+    console.log(`[RECONCILIATION SYNC] Pruned ${reports.length - pruned.length} old reports (keeping last ${daysToKeep} days)`);
+  }
+  
+  return pruned;
 }
 
 export async function syncAllReconciliationData(): Promise<void> {
