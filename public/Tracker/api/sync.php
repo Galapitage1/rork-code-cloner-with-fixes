@@ -145,16 +145,23 @@ if ($isDelta) {
 
 $merged = array_values($byId);
 
-// Remove deleted items older than 30 days to prevent accumulation (increased from 7 to 30 days)
-$cutoffTime = time() * 1000 - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
-$merged = array_filter($merged, function($item) use ($cutoffTime) {
-  $isDeleted = isset($item['deleted']) && $item['deleted'] === true;
-  if (!$isDeleted) return true;
-  
-  $updatedAt = isset($item['updatedAt']) && is_numeric($item['updatedAt']) ? intval($item['updatedAt']) : 0;
-  return $updatedAt > $cutoffTime;
-});
-$merged = array_values($merged); // Re-index array after filtering
+// CRITICAL: Stock checks and requests are HISTORICAL AUDIT RECORDS
+// They must NEVER be deleted from the server regardless of age or deleted status
+// Only clean up non-historical data types to prevent accumulation
+$isHistoricalEndpoint = in_array($endpoint, ['stockChecks', 'requests', 'reconcileHistory', 'salesDeductions', 'liveInventorySnapshots']);
+
+if (!$isHistoricalEndpoint) {
+  // For non-historical data (products, outlets, etc.), remove deleted items older than 90 days
+  $cutoffTime = time() * 1000 - (90 * 24 * 60 * 60 * 1000); // 90 days in milliseconds
+  $merged = array_filter($merged, function($item) use ($cutoffTime) {
+    $isDeleted = isset($item['deleted']) && $item['deleted'] === true;
+    if (!$isDeleted) return true;
+    
+    $updatedAt = isset($item['updatedAt']) && is_numeric($item['updatedAt']) ? intval($item['updatedAt']) : 0;
+    return $updatedAt > $cutoffTime;
+  });
+  $merged = array_values($merged); // Re-index array after filtering
+}
 
 // Ensure data directory has proper permissions
 if (!is_writable($dataDir)) {
