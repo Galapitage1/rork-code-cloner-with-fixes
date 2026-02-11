@@ -274,12 +274,13 @@ export default function HistoryScreen() {
     setNewOpeningStocks(newMap);
     
     const receivedVal = newReceivedStocks.get(productId) ?? '';
-    const sum = (parseFloat(value || '0') || 0) + (parseFloat(receivedVal || '0') || 0);
+    const wastageVal = newWastages.get(productId) ?? '';
+    const currentStock = (parseFloat(value || '0') || 0) + (parseFloat(receivedVal || '0') || 0) - (parseFloat(wastageVal || '0') || 0);
     const countsMap = new Map(newStockCounts);
     if (!value && !receivedVal) {
       countsMap.delete(productId);
     } else {
-      countsMap.set(productId, Number.isFinite(sum) ? String(sum) : '0');
+      countsMap.set(productId, Number.isFinite(currentStock) ? String(currentStock) : '0');
     }
     setNewStockCounts(countsMap);
   };
@@ -294,12 +295,13 @@ export default function HistoryScreen() {
     setNewReceivedStocks(newMap);
     
     const openingVal = newOpeningStocks.get(productId) ?? '';
-    const sum = (parseFloat(openingVal || '0') || 0) + (parseFloat(value || '0') || 0);
+    const wastageVal = newWastages.get(productId) ?? '';
+    const currentStock = (parseFloat(openingVal || '0') || 0) + (parseFloat(value || '0') || 0) - (parseFloat(wastageVal || '0') || 0);
     const countsMap = new Map(newStockCounts);
     if (!openingVal && !value) {
       countsMap.delete(productId);
     } else {
-      countsMap.set(productId, Number.isFinite(sum) ? String(sum) : '0');
+      countsMap.set(productId, Number.isFinite(currentStock) ? String(currentStock) : '0');
     }
     setNewStockCounts(countsMap);
   };
@@ -312,6 +314,13 @@ export default function HistoryScreen() {
       newMap.set(productId, value);
     }
     setNewWastages(newMap);
+    
+    const openingVal = newOpeningStocks.get(productId) ?? '';
+    const receivedVal = newReceivedStocks.get(productId) ?? '';
+    const currentStock = (parseFloat(openingVal || '0') || 0) + (parseFloat(receivedVal || '0') || 0) - (parseFloat(value || '0') || 0);
+    const countsMap = new Map(newStockCounts);
+    countsMap.set(productId, Number.isFinite(currentStock) ? String(currentStock) : '0');
+    setNewStockCounts(countsMap);
   };
 
   const handleStockNoteChange = (productId: string, value: string) => {
