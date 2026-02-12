@@ -2541,55 +2541,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.log('=== DEDUCTION FROM KITCHEN/PRODUCTION INVENTORY COMPLETE ===\n');
         }
         
-        console.log('deductInventoryFromApproval: Moving', request.quantity, 'to outlet', request.toOutlet);
-        
-        const requestDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
-        console.log('deductInventoryFromApproval: Using request date:', requestDate);
-        const targetOutletCheck = stockChecks.find(c => c.outlet === request.toOutlet && c.date === requestDate);
-        
-        if (targetOutletCheck) {
-          console.log('deductInventoryFromApproval: Found existing stock check for target outlet');
-          const targetCountIndex = targetOutletCheck.counts.findIndex(c => c.productId === request.productId);
-          const updatedTargetCounts = [...targetOutletCheck.counts];
-          
-          if (targetCountIndex >= 0) {
-            const existingCount = updatedTargetCounts[targetCountIndex];
-            updatedTargetCounts[targetCountIndex] = {
-              ...existingCount,
-              quantity: existingCount.quantity + request.quantity,
-              receivedStock: (existingCount.receivedStock || 0) + request.quantity,
-            };
-          } else {
-            updatedTargetCounts.push({
-              productId: request.productId,
-              quantity: request.quantity,
-              receivedStock: request.quantity,
-              openingStock: 0,
-            });
-          }
-          
-          await updateStockCheck(targetOutletCheck.id, updatedTargetCounts);
-          console.log('deductInventoryFromApproval: Updated target outlet stock check for date:', requestDate);
-        } else {
-          console.log('deductInventoryFromApproval: No existing stock check for target outlet on', requestDate, '- creating one');
-          const newStockCheck: StockCheck = {
-            id: `check_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            date: requestDate,
-            outlet: request.toOutlet,
-            counts: [{
-              productId: request.productId,
-              quantity: request.quantity,
-              receivedStock: request.quantity,
-              openingStock: 0,
-            }],
-            timestamp: Date.now(),
-            completedBy: 'AUTO',
-          };
-          await saveStockCheck(newStockCheck, true);
-          console.log('deductInventoryFromApproval: Created new stock check for target outlet on', requestDate);
-        }
-        
-        console.log('deductInventoryFromApproval: Successfully moved', request.quantity, product.unit, 'from', request.fromOutlet, 'to', request.toOutlet);
+        console.log('\n=== APPROVAL COMPLETE (NO STOCK CHECK CREATION) ===');
+        console.log('deductInventoryFromApproval: Successfully transferred', request.quantity, product.unit);
+        console.log('  FROM:', request.fromOutlet, '(deducted from Kitchen/Production inventory)');
+        console.log('  TO:', request.toOutlet, '(will show in Received column in live inventory)');
+        console.log('  NOTE: No stock check entries created - transfer shows only in live inventory');
+        console.log('  - Transferred column (FROM outlet): Shows as outgoing transfer');
+        console.log('  - Received column (TO outlet): Shows as incoming transfer');
+        console.log('=== APPROVAL COMPLETE ===\n');
         return { success: true };
       }
 
@@ -2784,90 +2743,21 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.log('deductInventoryFromApproval: Updated inventory - production to sales transfer complete');
       }
       
-      // Also update stock checks for the target outlet to show received stock in live inventory
-      const requestDate = request.requestDate || new Date(request.requestedAt).toISOString().split('T')[0];
-      console.log('deductInventoryFromApproval: Updating stock check for target outlet on date:', requestDate);
-      const targetOutletCheck = stockChecks.find(c => c.outlet === request.toOutlet && c.date === requestDate);
-      
-      if (targetOutletCheck) {
-        console.log('deductInventoryFromApproval: Found existing stock check for target outlet');
-        const wholeCountIndex = targetOutletCheck.counts.findIndex(c => c.productId === productPair.wholeProductId);
-        const slicesCountIndex = targetOutletCheck.counts.findIndex(c => c.productId === productPair.slicesProductId);
-        const updatedTargetCounts = [...targetOutletCheck.counts];
-        
-        // Update whole product count
-        if (wholeCountIndex >= 0) {
-          const existingCount = updatedTargetCounts[wholeCountIndex];
-          updatedTargetCounts[wholeCountIndex] = {
-            ...existingCount,
-            receivedStock: (existingCount.receivedStock || 0) + requestedWhole,
-            quantity: (existingCount.quantity || 0) + requestedWhole,
-          };
-        } else if (requestedWhole > 0) {
-          updatedTargetCounts.push({
-            productId: productPair.wholeProductId,
-            quantity: requestedWhole,
-            receivedStock: requestedWhole,
-            openingStock: 0,
-          });
-        }
-        
-        // Update slices product count
-        if (slicesCountIndex >= 0) {
-          const existingCount = updatedTargetCounts[slicesCountIndex];
-          updatedTargetCounts[slicesCountIndex] = {
-            ...existingCount,
-            receivedStock: (existingCount.receivedStock || 0) + requestedSlices,
-            quantity: (existingCount.quantity || 0) + requestedSlices,
-          };
-        } else if (requestedSlices > 0) {
-          updatedTargetCounts.push({
-            productId: productPair.slicesProductId,
-            quantity: requestedSlices,
-            receivedStock: requestedSlices,
-            openingStock: 0,
-          });
-        }
-        
-        await updateStockCheck(targetOutletCheck.id, updatedTargetCounts);
-        console.log('deductInventoryFromApproval: Updated target outlet stock check with whole:', requestedWhole, 'slices:', requestedSlices);
+      console.log('\n=== APPROVAL COMPLETE (NO STOCK CHECK CREATION) ===');
+      console.log('deductInventoryFromApproval: Successfully transferred', requestedWhole, 'whole +', requestedSlices, 'slices');
+      console.log('  FROM:', request.fromOutlet, isSalesToSalesTransfer ? '(sales outlet)' : '(production - Stores/Kitchen)');
+      console.log('  TO:', request.toOutlet, '(sales outlet)');
+      console.log('  Inventory updated:');
+      if (isSalesToSalesTransfer) {
+        console.log('    - FROM outlet stock reduced');
       } else {
-        console.log('deductInventoryFromApproval: No existing stock check for target outlet on', requestDate, '- creating one');
-        const newCounts: StockCount[] = [];
-        
-        if (requestedWhole > 0) {
-          newCounts.push({
-            productId: productPair.wholeProductId,
-            quantity: requestedWhole,
-            receivedStock: requestedWhole,
-            openingStock: 0,
-          });
-        }
-        
-        if (requestedSlices > 0) {
-          newCounts.push({
-            productId: productPair.slicesProductId,
-            quantity: requestedSlices,
-            receivedStock: requestedSlices,
-            openingStock: 0,
-          });
-        }
-        
-        if (newCounts.length > 0) {
-          const newStockCheck: StockCheck = {
-            id: `check_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            date: requestDate,
-            outlet: request.toOutlet,
-            counts: newCounts,
-            timestamp: Date.now(),
-            completedBy: 'AUTO',
-          };
-          await saveStockCheck(newStockCheck, true);
-          console.log('deductInventoryFromApproval: Created new stock check for target outlet with whole:', requestedWhole, 'slices:', requestedSlices);
-        }
+        console.log('    - Production stock reduced');
       }
-      
-      console.log('deductInventoryFromApproval: Success - moved', requestedWhole, 'whole +', requestedSlices, 'slices from Stores/Kitchen to', request.toOutlet);
+      console.log('    - TO outlet stock increased');
+      console.log('  NOTE: No stock check entries created - transfer shows only in live inventory');
+      console.log('  - Transferred column (FROM outlet): Shows as outgoing transfer');
+      console.log('  - Received column (TO outlet): Shows as incoming transfer');
+      console.log('=== APPROVAL COMPLETE ===\n');
       
       // Create live inventory snapshot after successful transfer approval
       if (createSnapshotRef.current) {

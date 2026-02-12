@@ -872,17 +872,14 @@ function LiveInventoryScreen() {
               console.log(`Using manually edited quantity: ${current}`);
             } else {
               // ALWAYS use formula for dates that are NOT manually edited:
-              // Current = Opening + Received - Sold
-              // NOTE: Wastage is NOT subtracted because it's already reflected in the opening stock
-              console.log(`Product ${product.name} on ${date} - using formula: ${opening} + ${received} - ${sold}`);
-              current = opening + received - sold;
+              // Current = Opening + Received - Wastage - Sold
+              console.log(`Product ${product.name} on ${date} - using formula: Opening(${opening}) + Received(${received}) - Wastage(${wastage}) - Sold(${sold})`);              current = opening + received - wastage - sold;
               console.log(`  Result: ${current}`);
             }
           } else {
-            // ALWAYS use formula: Current = Opening + Received - Sold
-            // NOTE: Wastage is NOT subtracted because it's already reflected in the opening stock
-            console.log(`Product ${product.name} on ${date} - using formula (no check): ${opening} + ${received} - ${sold}`);
-            current = opening + received - sold;
+            // ALWAYS use formula: Current = Opening + Received - Wastage - Sold
+            console.log(`Product ${product.name} on ${date} - using formula (no check): Opening(${opening}) + Received(${received}) - Wastage(${wastage}) - Sold(${sold})`);
+            current = opening + received - wastage - sold;
             console.log(`  Result: ${current}`);
           }
         }
