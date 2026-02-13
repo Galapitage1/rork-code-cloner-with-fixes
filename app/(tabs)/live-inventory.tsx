@@ -271,8 +271,6 @@ function LiveInventoryScreen() {
         let receivedSlices = 0;
 
         if (isProductionOutlet) {
-          // For production outlets: Show kitchen stock reconciliation quantities in Prods.Req column
-          // IMPORTANT: Display ALL quantities under "Whole" column by converting slices to whole
           console.log(`[PRODUCTION OUTLET] Checking kitchen stock reports for ${wholeProduct.name} on ${date}`);
           const kitchenReport = kitchenStockReports.find(r => r.date === date && r.outlet === selectedOutlet);
           
@@ -281,17 +279,26 @@ function LiveInventoryScreen() {
             const productEntry = kitchenReport.products.find(p => p.productId === pair.wholeId);
             
             if (productEntry) {
-              // Convert slices to whole and add to receivedWhole
-              // Display everything under "Whole" column
               const slicesAsWhole = productEntry.quantitySlices / pair.factor;
               receivedWhole = productEntry.quantityWhole + slicesAsWhole;
-              receivedSlices = 0; // Always 0 - display all in Whole column
+              receivedSlices = 0;
               console.log(`[PRODUCTION OUTLET] Kitchen reconciliation: ${productEntry.quantityWhole}W + ${productEntry.quantitySlices}S = ${receivedWhole} Whole (displayed in Whole column only)`);
             } else {
               console.log(`[PRODUCTION OUTLET] No product entry found for ${wholeProduct.name} in kitchen report`);
             }
           } else {
             console.log(`[PRODUCTION OUTLET] No kitchen stock report found for ${date}`);
+          }
+
+          const reconcileForDate = reconcileHistory.find(r => r.date === date && r.outlet === selectedOutlet && !r.deleted);
+          const prodsReqUpdate = reconcileForDate?.prodsReqUpdates?.find(u => u.productId === pair.wholeId);
+
+          if (prodsReqUpdate) {
+            const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + ((prodsReqUpdate.prodsReqSlices || 0) / pair.factor);
+            receivedWhole += kitchenProductionQty;
+            console.log(`[PRODUCTION OUTLET] Added Prods.Req from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
+          } else {
+            console.log(`[PRODUCTION OUTLET] No Prods.Req reconciliation update found for ${wholeProduct.name}`);
           }
         } else {
           // For sales outlets: Show approved requests TO this outlet
