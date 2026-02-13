@@ -291,7 +291,7 @@ function LiveInventoryScreen() {
           }
 
           const reconcileCandidates = reconcileHistory
-            .filter(r => r.date === date && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
+            .filter(r => r.date === date && r.outlet === selectedOutlet && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
             .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
           const reconcileForDate = reconcileCandidates[0];
           const prodsReqUpdate = reconcileForDate?.prodsReqUpdates?.find(u => u.productId === pair.wholeId);
@@ -763,7 +763,7 @@ function LiveInventoryScreen() {
         // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
         if (outlet?.outletType === 'production') {
           const reconcileCandidates = reconcileHistory
-            .filter(r => r.date === date && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
+            .filter(r => r.date === date && r.outlet === selectedOutlet && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
             .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
           const reconcileForDate = reconcileCandidates[0];
 
