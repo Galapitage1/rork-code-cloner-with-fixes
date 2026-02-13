@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moir Tracking System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        body {
+            background-color: #000000;
+            color: #FFFFFF;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .logo {
+            width: 250px;
+            max-width: 90%;
+            margin: 20px auto;
+            display: block;
+        }
+
+        .header {
+            background-color: #000000;
+            border-bottom: 3px solid #FFD700;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header-title {
+            color: #FFD700;
+            font-size: 24px;
+            font-weight: 700;
+            margin-top: 10px;
+        }
+
+        .user-info {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .welcome-text {
+            color: #FFD700;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .admin-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background-color: #000000;
+            border: 2px solid #FFD700;
+            padding: 8px 16px;
+            border-radius: 20px;
+            color: #FFD700;
+            font-weight: 700;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .btn-yellow {
+            background-color: #FFD700;
+            color: #000000;
+        }
+
+        .btn-yellow:hover {
+            background-color: #FFC700;
+        }
+
+        .btn-red {
+            background-color: #EF4444;
+            color: #FFFFFF;
+        }
+
+        .btn-red:hover {
+            background-color: #DC2626;
+        }
+
+        .btn-icon {
+            padding: 10px;
+            border-radius: 20px;
+            background-color: #000000;
+            border: 2px solid #FFD700;
+            cursor: pointer;
+        }
+
+        .login-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 60vh;
+            padding: 20px;
+        }
+
+        .login-box {
+            background-color: #FFFFFF;
+            color: #000000;
+            padding: 40px;
+            border-radius: 16px;
+            border: 3px solid #FFD700;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .login-title {
+            font-size: 28px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .login-section {
+            margin-bottom: 30px;
+        }
+
+        .login-section-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 15px;
+        }
+
+        .input {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #FFD700;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+
+        .input:focus {
+            outline: none;
+            border-color: #FFC700;
+        }
+
+        .divider {
+            height: 2px;
+            background-color: #CCCCCC;
+            margin: 30px 0;
+        }
+
+        .user-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .user-list-item {
+            background-color: #FFD700;
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 600;
+            border-bottom: 4px solid #FFC700;
+            transition: all 0.2s;
+        }
+
+        .user-list-item:hover {
+            background-color: #FFC700;
+            transform: translateY(-2px);
+        }
+
+        .hint-text {
+            font-size: 12px;
+            color: #666666;
+            text-align: center;
+            margin-top: 10px;
+            font-style: italic;
+        }
+
+        .users-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .user-button {
+            background-color: #FFD700;
+            border-radius: 16px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+        }
+
+        .user-button:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 20px rgba(255, 215, 0, 0.5);
+        }
+
+        .user-button-active {
+            border: 3px solid #10B981;
+        }
+
+        .user-button-inner {
+            padding: 20px;
+            background-color: #FFD700;
+            border-bottom: 6px solid #FFC700;
+        }
+
+        .user-name {
+            font-size: 20px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 12px;
+            color: #000000;
+        }
+
+        .last-seen {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background-color: #FFFFFF;
+            padding: 8px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #666666;
+        }
+
+        .last-seen-time {
+            font-weight: 700;
+            color: #000000;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666666;
+        }
+
+        .empty-state-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #FFD700;
+            margin: 20px 0 10px;
+        }
+
+        .show-locations-btn {
+            background-color: #FFD700;
+            color: #000000;
+            padding: 20px;
+            border-radius: 16px;
+            border: none;
+            font-size: 20px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            width: 100%;
+            box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+            transition: all 0.2s;
+        }
+
+        .show-locations-btn:hover {
+            background-color: #FFC700;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 215, 0, 0.5);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background-color: #FFFFFF;
+            color: #000000;
+            border-radius: 16px;
+            padding: 30px;
+            max-width: 500px;
+            width: 100%;
+            border: 3px solid #FFD700;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            color: #000000;
+        }
+
+        .setting-item {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid #CCCCCC;
+        }
+
+        .setting-item:last-child {
+            border-bottom: none;
+        }
+
+        .setting-label {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .setting-description {
+            font-size: 14px;
+            color: #666666;
+            line-height: 1.5;
+            margin-bottom: 15px;
+        }
+
+        .danger-btn {
+            background-color: #EF4444;
+            color: #FFFFFF;
+        }
+
+        .danger-btn:hover {
+            background-color: #DC2626;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 60vh;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333333;
+            border-top-color: #FFD700;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .location-status {
+            background-color: #FFE64D;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .location-status-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: #000000;
+        }
+
+        .location-status-text {
+            font-size: 14px;
+            color: #333333;
+            margin-bottom: 15px;
+        }
+
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .status-active {
+            background-color: #10B981;
+            color: #FFFFFF;
+        }
+
+        .status-inactive {
+            background-color: #EF4444;
+            color: #FFFFFF;
+        }
+
+        .permission-instructions {
+            background-color: #FFE64D;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+            line-height: 1.6;
+            color: #333333;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .login-box {
+                padding: 20px;
+            }
+
+            .header-title {
+                font-size: 20px;
+            }
+
+            .user-name {
+                font-size: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="https://pub-e001eb4506b145aa938b5d3badbff6a5.r2.dev/attachments/lvak0yyqswj80vzs2cc0f" alt="Logo" class="logo">
+            <div id="headerInfo"></div>
+        </div>
+
+        <div id="app">
+            <div class="loading">
+                <div class="spinner"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="adminSettingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Admin Settings</h2>
+                <button class="close-btn" onclick="closeAdminSettings()">&times;</button>
+            </div>
+            <div class="setting-item">
+                <div class="setting-label">Manage Users</div>
+                <div class="setting-description">
+                    Import users from Excel file. File should have names in the first column (with or without header row).
+                </div>
+                <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;" onchange="handleFileUpload(event)">
+                <button class="btn btn-yellow" onclick="document.getElementById('excelFile').click()">
+                    📤 Import Users from Excel
+                </button>
+            </div>
+            <div class="setting-item">
+                <div class="setting-label">Current Users</div>
+                <div class="setting-description">
+                    Total users: <span id="userCount">0</span>
+                </div>
+            </div>
+            <div class="setting-item">
+                <div class="setting-label">Danger Zone</div>
+                <button class="btn danger-btn" onclick="clearAllUsers()">
+                    🗑️ Clear All Users
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script>
+        const API_URL = 'https://rork.app/pa/cxc17pf9ipfuikc3lzd1h';
+        
+        let state = {
+            users: [],
+            records: [],
+            locations: [],
+            currentUser: null,
+            isAdmin: false,
+            locationTracking: false,
+            locationPermission: false,
+            locationInterval: null
+        };
+
+        async function loadFromServer(filename) {
+            try {
+                const response = await fetch(`${API_URL}/${filename}`);
+                if (!response.ok) return null;
+                return await response.json();
+            } catch (error) {
+                console.log('No server data found for', filename);
+                return null;
+            }
+        }
+
+        async function saveToServer(filename, data) {
+            try {
+                const response = await fetch(`${API_URL}/${filename}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return response.ok;
+            } catch (error) {
+                console.error('Failed to save to server:', error);
+                return false;
+            }
+        }
+
+        async function loadData() {
+            const [users, records, locations] = await Promise.all([
+                loadFromServer('moir_users.json'),
+                loadFromServer('moir_records.json'),
+                loadFromServer('moir_locations.json')
+            ]);
+
+            state.users = (users || []).filter(u => !u.deleted);
+            state.records = (records || []).filter(r => !r.deleted);
+            state.locations = (locations || []).filter(l => !l.deleted);
+            
+            render();
+        }
+
+        async function syncData() {
+            await Promise.all([
+                saveToServer('moir_users.json', state.users),
+                saveToServer('moir_records.json', state.records),
+                saveToServer('moir_locations.json', state.locations)
+            ]);
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            const headerInfo = document.getElementById('headerInfo');
+
+            if (!state.currentUser && !state.isAdmin) {
+                renderLogin(app);
+                headerInfo.innerHTML = '';
+            } else if (state.isAdmin) {
+                renderAdminView(app);
+                headerInfo.innerHTML = `
+                    <div class="user-info">
+                        <div class="admin-badge">
+                            👥 Admin View
+                        </div>
+                        <button class="btn btn-icon" onclick="openAdminSettings()">⚙️</button>
+                        <button class="btn btn-red" onclick="logout()">🚪 Logout</button>
+                    </div>
+                `;
+            } else {
+                renderUserView(app);
+                headerInfo.innerHTML = `
+                    <div class="user-info">
+                        <div class="welcome-text">Welcome, ${state.currentUser.name}</div>
+                        <button class="btn btn-red" onclick="logout()">🚪 Logout</button>
+                    </div>
+                `;
+            }
+        }
+
+        function renderLogin(app) {
+            app.innerHTML = `
+                <div class="login-screen">
+                    <div class="login-box">
+                        <h1 class="login-title">Welcome to Moir</h1>
+                        
+                        <div class="login-section">
+                            <div class="login-section-title">Admin Login</div>
+                            <input type="text" class="input" id="adminUsername" placeholder="Username" autocomplete="off">
+                            <input type="password" class="input" id="adminPassword" placeholder="Password" autocomplete="off">
+                            <button class="btn btn-yellow" style="width: 100%;" onclick="adminLogin()">
+                                Login as Admin
+                            </button>
+                            <div class="hint-text">Default: admin / admin123</div>
+                        </div>
+
+                        ${state.users.length > 0 ? `
+                            <div class="divider"></div>
+                            <div class="login-section">
+                                <div class="login-section-title">User Login</div>
+                                <div style="font-size: 14px; color: #666; margin-bottom: 12px;">Select your name:</div>
+                                <div class="user-list">
+                                    ${state.users.map(user => `
+                                        <div class="user-list-item" onclick="userLogin('${user.name}')">
+                                            ${user.name}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderUserView(app) {
+            const statusText = state.locationTracking ? 
+                'Your location is being shared' : 
+                'Location sharing is disabled';
+            
+            const statusClass = state.locationTracking ? 'status-active' : 'status-inactive';
+            
+            app.innerHTML = `
+                <div style="max-width: 600px; margin: 0 auto;">
+                    <div class="location-status">
+                        <div class="location-status-title">📍 Location Status</div>
+                        <div class="location-status-text">
+                            <div class="status-indicator ${statusClass}">
+                                ${state.locationTracking ? '✓' : '✗'} ${statusText}
+                            </div>
+                        </div>
+                        ${!state.locationTracking ? `
+                            <button class="btn btn-yellow" onclick="enableLocationTracking()">
+                                Enable Location Sharing
+                            </button>
+                            <div class="permission-instructions" style="margin-top: 15px;">
+                                📌 Please keep this page open and logged in to share your location.<br>
+                                📍 Your location will be updated every 60 seconds.<br>
+                                🔒 You can disable sharing anytime.
+                            </div>
+                        ` : `
+                            <button class="btn btn-red" onclick="disableLocationTracking()">
+                                Disable Location Sharing
+                            </button>
+                            <div class="permission-instructions" style="margin-top: 15px;">
+                                ✓ Location sharing is active<br>
+                                ⏱️ Updates every 60 seconds<br>
+                                💡 Keep this page open
+                            </div>
+                        `}
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <button class="btn btn-yellow" style="width: 100%; padding: 20px;" onclick="recordAttendance()">
+                            ✓ Record My Attendance
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAdminView(app) {
+            if (state.users.length === 0) {
+                app.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 64px;">👥</div>
+                        <div class="empty-state-title">No Users Found</div>
+                        <div style="margin-top: 20px;">
+                            Admin needs to import users to get started.
+                        </div>
+                        <button class="btn btn-yellow" style="margin-top: 30px;" onclick="openAdminSettings()">
+                            Import Users
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            app.innerHTML = `
+                <div class="users-grid">
+                    ${state.users.map(user => {
+                        const lastSeen = getLastSeenForUser(user.id);
+                        return `
+                            <div class="user-button" onclick="recordAttendanceAdmin('${user.id}', '${user.name}')">
+                                <div class="user-button-inner">
+                                    <div class="user-name">${user.name}</div>
+                                    <div class="last-seen">
+                                        <span>🕐 Last Seen:</span>
+                                        <span class="last-seen-time">${formatLastSeen(lastSeen)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+
+                <button class="show-locations-btn" onclick="showLocationsOnMap()">
+                    📍 Show Locations on Map
+                </button>
+            `;
+        }
+
+        function adminLogin() {
+            const username = document.getElementById('adminUsername').value;
+            const password = document.getElementById('adminPassword').value;
+
+            if (username.toLowerCase() === 'admin' && password === 'admin123') {
+                state.isAdmin = true;
+                render();
+            } else {
+                alert('Invalid admin credentials');
+            }
+        }
+
+        function userLogin(userName) {
+            const user = state.users.find(u => u.name === userName);
+            if (user) {
+                state.currentUser = user;
+                localStorage.setItem('moirCurrentUser', JSON.stringify(user));
+                render();
+            }
+        }
+
+        function logout() {
+            if (state.locationInterval) {
+                clearInterval(state.locationInterval);
+                state.locationInterval = null;
+            }
+            state.currentUser = null;
+            state.isAdmin = false;
+            state.locationTracking = false;
+            localStorage.removeItem('moirCurrentUser');
+            render();
+        }
+
+        async function recordAttendance() {
+            if (!state.currentUser) return;
+
+            const now = Date.now();
+            const date = new Date(now);
+            const newRecord = {
+                id: `moir-record-${now}-${Math.random()}`,
+                userId: state.currentUser.id,
+                userName: state.currentUser.name,
+                timestamp: now,
+                date: date.toISOString().split('T')[0],
+                time: date.toLocaleTimeString(),
+                createdAt: now,
+                updatedAt: now
+            };
+
+            state.records.push(newRecord);
+            await syncData();
+            alert(`✓ Attendance recorded for ${state.currentUser.name}`);
+        }
+
+        function recordAttendanceAdmin(userId, userName) {
+            if (confirm(`Record attendance for ${userName}?`)) {
+                const now = Date.now();
+                const date = new Date(now);
+                const newRecord = {
+                    id: `moir-record-${now}-${Math.random()}`,
+                    userId,
+                    userName,
+                    timestamp: now,
+                    date: date.toISOString().split('T')[0],
+                    time: date.toLocaleTimeString(),
+                    createdAt: now,
+                    updatedAt: now
+                };
+
+                state.records.push(newRecord);
+                syncData();
+                alert(`✓ Attendance recorded for ${userName}`);
+                render();
+            }
+        }
+
+        async function enableLocationTracking() {
+            if (!navigator.geolocation) {
+                alert('Geolocation is not supported by your browser');
+                return;
+            }
+
+            try {
+                await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject);
+                });
+
+                state.locationTracking = true;
+                state.locationPermission = true;
+                
+                updateLocation();
+                state.locationInterval = setInterval(updateLocation, 60000);
+                
+                render();
+            } catch (error) {
+                alert('Please enable location permissions in your browser settings');
+            }
+        }
+
+        function disableLocationTracking() {
+            state.locationTracking = false;
+            if (state.locationInterval) {
+                clearInterval(state.locationInterval);
+                state.locationInterval = null;
+            }
+            render();
+        }
+
+        async function updateLocation() {
+            if (!state.currentUser || !state.locationTracking) return;
+
+            try {
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject);
+                });
+
+                const now = Date.now();
+                const newLocation = {
+                    id: `moir-location-${now}-${Math.random()}`,
+                    userId: state.currentUser.id,
+                    userName: state.currentUser.name,
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude,
+                    timestamp: now,
+                    createdAt: now,
+                    updatedAt: now
+                };
+
+                state.locations = state.locations.filter(l => 
+                    l.userId !== state.currentUser.id || now - l.timestamp > 300000
+                );
+                state.locations.push(newLocation);
+                
+                await syncData();
+            } catch (error) {
+                console.error('Failed to update location:', error);
+            }
+        }
+
+        function getLastSeenForUser(userId) {
+            const userRecords = state.records
+                .filter(r => r.userId === userId)
+                .sort((a, b) => b.timestamp - a.timestamp);
+            
+            return userRecords.length > 0 ? userRecords[0].timestamp : null;
+        }
+
+        function formatLastSeen(timestamp) {
+            if (!timestamp) return 'Never';
+
+            const now = Date.now();
+            const diff = now - timestamp;
+            const seconds = Math.floor(diff / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+
+            if (seconds < 60) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            if (days === 1) return 'Yesterday';
+            if (days < 7) return `${days} days ago`;
+
+            return new Date(timestamp).toLocaleDateString();
+        }
+
+        function showLocationsOnMap() {
+            const latestLocations = getLatestLocations();
+            
+            if (latestLocations.length === 0) {
+                alert('No location data available. Users need to enable location tracking.');
+                return;
+            }
+
+            const markers = latestLocations
+                .map(loc => `${loc.latitude},${loc.longitude}`)
+                .join('|');
+            
+            const labels = latestLocations
+                .map((loc, i) => `markers=color:red%7Clabel:${String.fromCharCode(65 + i)}%7C${loc.latitude},${loc.longitude}`)
+                .join('&');
+
+            const center = latestLocations.length === 1 
+                ? `${latestLocations[0].latitude},${latestLocations[0].longitude}`
+                : markers.split('|')[0];
+
+            const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${center}&travelmode=driving`;
+            
+            let detailsHtml = '<div style="background: white; color: black; padding: 20px; border-radius: 8px; max-width: 600px;">';
+            detailsHtml += '<h2 style="margin-bottom: 20px;">User Locations</h2>';
+            detailsHtml += '<div style="margin-bottom: 20px;">';
+            
+            latestLocations.forEach((loc, i) => {
+                const label = String.fromCharCode(65 + i);
+                const timestamp = new Date(loc.timestamp).toLocaleString();
+                const mapsLink = `https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`;
+                
+                detailsHtml += `
+                    <div style="margin-bottom: 15px; padding: 15px; background: #FFE64D; border-radius: 8px;">
+                        <strong style="font-size: 18px;">[${label}] ${loc.userName}</strong><br>
+                        <span style="font-size: 12px; color: #666;">Last updated: ${timestamp}</span><br>
+                        <a href="${mapsLink}" target="_blank" style="color: #000; text-decoration: underline;">
+                            View on Google Maps
+                        </a>
+                    </div>
+                `;
+            });
+            
+            detailsHtml += '</div>';
+            detailsHtml += `<button onclick="window.close()" style="padding: 12px 24px; background: #FFD700; border: none; border-radius: 8px; cursor: pointer; font-weight: 700;">Close</button>`;
+            detailsHtml += '</div>';
+
+            const newWindow = window.open('', '_blank', 'width=700,height=800');
+            newWindow.document.write(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>User Locations</title>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 20px; font-family: Arial, sans-serif; background: #000;">
+                    ${detailsHtml}
+                </body>
+                </html>
+            `);
+        }
+
+        function getLatestLocations() {
+            const latestByUser = new Map();
+            
+            state.locations
+                .sort((a, b) => b.timestamp - a.timestamp)
+                .forEach(location => {
+                    if (!latestByUser.has(location.userId)) {
+                        latestByUser.set(location.userId, location);
+                    }
+                });
+
+            return Array.from(latestByUser.values());
+        }
+
+        function openAdminSettings() {
+            document.getElementById('userCount').textContent = state.users.length;
+            document.getElementById('adminSettingsModal').classList.add('active');
+        }
+
+        function closeAdminSettings() {
+            document.getElementById('adminSettingsModal').classList.remove('active');
+        }
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            try {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+                    const names = rows
+                        .slice(1)
+                        .map(row => Array.isArray(row) ? row[0] : row.Name)
+                        .filter(name => name && typeof name === 'string' && name.trim());
+
+                    if (names.length === 0) {
+                        alert('No valid names found in the Excel file');
+                        return;
+                    }
+
+                    const newUsers = names.map(name => ({
+                        id: `moir-user-${Date.now()}-${Math.random()}`,
+                        name: name.trim(),
+                        createdAt: Date.now(),
+                        updatedAt: Date.now()
+                    }));
+
+                    state.users = [...state.users, ...newUsers];
+                    await syncData();
+                    
+                    alert(`✓ Successfully imported ${newUsers.length} users`);
+                    closeAdminSettings();
+                    render();
+                };
+                reader.readAsArrayBuffer(file);
+            } catch (error) {
+                console.error('Import error:', error);
+                alert('Failed to import users. Please try again.');
+            }
+
+            event.target.value = '';
+        }
+
+        async function clearAllUsers() {
+            if (confirm('Are you sure you want to delete all users? This action cannot be undone.')) {
+                state.users = [];
+                await syncData();
+                alert('✓ All users have been deleted');
+                closeAdminSettings();
+                render();
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadData();
+            
+            const savedUser = localStorage.getItem('moirCurrentUser');
+            if (savedUser) {
+                state.currentUser = JSON.parse(savedUser);
+            }
+        });
+    </script>
+</body>
+</html>

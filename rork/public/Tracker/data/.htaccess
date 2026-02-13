@@ -1,0 +1,9 @@
+# Deny direct access to JSON data files
+<FilesMatch "\.json$">
+  Order Allow,Deny
+  Deny from all
+</FilesMatch>
+
+# Allow only specific PHP scripts from api directory
+Order Deny,Allow
+Deny from all

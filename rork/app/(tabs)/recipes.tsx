@@ -1,0 +1,519 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform, ActivityIndicator } from 'react-native';
+import { useMemo, useState, useCallback } from 'react';
+import { useStock } from '@/contexts/StockContext';
+import { useRecipes } from '@/contexts/RecipeContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useStores } from '@/contexts/StoresContext';
+import Colors from '@/constants/colors';
+import { Plus, Save, X, Upload, AlertCircle } from 'lucide-react-native';
+import { RecipeComponent, Recipe } from '@/types';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import { parseRecipeExcelFile } from '@/utils/recipeExcelParser';
+import { VoiceSearchInput } from '@/components/VoiceSearchInput';
+import { formatCurrency } from '@/utils/currencyHelper';
+
+export default function RecipesScreen() {
+  const { isAdmin, currency } = useAuth();
+  const { products, productConversions } = useStock();
+  const { recipes, addOrUpdateRecipe, deleteRecipe, getRecipeFor } = useRecipes();
+  const { storeProducts } = useStores();
+
+  const menuItems = useMemo(() => products.filter(p => p.type === 'menu'), [products]);
+  const rawItems = useMemo(() => products.filter(p => p.type === 'raw'), [products]);
+  const [search, setSearch] = useState<string>('');
+  const [editingMenuId, setEditingMenuId] = useState<string | null>(null);
+  const [components, setComponents] = useState<RecipeComponent[]>([]);
+  const [rawMaterialSearch, setRawMaterialSearch] = useState<string>('');
+  const [showEditor, setShowEditor] = useState<boolean>(false);
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [showImportResults, setShowImportResults] = useState<boolean>(false);
+  const [importResults, setImportResults] = useState<{ success: number; warnings: string[]; errors: string[] }>({ success: 0, warnings: [], errors: [] });
+
+  const calculateProductCost = useCallback((menuProductId: string): number | null => {
+    const recipe = recipes.find(r => r.menuProductId === menuProductId);
+    if (!recipe || recipe.components.length === 0) {
+      return null;
+    }
+    
+    let totalCost = 0;
+    let hasSomeCosts = false;
+    
+    const menuProduct = menuItems.find(m => m.id === menuProductId);
+    if (menuProduct) {
+      console.log(`\n[Recipes] ========== Calculating cost for "${menuProduct.name}" ==========`);
+      console.log(`[Recipes] Recipe has ${recipe.components.length} components`);
+      console.log(`[Recipes] Store products available: ${storeProducts.length}`);
+    }
+    
+    for (let i = 0; i < recipe.components.length; i++) {
+      const component = recipe.components[i];
+      const rawProduct = rawItems.find(p => p.id === component.rawProductId);
+      
+      if (!rawProduct) {
+        console.log(`[Recipes] [${i+1}/${recipe.components.length}] ❌ Raw product not found: ${component.rawProductId}`);
+        continue;
+      }
+      
+      console.log(`[Recipes] [${i+1}/${recipe.components.length}] Looking for: "${rawProduct.name}" (${rawProduct.unit})`);
+      
+      const normalizeUnit = (unit: string): string => {
+        const normalized = unit.toLowerCase().trim();
+        return normalized.replace(/^1/, '').trim();
+      };
+      
+      const storeProduct = storeProducts.find(sp => {
+        const nameMatch = sp.name.toLowerCase().trim() === rawProduct.name.toLowerCase().trim();
+        const recipeUnit = normalizeUnit(rawProduct.unit);
+        const storeUnit = normalizeUnit(sp.unit);
+        const unitMatch = recipeUnit === storeUnit;
+        if (nameMatch || sp.name.toLowerCase().includes(rawProduct.name.toLowerCase())) {
+          console.log(`[Recipes]    Comparing with: "${sp.name}" (${sp.unit}) - nameMatch: ${nameMatch}, unitMatch: ${unitMatch} (recipe: ${recipeUnit}, store: ${storeUnit}), costPerUnit: ${sp.costPerUnit}`);
+        }
+        return nameMatch && unitMatch;
+      });
+      
+      if (storeProduct && storeProduct.costPerUnit !== undefined && storeProduct.costPerUnit !== null) {
+        const componentCost = component.quantityPerUnit * storeProduct.costPerUnit;
+        totalCost += componentCost;
+        hasSomeCosts = true;
+        console.log(`[Recipes] [${i+1}/${recipe.components.length}] ✓ ${rawProduct.name}: ${component.quantityPerUnit} × ${storeProduct.costPerUnit} = ${componentCost.toFixed(2)} (Running total: ${totalCost.toFixed(2)})`);
+      } else {
+        console.log(`[Recipes] [${i+1}/${recipe.components.length}] ⚠️  No cost for "${rawProduct.name}" (${rawProduct.unit}) - Store product ${storeProduct ? 'found but no cost' : 'not found'}`);
+      }
+    }
+    
+    console.log(`[Recipes] ========== FINAL TOTAL: ${hasSomeCosts ? totalCost.toFixed(2) : 'N/A'} ==========\n`);
+    return hasSomeCosts ? totalCost : null;
+  }, [recipes, rawItems, storeProducts, menuItems]);
+
+  const filteredMenu = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = q ? menuItems.filter(m => m.name.toLowerCase().includes(q)) : menuItems;
+    return filtered.sort((a, b) => {
+      const typeA = a.type || '';
+      const typeB = b.type || '';
+      const catA = a.category || 'Uncategorized';
+      const catB = b.category || 'Uncategorized';
+      
+      if (typeA !== typeB) return typeA.localeCompare(typeB);
+      if (catA !== catB) return catA.localeCompare(catB);
+      return a.name.localeCompare(b.name);
+    });
+  }, [menuItems, search]);
+
+  const groupedMenu = useMemo(() => {
+    const groups: Record<string, Record<string, typeof menuItems>> = {};
+    
+    filteredMenu.forEach(item => {
+      const type = item.type || 'Unknown';
+      const category = item.category || 'Uncategorized';
+      
+      if (!groups[type]) groups[type] = {};
+      if (!groups[type][category]) groups[type][category] = [];
+      groups[type][category].push(item);
+    });
+    
+    return groups;
+  }, [filteredMenu]);
+
+  const openEditor = (menuId: string) => {
+    setEditingMenuId(menuId);
+    const existing = getRecipeFor(menuId);
+    setComponents(existing ? existing.components.map(c => ({ ...c })) : []);
+    setRawMaterialSearch('');
+    setShowEditor(true);
+  };
+
+  const addComponentRow = (rawProductId?: string) => {
+    const productId = rawProductId || rawItems[0]?.id || '';
+    setComponents(prev => [...prev, { rawProductId: productId, quantityPerUnit: 0 }]);
+    setRawMaterialSearch('');
+  };
+
+  const updateComponent = (idx: number, patch: Partial<RecipeComponent>) => {
+    setComponents(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  };
+
+  const removeComponent = (idx: number) => {
+    setComponents(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const saveRecipe = async () => {
+    if (!editingMenuId) return;
+    const cleaned = components.filter(c => c.rawProductId && Number.isFinite(c.quantityPerUnit) && c.quantityPerUnit > 0);
+    const r: Recipe = { id: `rcp-${editingMenuId}`, menuProductId: editingMenuId, components: cleaned, updatedAt: Date.now() };
+    await addOrUpdateRecipe(r);
+    setShowEditor(false);
+    setEditingMenuId(null);
+    setComponents([]);
+  };
+
+  const handleImport = async () => {
+    try {
+      setIsImporting(true);
+      
+      const result = await DocumentPicker.getDocumentAsync({
+        type: Platform.OS === 'web' 
+          ? ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']
+          : ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'text/csv'],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        setIsImporting(false);
+        return;
+      }
+
+      const file = result.assets[0];
+      let base64Data: string;
+
+      if (Platform.OS === 'web') {
+        if (file.file) {
+          const reader = new FileReader();
+          base64Data = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => {
+              const result = reader.result as string;
+              const base64 = result.split(',')[1];
+              resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file.file as Blob);
+          });
+        } else {
+          throw new Error('No file selected');
+        }
+      } else {
+        base64Data = await FileSystem.readAsStringAsync(file.uri, {
+          encoding: 'base64',
+        });
+      }
+
+      const parsed = parseRecipeExcelFile(base64Data, products, productConversions);
+      
+      if (parsed.errors.length > 0) {
+        setImportResults({ success: 0, warnings: parsed.warnings, errors: parsed.errors });
+        setShowImportResults(true);
+        setIsImporting(false);
+        return;
+      }
+
+      let successCount = 0;
+      for (const recipe of parsed.recipes) {
+        await addOrUpdateRecipe(recipe);
+        successCount++;
+      }
+
+      setImportResults({ success: successCount, warnings: parsed.warnings, errors: [] });
+      setShowImportResults(true);
+      setIsImporting(false);
+
+    } catch (error) {
+      console.error('Import error:', error);
+      Alert.alert('Import Error', error instanceof Error ? error.message : 'Failed to import recipes');
+      setIsImporting(false);
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      {!isAdmin ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: Colors.light.muted }}>Admins only</Text>
+        </View>
+      ) : (
+        <>
+          <View style={styles.toolbar}>
+            <VoiceSearchInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search menu items..."
+              placeholderTextColor={Colors.light.muted}
+              style={styles.searchBar}
+              inputStyle={styles.searchInput}
+            />
+            <TouchableOpacity 
+              style={styles.importBtn} 
+              onPress={handleImport}
+              disabled={isImporting}
+            >
+              {isImporting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Upload size={16} color="#fff" />
+              )}
+              <Text style={styles.importBtnText}>Import</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.list} contentContainerStyle={{ paddingBottom: 20 }}>
+            {Object.entries(groupedMenu).sort(([typeA], [typeB]) => typeA.localeCompare(typeB)).map(([type, categories]) => (
+              <View key={type}>
+                <View style={styles.typeHeader}>
+                  <Text style={styles.typeTitle}>{type.toUpperCase()}</Text>
+                </View>
+                
+                {Object.entries(categories).sort(([catA], [catB]) => catA.localeCompare(catB)).map(([category, items]) => (
+                  <View key={`${type}-${category}`}>
+                    <View style={styles.categoryHeader}>
+                      <Text style={styles.categoryTitle}>{category}</Text>
+                    </View>
+                    
+                    {items.map(m => {
+                      const r = recipes.find(rc => rc.menuProductId === m.id);
+                      const productCost = calculateProductCost(m.id);
+                      const markupPercentage = productCost !== null && m.sellingPrice && m.sellingPrice > 0 && productCost > 0
+                        ? ((m.sellingPrice - productCost) / productCost) * 100
+                        : null;
+                      
+                      return (
+                        <View key={m.id} style={styles.card}>
+                          <View style={styles.cardHeader}>
+                            <View style={{ flex: 1 }}>
+                              <View style={styles.nameRow}>
+                                <Text style={styles.menuName}>{m.name}</Text>
+                                <View style={styles.costMarkupContainer}>
+                                  {productCost !== null && (
+                                    <Text style={styles.costTextInline}>Cost: {formatCurrency(productCost, currency)}</Text>
+                                  )}
+                                  {markupPercentage !== null && (
+                                    <Text style={styles.markupTextInline}>+{markupPercentage.toFixed(0)}%</Text>
+                                  )}
+                                </View>
+                              </View>
+                              {m.sellingPrice && (
+                                <Text style={styles.sellingPriceText}>Selling Price: {formatCurrency(m.sellingPrice, currency)}</Text>
+                              )}
+                              <Text style={styles.sub}>Unit: {m.unit}</Text>
+                              <Text style={styles.subSmall}>{r ? `${r.components.length} ingredient${r.components.length !== 1 ? 's' : ''}` : 'No recipe defined'}</Text>
+                            </View>
+                            <TouchableOpacity style={styles.primaryBtn} onPress={() => openEditor(m.id)}>
+                              <Plus size={16} color="#fff" />
+                              <Text style={styles.primaryBtnText}>{r ? 'Edit' : 'Add'} Recipe</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          {r && (
+                            <View style={styles.componentsList}>
+                              {r.components.map((c, idx) => {
+                                const raw = rawItems.find(p => p.id === c.rawProductId);
+                                if (!raw) return null;
+                                return (
+                                  <View key={idx} style={styles.compRow}>
+                                    <Text style={styles.compName}>{raw.name}</Text>
+                                    <Text style={styles.compQty}>{c.quantityPerUnit} {raw.unit} / {m.unit}</Text>
+                                  </View>
+                                );
+                              })}
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+            ))}
+          </ScrollView>
+
+          <Modal visible={showEditor} transparent animationType="fade" onRequestClose={() => setShowEditor(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Recipe</Text>
+                  <TouchableOpacity onPress={() => setShowEditor(false)}>
+                    <X size={22} color={Colors.light.text} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ padding: 12 }}>
+                  {components.length === 0 && (
+                    <Text style={styles.emptyText}>Search and select raw materials to add to this recipe.</Text>
+                  )}
+                  
+                  {/* Search bar to add raw materials */}
+                  <View style={styles.searchSection}>
+                    <Text style={styles.searchLabel}>Add Raw Material</Text>
+                    <TextInput
+                      style={styles.modalSearchInput}
+                      placeholder="Search raw materials..."
+                      value={rawMaterialSearch}
+                      onChangeText={setRawMaterialSearch}
+                      placeholderTextColor={Colors.light.muted}
+                    />
+                    {rawMaterialSearch.trim() && (
+                      <ScrollView style={styles.dropdown}>
+                        {rawItems
+                          .filter(r => r.name.toLowerCase().includes(rawMaterialSearch.toLowerCase().trim()))
+                          .map(rawItem => {
+                            const alreadyAdded = components.some(c => c.rawProductId === rawItem.id);
+                            return (
+                              <TouchableOpacity
+                                key={rawItem.id}
+                                style={[styles.dropdownItem, alreadyAdded && styles.dropdownItemDisabled]}
+                                onPress={() => {
+                                  if (!alreadyAdded) {
+                                    addComponentRow(rawItem.id);
+                                  }
+                                }}
+                                disabled={alreadyAdded}
+                              >
+                                <Text style={[styles.dropdownItemText, alreadyAdded && styles.dropdownItemTextDisabled]}>
+                                  {rawItem.name} ({rawItem.unit})
+                                  {alreadyAdded && ' - Already added'}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                      </ScrollView>
+                    )}
+                  </View>
+
+                  {/* List of added ingredients */}
+                  {components.map((c, idx) => {
+                    const raw = rawItems.find(p => p.id === c.rawProductId);
+                    return (
+                      <View key={idx} style={styles.ingredientRow}>
+                        <View style={styles.ingredientInfo}>
+                          <Text style={styles.ingredientName}>{raw?.name || 'Unknown'}</Text>
+                          <Text style={styles.ingredientUnit}>Unit: {raw?.unit || 'N/A'}</Text>
+                        </View>
+                        <View style={styles.qtyInputContainer}>
+                          <Text style={styles.qtyLabel}>Qty</Text>
+                          <TextInput
+                            style={styles.qtyInput}
+                            placeholder="0"
+                            keyboardType="decimal-pad"
+                            value={String(c.quantityPerUnit || '')}
+                            onChangeText={(v) => updateComponent(idx, { quantityPerUnit: parseFloat(v) || 0 })}
+                            placeholderTextColor={Colors.light.muted}
+                          />
+                        </View>
+                        <TouchableOpacity style={styles.removeBtn} onPress={() => removeComponent(idx)}>
+                          <X size={18} color={Colors.light.danger} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }]} onPress={saveRecipe}>
+                    <Save size={16} color="#fff" />
+                    <Text style={styles.primaryBtnText}>Save</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal visible={showImportResults} transparent animationType="fade" onRequestClose={() => setShowImportResults(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Import Results</Text>
+                  <TouchableOpacity onPress={() => setShowImportResults(false)}>
+                    <X size={22} color={Colors.light.text} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView style={{ maxHeight: 400 }} contentContainerStyle={{ padding: 16 }}>
+                  {importResults.success > 0 && (
+                    <View style={styles.resultSection}>
+                      <Text style={styles.successText}>✓ Successfully imported {importResults.success} recipe{importResults.success !== 1 ? 's' : ''}</Text>
+                    </View>
+                  )}
+                  {importResults.warnings.length > 0 && (
+                    <View style={styles.resultSection}>
+                      <View style={styles.resultHeader}>
+                        <AlertCircle size={16} color={Colors.light.warning} />
+                        <Text style={styles.warningTitle}>Warnings ({importResults.warnings.length})</Text>
+                      </View>
+                      {importResults.warnings.map((w, i) => (
+                        <Text key={i} style={styles.warningText}>• {w}</Text>
+                      ))}
+                    </View>
+                  )}
+                  {importResults.errors.length > 0 && (
+                    <View style={styles.resultSection}>
+                      <View style={styles.resultHeader}>
+                        <AlertCircle size={16} color={Colors.light.danger} />
+                        <Text style={styles.errorTitle}>Errors ({importResults.errors.length})</Text>
+                      </View>
+                      {importResults.errors.map((e, i) => (
+                        <Text key={i} style={styles.errorText}>• {e}</Text>
+                      ))}
+                    </View>
+                  )}
+                </ScrollView>
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }]} onPress={() => setShowImportResults(false)}>
+                    <Text style={styles.primaryBtnText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        </>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.light.background, padding: 12 },
+  toolbar: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  searchInput: { flex: 1, color: Colors.light.text },
+  importBtn: { backgroundColor: Colors.light.accent, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', minWidth: 100 },
+  importBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  list: { flex: 1 },
+  card: { backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, padding: 12, marginBottom: 10 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  menuName: { fontSize: 16, fontWeight: '700', color: Colors.light.text, flex: 1 },
+  costMarkupContainer: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  costTextInline: { fontSize: 12, color: Colors.light.tint, fontWeight: '700' as const, backgroundColor: Colors.light.tint + '15', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  markupTextInline: { fontSize: 12, color: Colors.light.success, fontWeight: '700' as const, backgroundColor: Colors.light.success + '15', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  sub: { fontSize: 12, color: Colors.light.muted, marginTop: 4 },
+  subSmall: { fontSize: 11, color: Colors.light.tabIconDefault },
+  sellingPriceText: { fontSize: 13, color: Colors.light.text, fontWeight: '600' as const, marginTop: 4 },
+  costText: { fontSize: 13, color: Colors.light.tint, fontWeight: '700' as const, marginTop: 2 },
+  markupText: { fontSize: 13, color: Colors.light.success, fontWeight: '700' as const, marginTop: 2 },
+  primaryBtn: { backgroundColor: Colors.light.tint, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  primaryBtnText: { color: '#fff', fontWeight: '700' },
+  componentsList: { marginTop: 8, gap: 8 },
+  compRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
+  compName: { color: Colors.light.text },
+  compQty: { color: Colors.light.accent, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  modalContent: { backgroundColor: Colors.light.card, borderRadius: 14, borderWidth: 1, borderColor: Colors.light.border, width: '100%', maxWidth: 560, overflow: 'hidden' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: Colors.light.text },
+  searchSection: { marginBottom: 16 },
+  searchLabel: { fontSize: 14, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 8 },
+  modalSearchInput: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, color: Colors.light.text, fontSize: 14 },
+  dropdown: { maxHeight: 200, backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, marginTop: 4 },
+  dropdownItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  dropdownItemDisabled: { backgroundColor: Colors.light.background, opacity: 0.5 },
+  dropdownItemText: { color: Colors.light.text, fontSize: 14 },
+  dropdownItemTextDisabled: { color: Colors.light.muted },
+  ingredientRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, marginBottom: 8 },
+  ingredientInfo: { flex: 1 },
+  ingredientName: { fontSize: 14, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 2 },
+  ingredientUnit: { fontSize: 12, color: Colors.light.muted },
+  qtyInputContainer: { alignItems: 'center' },
+  qtyLabel: { fontSize: 11, color: Colors.light.muted, marginBottom: 4 },
+  qtyInput: { backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 8, color: Colors.light.text, fontWeight: '700' as const, fontSize: 14, width: 80, textAlign: 'center' as const },
+  removeBtn: { padding: 6 },
+  emptyText: { color: Colors.light.muted, marginBottom: 8 },
+  modalFooter: { padding: 12, borderTopWidth: 1, borderTopColor: Colors.light.border },
+  resultSection: { marginBottom: 16 },
+  resultHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  successText: { color: Colors.light.success, fontSize: 15, fontWeight: '700' },
+  warningTitle: { color: Colors.light.warning, fontSize: 14, fontWeight: '700' },
+  warningText: { color: Colors.light.muted, fontSize: 13, marginLeft: 22, marginTop: 4 },
+  errorTitle: { color: Colors.light.danger, fontSize: 14, fontWeight: '700' },
+  errorText: { color: Colors.light.danger, fontSize: 13, marginLeft: 22, marginTop: 4 },
+  typeHeader: { backgroundColor: Colors.light.tint, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 8, marginTop: 16, borderRadius: 8 },
+  typeTitle: { fontSize: 16, fontWeight: '800' as const, color: '#fff', letterSpacing: 1 },
+  categoryHeader: { backgroundColor: Colors.light.accent + '20', paddingVertical: 8, paddingHorizontal: 12, marginBottom: 8, marginTop: 8, borderRadius: 6 },
+  categoryTitle: { fontSize: 14, fontWeight: '700' as const, color: Colors.light.accent },
+});

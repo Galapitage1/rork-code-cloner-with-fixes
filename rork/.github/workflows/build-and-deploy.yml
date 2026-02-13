@@ -1,0 +1,56 @@
+name: Build and Package App
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Install dependencies
+      run: bun install
+
+    - name: Build web app
+      run: npx expo export -p web
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tracker-app-build
+        path: dist/
+        retention-days: 30
+
+    - name: Prepare deployment package
+      run: |
+        # Copy the built web app
+        mkdir -p deploy
+        cp -r dist/* deploy/
+        
+        # Copy the Tracker API and data folders
+        mkdir -p deploy/Tracker
+        cp -r public/Tracker/* deploy/Tracker/
+        
+        # Ensure data directory exists with proper structure
+        mkdir -p deploy/Tracker/data
+        
+        # Create the zip package
+        cd deploy
+        zip -r ../tracker-app.zip .
+
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-package
+        path: tracker-app.zip
+        retention-days: 30
