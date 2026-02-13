@@ -749,7 +749,7 @@ function LiveInventoryScreen() {
         // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
         if (outlet?.outletType === 'production') {
           const reconcileForDate = reconcileHistory.find(
-            r => r.date === date && !r.deleted
+            r => r.date === date && r.outlet === selectedOutlet && !r.deleted
           );
           
           if (reconcileForDate && reconcileForDate.prodsReqUpdates) {
