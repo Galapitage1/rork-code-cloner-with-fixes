@@ -880,8 +880,8 @@ export function reconcileKitchenStockFromExcelBase64(
 
     const stockCheckDate = productionDate;
 
-    const outletName = getCellString(ws, 'D5');
-    if (!outletName) {
+    const outletNameFromExcel = getCellString(ws, 'D5');
+    if (!outletNameFromExcel) {
       return {
         productionDate,
         stockCheckDate,
@@ -893,19 +893,22 @@ export function reconcileKitchenStockFromExcelBase64(
     }
 
     const matchedStockCheck = stockChecks.find(
-      (sc) => sc.date === stockCheckDate && (sc.outlet ?? '').toLowerCase() === outletName.toLowerCase()
+      (sc) => sc.date === stockCheckDate && (sc.outlet ?? '').toLowerCase() === outletNameFromExcel.toLowerCase()
     );
 
     if (!matchedStockCheck) {
       return {
         productionDate,
         stockCheckDate,
-        outletName,
+        outletName: outletNameFromExcel,
         matched: false,
         discrepancies: [],
-        errors: [`No stock check found for outlet "${outletName}" on date ${stockCheckDate}`],
+        errors: [`No stock check found for outlet "${outletNameFromExcel}" on date ${stockCheckDate}`],
       };
     }
+
+    const outletName = matchedStockCheck.outlet;
+    console.log(`Kitchen reconciliation: Using outlet name from matched stock check: "${outletName}" (Excel had: "${outletNameFromExcel}")`);
 
     const productMap = new Map<string, Product>();
     products.forEach((p) => {
@@ -926,6 +929,7 @@ export function reconcileKitchenStockFromExcelBase64(
 
     // Dynamically find the column containing the outlet name in row 9
     // Search through columns A to Z (and beyond if needed)
+    // Try to match both the actual outlet name AND the Excel value (in case Excel has outlet type)
     let productionColumn: string | null = null;
     const maxColumns = 50; // Search up to column AX
     
@@ -934,9 +938,9 @@ export function reconcileKitchenStockFromExcelBase64(
       const cellAddress = `${columnLetter}9`;
       const cellValue = getCellString(ws, cellAddress);
       
-      if (cellValue && cellValue.toLowerCase() === outletName.toLowerCase()) {
+      if (cellValue && (cellValue.toLowerCase() === outletName.toLowerCase() || cellValue.toLowerCase() === outletNameFromExcel.toLowerCase())) {
         productionColumn = columnLetter;
-        console.log(`Found outlet "${outletName}" in column ${columnLetter} at row 9`);
+        console.log(`Found outlet column match in ${columnLetter} at row 9: Excel cell="${cellValue}", Matched="${outletName}"`);
         break;
       }
     }
@@ -948,7 +952,7 @@ export function reconcileKitchenStockFromExcelBase64(
         outletName,
         matched: false,
         discrepancies: [],
-        errors: [`Could not find outlet "${outletName}" in row 9. Please ensure the outlet name appears in row 9 of the Excel sheet.`],
+        errors: [`Could not find outlet "${outletName}" or "${outletNameFromExcel}" in row 9. Please ensure the outlet name appears in row 9 of the Excel sheet.`],
       };
     }
 
