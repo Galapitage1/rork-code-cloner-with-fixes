@@ -642,7 +642,7 @@ function LiveInventoryScreen() {
     console.log('========================================\n');
 
     return history.sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, approvedProductions]);
+  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, approvedProductions, inventoryStocks]);
 
   console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
   console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
