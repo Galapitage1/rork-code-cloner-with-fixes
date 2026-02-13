@@ -84,6 +84,8 @@ export default function SettingsScreen() {
   const [editingLeaveType, setEditingLeaveType] = useState<LeaveType | null>(null);
   const [newLeaveTypeName, setNewLeaveTypeName] = useState<string>('');
   const [newLeaveTypeColor, setNewLeaveTypeColor] = useState<string>('#3B82F6');
+  const [dataCleanupExpanded, setDataCleanupExpanded] = useState<boolean>(false);
+  const [isDeletingData, setIsDeletingData] = useState<boolean>(false);
   
   const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
   const { leaveTypes, addLeaveType, updateLeaveType, deleteLeaveType } = useLeave();
@@ -327,6 +329,75 @@ export default function SettingsScreen() {
     });
   };
 
+  const deleteOldDataFromServer = async (daysToKeep: number) => {
+    if (!currentUser) {
+      throw new Error('User not logged in');
+    }
+
+    const cutoffDate = Date.now() - (daysToKeep * 24 * 60 * 60 * 1000);
+    console.log(`[DATA CLEANUP] Deleting data older than ${daysToKeep} days (cutoff: ${new Date(cutoffDate).toISOString()})`);
+
+    const dataTypes = [
+      'products',
+      'stockChecks',
+      'requests',
+      'productConversions',
+      'inventoryStocks',
+      'salesDeductions',
+      'reconcileHistory',
+      'liveInventorySnapshots',
+      'customers',
+      'recipes',
+      'orders',
+      'stores',
+      'suppliers',
+      'grns',
+      'productions',
+      'moir_users',
+      'moir_attendance',
+      'leave_requests',
+    ];
+
+    const baseUrl = backendStatus.baseUrl;
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    for (const dataType of dataTypes) {
+      try {
+        console.log(`[DATA CLEANUP] Processing ${dataType}...`);
+        const response = await fetch(`${baseUrl}/Tracker/api/delete-old-data.php`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            dataType,
+            cutoffDate,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          console.log(`[DATA CLEANUP] ✓ ${dataType}: ${result.deleted || 0} items deleted`);
+          deletedCount += (result.deleted || 0);
+        } else {
+          console.error(`[DATA CLEANUP] ✗ ${dataType}: ${result.error || 'Unknown error'}`);
+          failedCount++;
+        }
+      } catch (error) {
+        console.error(`[DATA CLEANUP] ✗ ${dataType}: Error during cleanup:`, error);
+        failedCount++;
+      }
+    }
+
+    console.log(`[DATA CLEANUP] Complete - Deleted: ${deletedCount} items, Failed: ${failedCount} types`);
+    
+    if (failedCount > 0) {
+      throw new Error(`Cleanup partially failed. ${failedCount} data types could not be cleaned.`);
+    }
+  };
+
   const handleManualSync = async () => {
     if (!currentUser) {
       Alert.alert('Error', 'Please login to sync data.');
@@ -535,6 +606,188 @@ export default function SettingsScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Data Cleanup Settings - Super Admin Only */}
+      {isSuperAdmin && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setDataCleanupExpanded(!dataCleanupExpanded)}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <Trash2 size={24} color={Colors.light.tint} />
+              <Text style={styles.sectionTitle}>Data Cleanup</Text>
+            </View>
+            {dataCleanupExpanded ? (
+              <ChevronUp size={20} color={Colors.light.tint} />
+            ) : (
+              <ChevronDown size={20} color={Colors.light.tint} />
+            )}
+          </TouchableOpacity>
+
+          {dataCleanupExpanded && (
+            <>
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>
+                  Delete old data from the server to free up storage space. Select how many days of data you want to keep. This action cannot be undone.
+                </Text>
+              </View>
+
+              <View style={[styles.syncInfoCard, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+                <Text style={[styles.syncInfoText, { color: '#92400E' }]}>⚠️ Only manually deleted data can be removed from the server. Data is NEVER automatically deleted.</Text>
+              </View>
+
+              <Text style={styles.sectionSubtitle}>Keep Data From Last:</Text>
+
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton]}
+                onPress={() => {
+                  Alert.alert(
+                    'Keep All Data',
+                    'All data will be kept on the server. No data will be deleted. This is the default setting.',
+                    [{ text: 'OK' }]
+                  );
+                }}
+              >
+                <CheckCircle size={20} color={Colors.light.card} />
+                <Text style={styles.buttonText}>ALL Data (No Deletion)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={() => {
+                  openConfirm({
+                    title: 'Delete Old Data',
+                    message: 'This will delete all data older than 30 days from the server. Recent 30 days of data will be kept. This action cannot be undone.',
+                    destructive: true,
+                    testID: 'confirm-delete-30-days',
+                    onConfirm: async () => {
+                      try {
+                        setIsDeletingData(true);
+                        await deleteOldDataFromServer(30);
+                        Alert.alert('Success', 'Data older than 30 days has been deleted from the server.');
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to delete old data. Please try again.');
+                      } finally {
+                        setIsDeletingData(false);
+                      }
+                    },
+                  });
+                }}
+                disabled={isDeletingData}
+              >
+                {isDeletingData ? (
+                  <ActivityIndicator color={Colors.light.tint} />
+                ) : (
+                  <>
+                    <CalendarDays size={20} color={Colors.light.tint} />
+                    <Text style={[styles.buttonText, styles.secondaryButtonText]}>30 Days</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={() => {
+                  openConfirm({
+                    title: 'Delete Old Data',
+                    message: 'This will delete all data older than 45 days from the server. Recent 45 days of data will be kept. This action cannot be undone.',
+                    destructive: true,
+                    testID: 'confirm-delete-45-days',
+                    onConfirm: async () => {
+                      try {
+                        setIsDeletingData(true);
+                        await deleteOldDataFromServer(45);
+                        Alert.alert('Success', 'Data older than 45 days has been deleted from the server.');
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to delete old data. Please try again.');
+                      } finally {
+                        setIsDeletingData(false);
+                      }
+                    },
+                  });
+                }}
+                disabled={isDeletingData}
+              >
+                {isDeletingData ? (
+                  <ActivityIndicator color={Colors.light.tint} />
+                ) : (
+                  <>
+                    <CalendarDays size={20} color={Colors.light.tint} />
+                    <Text style={[styles.buttonText, styles.secondaryButtonText]}>45 Days</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={() => {
+                  openConfirm({
+                    title: 'Delete Old Data',
+                    message: 'This will delete all data older than 90 days from the server. Recent 90 days of data will be kept. This action cannot be undone.',
+                    destructive: true,
+                    testID: 'confirm-delete-90-days',
+                    onConfirm: async () => {
+                      try {
+                        setIsDeletingData(true);
+                        await deleteOldDataFromServer(90);
+                        Alert.alert('Success', 'Data older than 90 days has been deleted from the server.');
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to delete old data. Please try again.');
+                      } finally {
+                        setIsDeletingData(false);
+                      }
+                    },
+                  });
+                }}
+                disabled={isDeletingData}
+              >
+                {isDeletingData ? (
+                  <ActivityIndicator color={Colors.light.tint} />
+                ) : (
+                  <>
+                    <CalendarDays size={20} color={Colors.light.tint} />
+                    <Text style={[styles.buttonText, styles.secondaryButtonText]}>90 Days</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={() => {
+                  openConfirm({
+                    title: 'Delete Old Data',
+                    message: 'This will delete all data older than 180 days from the server. Recent 180 days of data will be kept. This action cannot be undone.',
+                    destructive: true,
+                    testID: 'confirm-delete-180-days',
+                    onConfirm: async () => {
+                      try {
+                        setIsDeletingData(true);
+                        await deleteOldDataFromServer(180);
+                        Alert.alert('Success', 'Data older than 180 days has been deleted from the server.');
+                      } catch (error) {
+                        Alert.alert('Error', 'Failed to delete old data. Please try again.');
+                      } finally {
+                        setIsDeletingData(false);
+                      }
+                    },
+                  });
+                }}
+                disabled={isDeletingData}
+              >
+                {isDeletingData ? (
+                  <ActivityIndicator color={Colors.light.tint} />
+                ) : (
+                  <>
+                    <CalendarDays size={20} color={Colors.light.tint} />
+                    <Text style={[styles.buttonText, styles.secondaryButtonText]}>180 Days</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
 
       {/* Permanent Settings Save - Super Admin Only */}
       {isSuperAdmin && (
