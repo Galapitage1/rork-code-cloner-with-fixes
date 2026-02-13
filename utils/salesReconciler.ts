@@ -98,7 +98,7 @@ export async function reconcileSalesFromExcelBase64(
 
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    const outletFromSheet = getCellString(ws, 'J5');
+    const outletFromSheet = getCellString(ws, 'B4');
     const sheetDateRaw = getCellDate(ws, 'H9');
     console.log('===== SALES RECONCILIATION DATE PARSING =====');
     console.log('Raw date from Excel cell H9:', sheetDateRaw);
@@ -173,7 +173,7 @@ export async function reconcileSalesFromExcelBase64(
     }
 
     if (!outletFromSheet) {
-      errors.push(`❌ Missing outlet in sheet cell J5`);
+      errors.push(`❌ Missing outlet in sheet cell B4`);
     }
     if (!matchedCheck) {
       const availableOutlets = stockChecks
@@ -181,7 +181,7 @@ export async function reconcileSalesFromExcelBase64(
         .map(sc => sc.outlet)
         .filter((v, i, a) => a.indexOf(v) === i)
         .join(', ');
-      errors.push(`❌ No matching stock check found for outlet "${outletFromSheet}" from J5. Available outlets in stock checks: ${availableOutlets || 'None'}`);
+      errors.push(`❌ No matching stock check found for outlet "${outletFromSheet}" from B4. Available outlets in stock checks: ${availableOutlets || 'None'}`);
     }
 
     // Calculate expected stock check date (same date as production/sales)
@@ -595,7 +595,7 @@ export function exportSalesDiscrepanciesToExcel(
   const summary = [
     { Field: 'Sales Date (from Excel H9)', Value: result.sheetDate ?? '' },
     { Field: 'Stock Check Date Used', Value: result.stockCheckDate ?? '' },
-    { Field: 'Outlet (from Excel J5)', Value: result.outletFromSheet ?? '' },
+    { Field: 'Outlet (from Excel B4)', Value: result.outletFromSheet ?? '' },
     { Field: 'Date Matched', Value: result.dateMatched ? `Yes - Date Reconsolidated: ${reconciliationTimestamp}` : 'No' },
     { Field: 'Formula', Value: 'Discrepancy = Opening + Received - Sales - Closing - Wastage' },
     { Field: 'Note', Value: 'Opening, Received, Wastage, and Closing are ACTUAL values from the Stock Check' },
