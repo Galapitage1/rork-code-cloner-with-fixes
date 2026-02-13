@@ -290,8 +290,15 @@ function LiveInventoryScreen() {
             console.log(`[PRODUCTION OUTLET] No kitchen stock report found for ${date}`);
           }
 
-          const reconcileForDate = reconcileHistory.find(r => r.date === date && r.outlet === selectedOutlet && !r.deleted);
+          const reconcileCandidates = reconcileHistory
+            .filter(r => r.date === date && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
+            .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
+          const reconcileForDate = reconcileCandidates[0];
           const prodsReqUpdate = reconcileForDate?.prodsReqUpdates?.find(u => u.productId === pair.wholeId);
+
+          if (reconcileForDate) {
+            console.log(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
+          }
 
           if (prodsReqUpdate) {
             const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + ((prodsReqUpdate.prodsReqSlices || 0) / pair.factor);
@@ -755,11 +762,13 @@ function LiveInventoryScreen() {
         // CRITICAL FIX: For PRODUCTION outlets, ADD Kitchen Production values from reconciliation (Column K from discrepancies)
         // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
         if (outlet?.outletType === 'production') {
-          const reconcileForDate = reconcileHistory.find(
-            r => r.date === date && r.outlet === selectedOutlet && !r.deleted
-          );
-          
+          const reconcileCandidates = reconcileHistory
+            .filter(r => r.date === date && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
+            .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
+          const reconcileForDate = reconcileCandidates[0];
+
           if (reconcileForDate && reconcileForDate.prodsReqUpdates) {
+            console.log(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
             const prodsReqUpdate = reconcileForDate.prodsReqUpdates.find(
               u => u.productId === product.id
             );
