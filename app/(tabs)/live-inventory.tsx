@@ -744,6 +744,31 @@ function LiveInventoryScreen() {
                r.productId === product.id
         );
         receivedRequests.forEach(req => { received += req.quantity; });
+        
+        // CRITICAL FIX: For PRODUCTION outlets, ADD Kitchen Production values from reconciliation (Column K from discrepancies)
+        // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
+        if (outlet?.outletType === 'production') {
+          const reconcileForDate = reconcileHistory.find(
+            r => r.date === date && !r.deleted
+          );
+          
+          if (reconcileForDate && reconcileForDate.prodsReqUpdates) {
+            const prodsReqUpdate = reconcileForDate.prodsReqUpdates.find(
+              u => u.productId === product.id
+            );
+            
+            if (prodsReqUpdate) {
+              // Get conversion factor for this product
+              const productPair = productConversions.find(c => c.fromProductId === product.id);
+              const conversionFactor = productPair?.conversionFactor || 10;
+              
+              // Add Kitchen Production values from reconciliation to received/Prods.Req
+              const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + ((prodsReqUpdate.prodsReqSlices || 0) / conversionFactor);
+              console.log(`Product ${product.name} on ${date} - Adding Kitchen Production from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
+              received += kitchenProductionQty;
+            }
+          }
+        }
 
         // Wastage from today's check
         let wastage = 0;
