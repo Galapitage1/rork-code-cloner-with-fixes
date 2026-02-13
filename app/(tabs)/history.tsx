@@ -1607,8 +1607,9 @@ export default function HistoryScreen() {
                                 {(() => {
                                   const o = newOpeningStocks.get(product.id) ?? '';
                                   const r = newReceivedStocks.get(product.id) ?? '';
-                                  const sum = (parseFloat(o || '0') || 0) + (parseFloat(r || '0') || 0);
-                                  return Number.isFinite(sum) ? String(sum) : '0';
+                                  const w = newWastages.get(product.id) ?? '';
+                                  const currentStock = (parseFloat(o || '0') || 0) + (parseFloat(r || '0') || 0) - (parseFloat(w || '0') || 0);
+                                  return Number.isFinite(currentStock) ? String(currentStock) : '0';
                                 })()}
                               </Text>
                             </View>
