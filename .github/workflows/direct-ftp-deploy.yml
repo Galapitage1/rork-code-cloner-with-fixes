@@ -1,0 +1,87 @@
+name: Direct FTP Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy via FTP (Direct)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Export web app
+        run: bun run export
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deployment-package
+          cp -r dist/* deployment-package/
+          cp -r public/Tracker deployment-package/Tracker
+
+          if [ -f htaccess ]; then
+            cp htaccess deployment-package/.htaccess
+          fi
+
+          mkdir -p deployment-package/data
+          echo '[]' > deployment-package/data/storage.json
+
+      - name: Validate FTP secrets
+        env:
+          DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
+          DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
+          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          GITHUBDEPLOY: ${{ secrets.GITHUBDEPLOY }}
+          DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
+        run: |
+          ftp_password="$DEPLOY_FTP_PASSWORD"
+          if [ -z "$ftp_password" ]; then
+            ftp_password="$GITHUBDEPLOY"
+          fi
+
+          ftp_host_set=no
+          [ -n "$DEPLOY_FTP_HOST" ] && ftp_host_set=yes
+          ftp_user_set=no
+          [ -n "$DEPLOY_FTP_USER" ] && ftp_user_set=yes
+          ftp_password_set=no
+          [ -n "$DEPLOY_FTP_PASSWORD" ] && ftp_password_set=yes
+          githubdeploy_set=no
+          [ -n "$GITHUBDEPLOY" ] && githubdeploy_set=yes
+          ftp_password_effective_set=no
+          [ -n "$ftp_password" ] && ftp_password_effective_set=yes
+          target_path_set=no
+          [ -n "$DEPLOY_TARGET_PATH" ] && target_path_set=yes
+
+          echo "::notice::Secret status: DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set DEPLOY_TARGET_PATH=$target_path_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
+
+          missing=()
+          [ -z "$DEPLOY_FTP_HOST" ] && missing+=("DEPLOY_FTP_HOST")
+          [ -z "$DEPLOY_FTP_USER" ] && missing+=("DEPLOY_FTP_USER")
+          [ -z "$ftp_password" ] && missing+=("DEPLOY_FTP_PASSWORD or GITHUBDEPLOY")
+          [ -z "$DEPLOY_TARGET_PATH" ] && missing+=("DEPLOY_TARGET_PATH")
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required FTP secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+          echo "FTP_PASSWORD_EFFECTIVE=$ftp_password" >> "$GITHUB_ENV"
+
+      - name: Upload deployment package via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.DEPLOY_FTP_HOST }}
+          username: ${{ secrets.DEPLOY_FTP_USER }}
+          password: ${{ env.FTP_PASSWORD_EFFECTIVE }}
+          local-dir: deployment-package/
+          server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/

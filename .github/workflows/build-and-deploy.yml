@@ -91,6 +91,28 @@ jobs:
           echo "ssh_enabled=$ssh_enabled" >> "$GITHUB_OUTPUT"
           echo "ftp_enabled=$ftp_enabled" >> "$GITHUB_OUTPUT"
 
+          ssh_host_set=no
+          [ -n "$DEPLOY_SSH_HOST" ] && ssh_host_set=yes
+          ssh_user_set=no
+          [ -n "$DEPLOY_SSH_USER" ] && ssh_user_set=yes
+          ssh_key_set=no
+          [ -n "$DEPLOY_SSH_KEY" ] && ssh_key_set=yes
+
+          ftp_host_set=no
+          [ -n "$DEPLOY_FTP_HOST" ] && ftp_host_set=yes
+          ftp_user_set=no
+          [ -n "$DEPLOY_FTP_USER" ] && ftp_user_set=yes
+          ftp_password_set=no
+          [ -n "$DEPLOY_FTP_PASSWORD" ] && ftp_password_set=yes
+          githubdeploy_set=no
+          [ -n "$GITHUBDEPLOY" ] && githubdeploy_set=yes
+          ftp_password_effective_set=no
+          [ -n "$ftp_password" ] && ftp_password_effective_set=yes
+          target_path_set=no
+          [ -n "$DEPLOY_TARGET_PATH" ] && target_path_set=yes
+
+          echo "::notice::Secret status: DEPLOY_SSH_HOST=$ssh_host_set DEPLOY_SSH_USER=$ssh_user_set DEPLOY_SSH_KEY=$ssh_key_set DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set DEPLOY_TARGET_PATH=$target_path_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
+
           if [ "$ssh_enabled" = "true" ]; then
             echo "::notice::Deploy mode: SSH/rsync"
           elif [ "$ftp_enabled" = "true" ]; then
