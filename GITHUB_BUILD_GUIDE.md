@@ -8,6 +8,24 @@ Instead of dealing with Mac permissions, GitHub will build your app automaticall
 
 ## 🚀 **Step-by-Step Instructions**
 
+## 🤖 **Optional: Auto-Deploy to Server After Successful Workflow**
+
+If you want GitHub Actions to upload to your server automatically (no manual FTP each time), add these repository secrets:
+
+- `DEPLOY_SSH_HOST` (example: `tracker.tecclk.com` or server IP)
+- `DEPLOY_SSH_USER` (SSH username)
+- `DEPLOY_SSH_KEY` (private key contents)
+- `DEPLOY_TARGET_PATH` (remote folder, example: `/domains/tracker.tecclk.com/public_html`)
+- `DEPLOY_SSH_PORT` (optional, defaults to `22`)
+- `DEPLOY_POST_CMD` (optional remote command, e.g. permissions/cache reload)
+
+Where to add:
+1. GitHub repo → **Settings**
+2. **Secrets and variables** → **Actions**
+3. Add each value as a **New repository secret**
+
+Once these are set, every successful run of **Build and Deploy App** will upload automatically.
+
 ### **Step 1: Push Your Code to GitHub**
 
 1. Go to [GitHub.com](https://github.com)
