@@ -53,6 +53,41 @@ const SYNC_ENDPOINT = {
   SALES: 'reconciliation_sales',
 };
 
+async function readReportsFromStorage<T>(key: string): Promise<T[]> {
+  const stored = await AsyncStorage.getItem(key);
+  if (!stored) return [];
+
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch (error) {
+    console.warn(`[RECONCILIATION SYNC] Invalid JSON in ${key}, resetting storage`, error);
+    await AsyncStorage.removeItem(key).catch(() => {});
+    return [];
+  }
+}
+
+async function writeReportsWithPruning<T extends { date: string }>(
+  key: string,
+  reports: T[],
+): Promise<void> {
+  const pruneWindows = [60, 45, 30, 14];
+  let lastError: unknown;
+
+  for (const days of pruneWindows) {
+    const pruned = pruneOldReports(reports, days);
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(pruned));
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[RECONCILIATION SYNC] Failed writing ${key} with ${days}d window`, error);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`Failed to write ${key}`);
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -146,8 +181,7 @@ export async function getSalesReportsFromServer(): Promise<SalesReport[]> {
 
 export async function saveKitchenStockReportLocally(report: KitchenStockReport): Promise<void> {
   try {
-    const stored = await AsyncStorage.getItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS);
-    const reports: KitchenStockReport[] = stored ? JSON.parse(stored) : [];
+    const reports = await readReportsFromStorage<KitchenStockReport>(STORAGE_KEYS.KITCHEN_STOCK_REPORTS);
     
     const existingIndex = reports.findIndex(r => r.outlet === report.outlet && r.date === report.date);
     
@@ -164,16 +198,16 @@ export async function saveKitchenStockReportLocally(report: KitchenStockReport):
       reports.push(report);
     }
     
-    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(reports));
-  } catch {
-    throw new Error('Failed to save kitchen stock report locally');
+    await writeReportsWithPruning(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, reports);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Failed to save kitchen stock report locally: ${reason}`);
   }
 }
 
 export async function saveSalesReportLocally(report: SalesReport): Promise<void> {
   try {
-    const stored = await AsyncStorage.getItem(STORAGE_KEYS.SALES_REPORTS);
-    const reports: SalesReport[] = stored ? JSON.parse(stored) : [];
+    const reports = await readReportsFromStorage<SalesReport>(STORAGE_KEYS.SALES_REPORTS);
     
     const existingIndex = reports.findIndex(r => r.outlet === report.outlet && r.date === report.date);
     
@@ -192,16 +226,16 @@ export async function saveSalesReportLocally(report: SalesReport): Promise<void>
       reports.push(report);
     }
     
-    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(reports));
-  } catch {
-    throw new Error('Failed to save sales report locally');
+    await writeReportsWithPruning(STORAGE_KEYS.SALES_REPORTS, reports);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Failed to save sales report locally: ${reason}`);
   }
 }
 
 export async function getLocalKitchenStockReports(): Promise<KitchenStockReport[]> {
   try {
-    const stored = await AsyncStorage.getItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS);
-    return stored ? JSON.parse(stored) : [];
+    return await readReportsFromStorage<KitchenStockReport>(STORAGE_KEYS.KITCHEN_STOCK_REPORTS);
   } catch {
     return [];
   }
@@ -209,8 +243,7 @@ export async function getLocalKitchenStockReports(): Promise<KitchenStockReport[
 
 export async function getLocalSalesReports(): Promise<SalesReport[]> {
   try {
-    const stored = await AsyncStorage.getItem(STORAGE_KEYS.SALES_REPORTS);
-    return stored ? JSON.parse(stored) : [];
+    return await readReportsFromStorage<SalesReport>(STORAGE_KEYS.SALES_REPORTS);
   } catch {
     return [];
   }

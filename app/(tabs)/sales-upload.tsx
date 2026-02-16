@@ -1216,7 +1216,8 @@ export default function SalesUploadScreen() {
             }
           } catch (reportError) {
             console.error('Failed to save sales report:', reportError);
-            setProcessingSteps(prev => [...prev, { text: 'Warning: Failed to save sales report', status: 'error' }]);
+            const reason = reportError instanceof Error ? reportError.message : 'Unknown error';
+            setProcessingSteps(prev => [...prev, { text: `Warning: Failed to save sales report (${reason})`, status: 'error' }]);
           }
           console.log('=== SALES REPORT SAVE COMPLETE ===\n');
           
