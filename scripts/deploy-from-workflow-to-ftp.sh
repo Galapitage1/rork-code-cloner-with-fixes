@@ -173,24 +173,39 @@ echo "Uploading files from $source_dir to ${FTP_SCHEME}://${DEPLOY_FTP_HOST}${re
 
 total_files="$(find "$source_dir" -type f | wc -l | tr -d ' ')"
 uploaded=0
+failed=0
 
 while IFS= read -r -d '' file; do
   rel_path="${file#"$source_dir"/}"
   remote_path="${remote_base}/${rel_path}"
   remote_url="${FTP_SCHEME}://${ftp_host_with_port}${remote_path}"
 
-  curl --silent --show-error --fail \
+  if ! curl --silent --show-error --fail \
+    --retry 5 \
+    --retry-all-errors \
+    --retry-delay 2 \
+    --connect-timeout 20 \
+    --max-time 180 \
     --ftp-pasv \
     --ftp-create-dirs \
     --user "${DEPLOY_FTP_USER}:${FTP_PASSWORD}" \
     --upload-file "$file" \
-    "$remote_url"
+    "$remote_url"; then
+    failed=$((failed + 1))
+    echo "Failed upload: $rel_path"
+    continue
+  fi
 
   uploaded=$((uploaded + 1))
   if (( uploaded % 100 == 0 )) || (( uploaded == total_files )); then
     echo "Uploaded $uploaded/$total_files files..."
   fi
 done < <(find "$source_dir" -type f -print0)
+
+if (( failed > 0 )); then
+  echo "Upload finished with errors: uploaded=$uploaded failed=$failed total=$total_files"
+  exit 1
+fi
 
 echo "Upload complete: $uploaded files uploaded."
 echo "Workflow artifact source: $run_url"
