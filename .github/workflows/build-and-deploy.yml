@@ -67,7 +67,8 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
           DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
-          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD || secrets.GITHUBDEPLOY }}
+          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          GITHUBDEPLOY: ${{ secrets.GITHUBDEPLOY }}
           DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
         run: |
           ssh_enabled=true
@@ -76,10 +77,15 @@ jobs:
           [ -z "$DEPLOY_SSH_KEY" ] && ssh_enabled=false
           [ -z "$DEPLOY_TARGET_PATH" ] && ssh_enabled=false
 
+          ftp_password="$DEPLOY_FTP_PASSWORD"
+          if [ -z "$ftp_password" ]; then
+            ftp_password="$GITHUBDEPLOY"
+          fi
+
           ftp_enabled=true
           [ -z "$DEPLOY_FTP_HOST" ] && ftp_enabled=false
           [ -z "$DEPLOY_FTP_USER" ] && ftp_enabled=false
-          [ -z "$DEPLOY_FTP_PASSWORD" ] && ftp_enabled=false
+          [ -z "$ftp_password" ] && ftp_enabled=false
           [ -z "$DEPLOY_TARGET_PATH" ] && ftp_enabled=false
 
           echo "ssh_enabled=$ssh_enabled" >> "$GITHUB_OUTPUT"
@@ -91,6 +97,18 @@ jobs:
             echo "::notice::Deploy mode: FTP"
           else
             echo "::warning::Auto-deploy skipped. Configure either SSH secrets (DEPLOY_SSH_*) or FTP secrets (DEPLOY_FTP_*), plus DEPLOY_TARGET_PATH."
+          fi
+
+      - name: Prepare FTP credentials
+        if: steps.validate.outputs.ssh_enabled != 'true' && steps.validate.outputs.ftp_enabled == 'true'
+        env:
+          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          GITHUBDEPLOY: ${{ secrets.GITHUBDEPLOY }}
+        run: |
+          if [ -n "$DEPLOY_FTP_PASSWORD" ]; then
+            echo "FTP_PASSWORD_EFFECTIVE=$DEPLOY_FTP_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "FTP_PASSWORD_EFFECTIVE=$GITHUBDEPLOY" >> "$GITHUB_ENV"
           fi
 
       - name: Prepare SSH
@@ -145,6 +163,6 @@ jobs:
         with:
           server: ${{ secrets.DEPLOY_FTP_HOST }}
           username: ${{ secrets.DEPLOY_FTP_USER }}
-          password: ${{ secrets.DEPLOY_FTP_PASSWORD || secrets.GITHUBDEPLOY }}
+          password: ${{ env.FTP_PASSWORD_EFFECTIVE }}
           local-dir: deployment-package/
           server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
