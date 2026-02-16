@@ -109,29 +109,38 @@ foreach ($recipients as $index => $recipient) {
       continue;
     }
 
-    $phone = trim($recipient['phone']);
-    $phone = preg_replace('/[^0-9+]/', '', $phone);
-    
-    if (empty($phone)) {
+    $phoneRaw = trim((string)$recipient['phone']);
+    $phoneNormalized = preg_replace('/[^0-9+]/', '', $phoneRaw);
+
+    if (empty($phoneNormalized)) {
       $results['skipped']++;
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
       }
       continue;
     }
-    
-    if (substr($phone, 0, 1) === '0') {
-      $phone = '94' . substr($phone, 1);
-    } elseif (substr($phone, 0, 1) === '+') {
-      $phone = substr($phone, 1);
-    } elseif (substr($phone, 0, 2) !== '94') {
-      $phone = '94' . $phone;
+
+    if (strpos($phoneNormalized, '00') === 0) {
+      $phoneNormalized = '+' . substr($phoneNormalized, 2);
     }
-    
-    if (strlen($phone) < 10) {
+
+    if (substr($phoneNormalized, 0, 1) === '+') {
+      $phone = substr($phoneNormalized, 1);
+    } else {
+      $phone = $phoneNormalized;
+      if (substr($phone, 0, 1) === '0') {
+        $results['skipped']++;
+        if (count($results['errors']) < 50) {
+          $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone must include country code (e.g. +94771234567)';
+        }
+        continue;
+      }
+    }
+
+    if (!preg_match('/^[0-9]{8,15}$/', $phone)) {
       $results['skipped']++;
       if (count($results['errors']) < 50) {
-        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid international phone format';
       }
       continue;
     }
