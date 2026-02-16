@@ -44,6 +44,24 @@ The build process creates a `dist` folder containing:
 
 ## Deploy to Server
 
+### Push -> Workflow -> Artifact -> FTP (One Command)
+
+Use this when you want the exact GitHub-built package uploaded from your local machine:
+
+```bash
+export DEPLOY_FTP_HOST=sg-shared01-da.pvtwebs.com
+export DEPLOY_FTP_USER=tecclkc1
+export DEPLOY_FTP_PASSWORD='your-password'
+export DEPLOY_TARGET_PATH=/domains/tracker.tecclk.com/public_html
+./scripts/deploy-from-workflow-to-ftp.sh
+```
+
+Notes:
+- Requires `gh` to be logged in: `gh auth login -h github.com`
+- Pushes your current branch first, then waits for the `Build and Deploy App` workflow on that commit.
+- Downloads the `deployment-package` artifact from that run and uploads all files via FTP.
+- Upload is additive/overwrite only (it does not delete old remote files).
+
 ### Upload via ZIP (Easiest)
 
 1. Build and package:
