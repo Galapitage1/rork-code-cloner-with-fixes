@@ -10,14 +10,23 @@ Instead of dealing with Mac permissions, GitHub will build your app automaticall
 
 ## 🤖 **Optional: Auto-Deploy to Server After Successful Workflow**
 
-If you want GitHub Actions to upload to your server automatically (no manual FTP each time), add these repository secrets:
+If you want GitHub Actions to upload to your server automatically (no manual FTP each time), configure one of these:
 
-- `DEPLOY_SSH_HOST` (example: `tracker.tecclk.com` or server IP)
-- `DEPLOY_SSH_USER` (SSH username)
-- `DEPLOY_SSH_KEY` (private key contents)
-- `DEPLOY_TARGET_PATH` (remote folder, example: `/domains/tracker.tecclk.com/public_html`)
-- `DEPLOY_SSH_PORT` (optional, defaults to `22`)
-- `DEPLOY_POST_CMD` (optional remote command, e.g. permissions/cache reload)
+SSH mode (preferred):
+- `DEPLOY_SSH_HOST`
+- `DEPLOY_SSH_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_TARGET_PATH`
+- Optional: `DEPLOY_SSH_PORT` (default `22`)
+- Optional: `DEPLOY_POST_CMD`
+
+FTP mode (fallback, if SSH key setup is not possible):
+- `DEPLOY_FTP_HOST`
+- `DEPLOY_FTP_USER`
+- `DEPLOY_FTP_PASSWORD`
+- `DEPLOY_TARGET_PATH`
+
+The workflow auto-selects SSH when SSH secrets exist. Otherwise, it uses FTP if FTP secrets exist.
 
 Where to add:
 1. GitHub repo → **Settings**

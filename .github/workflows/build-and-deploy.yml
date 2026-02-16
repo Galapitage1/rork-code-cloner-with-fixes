@@ -65,23 +65,36 @@ jobs:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
+          DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
+          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
           DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
         run: |
-          missing=""
-          [ -z "$DEPLOY_SSH_HOST" ] && missing="$missing DEPLOY_SSH_HOST"
-          [ -z "$DEPLOY_SSH_USER" ] && missing="$missing DEPLOY_SSH_USER"
-          [ -z "$DEPLOY_SSH_KEY" ] && missing="$missing DEPLOY_SSH_KEY"
-          [ -z "$DEPLOY_TARGET_PATH" ] && missing="$missing DEPLOY_TARGET_PATH"
+          ssh_enabled=true
+          [ -z "$DEPLOY_SSH_HOST" ] && ssh_enabled=false
+          [ -z "$DEPLOY_SSH_USER" ] && ssh_enabled=false
+          [ -z "$DEPLOY_SSH_KEY" ] && ssh_enabled=false
+          [ -z "$DEPLOY_TARGET_PATH" ] && ssh_enabled=false
 
-          if [ -n "$missing" ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Auto-deploy skipped. Missing GitHub secrets:$missing"
+          ftp_enabled=true
+          [ -z "$DEPLOY_FTP_HOST" ] && ftp_enabled=false
+          [ -z "$DEPLOY_FTP_USER" ] && ftp_enabled=false
+          [ -z "$DEPLOY_FTP_PASSWORD" ] && ftp_enabled=false
+          [ -z "$DEPLOY_TARGET_PATH" ] && ftp_enabled=false
+
+          echo "ssh_enabled=$ssh_enabled" >> "$GITHUB_OUTPUT"
+          echo "ftp_enabled=$ftp_enabled" >> "$GITHUB_OUTPUT"
+
+          if [ "$ssh_enabled" = "true" ]; then
+            echo "::notice::Deploy mode: SSH/rsync"
+          elif [ "$ftp_enabled" = "true" ]; then
+            echo "::notice::Deploy mode: FTP"
           else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Auto-deploy skipped. Configure either SSH secrets (DEPLOY_SSH_*) or FTP secrets (DEPLOY_FTP_*), plus DEPLOY_TARGET_PATH."
           fi
 
       - name: Prepare SSH
-        if: steps.validate.outputs.enabled == 'true'
+        if: steps.validate.outputs.ssh_enabled == 'true'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
@@ -90,7 +103,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
 
       - name: Add server to known_hosts
-        if: steps.validate.outputs.enabled == 'true'
+        if: steps.validate.outputs.ssh_enabled == 'true'
         env:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
@@ -99,7 +112,7 @@ jobs:
           ssh-keyscan -p "${DEPLOY_SSH_PORT:-22}" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Upload deployment package
-        if: steps.validate.outputs.enabled == 'true'
+        if: steps.validate.outputs.ssh_enabled == 'true'
         env:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
@@ -113,7 +126,7 @@ jobs:
             "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}:${DEPLOY_TARGET_PATH%/}/"
 
       - name: Run post-deploy command (optional)
-        if: steps.validate.outputs.enabled == 'true'
+        if: steps.validate.outputs.ssh_enabled == 'true'
         env:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
@@ -125,3 +138,13 @@ jobs:
           else
             echo "No DEPLOY_POST_CMD set, skipping post-deploy command."
           fi
+
+      - name: Upload deployment package via FTP
+        if: steps.validate.outputs.ssh_enabled != 'true' && steps.validate.outputs.ftp_enabled == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.DEPLOY_FTP_HOST }}
+          username: ${{ secrets.DEPLOY_FTP_USER }}
+          password: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          local-dir: deployment-package/
+          server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
