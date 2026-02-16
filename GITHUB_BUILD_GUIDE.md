@@ -23,7 +23,7 @@ SSH mode (preferred):
 FTP mode (fallback, if SSH key setup is not possible):
 - `DEPLOY_FTP_HOST`
 - `DEPLOY_FTP_USER`
-- `DEPLOY_FTP_PASSWORD`
+- `DEPLOY_FTP_PASSWORD` (or legacy alias `GITHUBDEPLOY`)
 - `DEPLOY_TARGET_PATH`
 
 The workflow auto-selects SSH when SSH secrets exist. Otherwise, it uses FTP if FTP secrets exist.

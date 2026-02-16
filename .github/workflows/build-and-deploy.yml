@@ -67,7 +67,7 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
           DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
-          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD || secrets.GITHUBDEPLOY }}
           DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
         run: |
           ssh_enabled=true
@@ -145,6 +145,6 @@ jobs:
         with:
           server: ${{ secrets.DEPLOY_FTP_HOST }}
           username: ${{ secrets.DEPLOY_FTP_USER }}
-          password: ${{ secrets.DEPLOY_FTP_PASSWORD }}
+          password: ${{ secrets.DEPLOY_FTP_PASSWORD || secrets.GITHUBDEPLOY }}
           local-dir: deployment-package/
           server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
