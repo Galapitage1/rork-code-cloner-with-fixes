@@ -759,7 +759,7 @@ function LiveInventoryScreen() {
         );
         receivedRequests.forEach(req => { received += req.quantity; });
         
-        // CRITICAL FIX: For PRODUCTION outlets, ADD Kitchen Production values from reconciliation (Column K from discrepancies)
+        // CRITICAL FIX: For PRODUCTION outlets, ADD Kitchen Production values from reconciliation (Discrepancies sheet)
         // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
         if (outlet?.outletType === 'production') {
           const reconcileCandidates = reconcileHistory

@@ -1649,7 +1649,7 @@ export default function SalesUploadScreen() {
           }>;
           
           // CRITICAL FIX: Merge products with same productId (wholeId)
-          // This handles cases where Excel has both "Cake (whole)" and "Cake (slices)" in Column K
+          // This handles cases where Excel has both "Cake (whole)" and "Cake (slices)" in Kitchen Production rows
           // They should be combined into a single entry
           console.log('\n=== MERGING PRODUCTS WITH SAME WHOLE ID ===');
           const productMap = new Map<string, {
@@ -2228,7 +2228,7 @@ export default function SalesUploadScreen() {
           <FileSpreadsheet color={Colors.light.tint} size={20} />
           <Text style={styles.cardTitle}>Kitchen Stock Check</Text>
         </View>
-        <Text style={styles.cardDesc}>Upload kitchen production Excel. Match production date from B7 with same date stock check. Outlet from D5. The system will search for the outlet name in row 9 and use that column (rows 8-500) for kitchen production quantities. Products from C, units from E.</Text>
+        <Text style={styles.cardDesc}>Upload kitchen production Excel. The parser now supports both formats: (1) `Discrepancies` sheet where Kitchen Production is read from the Kitchen Production column (typically column E), and (2) legacy layout using outlet name in row 9 with products in C and units in E. Production date/outlet are read from B7/D5 or summary rows.</Text>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Manual upload stock request</Text>
           <Switch value={kitchenManualMode} onValueChange={setKitchenManualMode} testID="kitchen-manual-toggle" />

@@ -802,6 +802,168 @@ export function parseRequestsReceivedFromExcelBase64(
   return receivedByProductId;
 }
 
+function parseNumberFromValue(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const cleaned = String(value).replace(/,/g, '').trim();
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeDateText(input: string | null): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const ddmmyyyy = trimmed.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+  if (ddmmyyyy) {
+    const day = String(Number(ddmmyyyy[1])).padStart(2, '0');
+    const month = String(Number(ddmmyyyy[2])).padStart(2, '0');
+    const year = ddmmyyyy[3].length === 2 ? `20${ddmmyyyy[3]}` : ddmmyyyy[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  const yyyymmdd = trimmed.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (yyyymmdd) {
+    const year = yyyymmdd[1];
+    const month = String(Number(yyyymmdd[2])).padStart(2, '0');
+    const day = String(Number(yyyymmdd[3])).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  const d = new Date(trimmed);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function parseDateFromLegacyKitchenCell(value: string | null): string | null {
+  if (!value) return null;
+  const match = value.match(/Date From[:\s]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/i);
+  if (!match) return null;
+  return normalizeDateText(match[1]);
+}
+
+function extractKitchenWorkbookMetadata(wb: XLSX.WorkBook): {
+  productionDate: string | null;
+  outletNameFromExcel: string | null;
+} {
+  let productionDate: string | null = null;
+  let outletNameFromExcel: string | null = null;
+
+  // Primary format: metadata in fixed cells (B7 date + D5 outlet)
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!productionDate) {
+      productionDate = parseDateFromLegacyKitchenCell(getCellString(ws, 'B7'));
+    }
+    if (!outletNameFromExcel) {
+      outletNameFromExcel = getCellString(ws, 'D5');
+    }
+    if (productionDate && outletNameFromExcel) break;
+  }
+
+  // Fallback format: Summary sheet with Field/Value rows
+  if (!productionDate || !outletNameFromExcel) {
+    for (const sheetName of wb.SheetNames) {
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
+
+      for (const row of rows) {
+        const field = String(row?.[0] ?? '').toLowerCase().trim();
+        const value = String(row?.[1] ?? '').trim();
+        if (!field || !value) continue;
+
+        if (!productionDate && (field.includes('production date') || field.includes('stock check date'))) {
+          const parsed = normalizeDateText(value);
+          if (parsed) productionDate = parsed;
+        }
+
+        if (!outletNameFromExcel && field === 'outlet') {
+          outletNameFromExcel = value;
+        }
+      }
+
+      if (productionDate && outletNameFromExcel) break;
+    }
+  }
+
+  return { productionDate, outletNameFromExcel };
+}
+
+type ParsedKitchenRow = {
+  productName: string;
+  unit: string;
+  kitchenProduction: number;
+  openingStockFromSheet?: number;
+  receivedInStockCheckFromSheet?: number;
+};
+
+function parseKitchenRowsFromDiscrepanciesSheet(ws: XLSX.WorkSheet): ParsedKitchenRow[] {
+  const parsed: ParsedKitchenRow[] = [];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as any[][];
+
+  if (!rows.length) return parsed;
+
+  let headerIndex = -1;
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const header = (rows[i] || []).map((h) => String(h ?? '').toLowerCase().trim());
+    const hasProduct = header.some((h) => h.includes('product'));
+    const hasUnit = header.some((h) => h === 'unit' || h.includes('unit'));
+    const hasKitchen = header.some((h) => h.includes('kitchen') || h.includes('production'));
+    if (hasProduct && hasUnit && hasKitchen) {
+      headerIndex = i;
+      break;
+    }
+  }
+
+  if (headerIndex === -1) return parsed;
+
+  const header = (rows[headerIndex] || []).map((h) => String(h ?? '').toLowerCase().trim());
+  const idxProduct = header.findIndex((h) => h.includes('product'));
+  const idxUnit = header.findIndex((h) => h.includes('unit'));
+  const idxOpening = header.findIndex((h) => h.includes('opening'));
+  const idxReceived = header.findIndex((h) => h.includes('received'));
+  let idxKitchen = header.findIndex((h) => h.includes('kitchen') && h.includes('production'));
+  if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('kitchen'));
+  if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('production'));
+  // Last fallback for known "Discrepancies" export layout: column E.
+  if (idxKitchen === -1 && header.length >= 5) idxKitchen = 4;
+
+  if (idxProduct === -1 || idxUnit === -1 || idxKitchen === -1) return parsed;
+
+  let consecutiveEmptyRows = 0;
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const productName = String(row[idxProduct] ?? '').trim();
+    const unit = String(row[idxUnit] ?? '').trim();
+    const kitchenProduction = parseNumberFromValue(row[idxKitchen]);
+
+    const isEmpty = !productName && !unit && kitchenProduction == null;
+    if (isEmpty) {
+      consecutiveEmptyRows++;
+      if (consecutiveEmptyRows >= 10) break;
+      continue;
+    }
+    consecutiveEmptyRows = 0;
+
+    if (!productName || !unit || kitchenProduction == null) continue;
+
+    const openingStockFromSheet = idxOpening !== -1 ? parseNumberFromValue(row[idxOpening]) ?? undefined : undefined;
+    const receivedInStockCheckFromSheet = idxReceived !== -1 ? parseNumberFromValue(row[idxReceived]) ?? undefined : undefined;
+
+    parsed.push({
+      productName,
+      unit,
+      kitchenProduction,
+      openingStockFromSheet,
+      receivedInStockCheckFromSheet,
+    });
+  }
+
+  return parsed;
+}
+
 export type KitchenStockDiscrepancy = {
   productName: string;
   unit: string;
@@ -842,45 +1004,21 @@ export function reconcileKitchenStockFromExcelBase64(
       };
     }
 
-    const ws = wb.Sheets[wb.SheetNames[0]];
-
-    const dateFromCell = getCellString(ws, 'B7');
-    let productionDate: string | null = null;
-    
-    if (dateFromCell) {
-      const dateMatch = dateFromCell.match(/Date From[:\s]*(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/);
-      if (dateMatch) {
-        const datePart = dateMatch[1];
-        const parts = datePart.split(/[-\/]/);
-        if (parts.length === 3) {
-          const day = parseInt(parts[0], 10);
-          const month = parseInt(parts[1], 10);
-          let year = parseInt(parts[2], 10);
-          if (year < 100) year += 2000;
-          
-          const d = new Date(year, month - 1, day);
-          if (!isNaN(d.getTime())) {
-            productionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          }
-        }
-      }
-    }
+    const { productionDate, outletNameFromExcel } = extractKitchenWorkbookMetadata(wb);
 
     if (!productionDate) {
-      const cellValue = dateFromCell || '(empty)';
       return {
         productionDate: null,
         stockCheckDate: null,
         outletName: null,
         matched: false,
         discrepancies: [],
-        errors: [`Could not parse production date from cell B7. Found: "${cellValue}". Expected format: "Date From DD/MM/YYYY" (e.g., "Date From 21/10/2025")`],
+        errors: ['Could not parse production date from workbook. Expected "Date From DD/MM/YYYY" in B7 or a summary row with "Production Date".'],
       };
     }
 
     const stockCheckDate = productionDate;
 
-    const outletNameFromExcel = getCellString(ws, 'D5');
     if (!outletNameFromExcel) {
       return {
         productionDate,
@@ -888,7 +1026,7 @@ export function reconcileKitchenStockFromExcelBase64(
         outletName: null,
         matched: false,
         discrepancies: [],
-        errors: ['Missing outlet name in cell D5'],
+        errors: ['Missing outlet name in workbook. Expected outlet in cell D5 or summary row field "Outlet".'],
       };
     }
 
@@ -916,6 +1054,11 @@ export function reconcileKitchenStockFromExcelBase64(
       if (!productMap.has(key)) productMap.set(key, p);
     });
 
+    const openingStockMap = new Map<string, number>();
+    matchedStockCheck.counts.forEach((count) => {
+      openingStockMap.set(count.productId, count.openingStock ?? 0);
+    });
+
     const stockCheckQuantityMap = new Map<string, number>();
     if (options?.manualStockByProductId) {
       options.manualStockByProductId.forEach((qty, productId) => {
@@ -927,76 +1070,94 @@ export function reconcileKitchenStockFromExcelBase64(
       });
     }
 
-    // Dynamically find the column containing the outlet name in row 9
-    // Search through columns A to Z (and beyond if needed)
-    // Try to match both the actual outlet name AND the Excel value (in case Excel has outlet type)
-    let productionColumn: string | null = null;
-    const maxColumns = 50; // Search up to column AX
-    
-    for (let col = 0; col < maxColumns; col++) {
-      const columnLetter = XLSX.utils.encode_col(col);
-      const cellAddress = `${columnLetter}9`;
-      const cellValue = getCellString(ws, cellAddress);
-      
-      if (cellValue && (cellValue.toLowerCase() === outletName.toLowerCase() || cellValue.toLowerCase() === outletNameFromExcel.toLowerCase())) {
-        productionColumn = columnLetter;
-        console.log(`Found outlet column match in ${columnLetter} at row 9: Excel cell="${cellValue}", Matched="${outletName}"`);
-        break;
+    let parsedRows: ParsedKitchenRow[] = [];
+
+    // Preferred format: "Discrepancies" sheet where kitchen production is in column E.
+    const discrepanciesSheetName = wb.SheetNames.find((name) => name.toLowerCase().includes('discrep'));
+    if (discrepanciesSheetName) {
+      parsedRows = parseKitchenRowsFromDiscrepanciesSheet(wb.Sheets[discrepanciesSheetName]);
+      if (parsedRows.length > 0) {
+        console.log(`Kitchen reconciliation: using "${discrepanciesSheetName}" sheet with ${parsedRows.length} rows (Kitchen Production column, typically E).`);
       }
     }
 
-    if (!productionColumn) {
-      return {
-        productionDate,
-        stockCheckDate,
-        outletName,
-        matched: false,
-        discrepancies: [],
-        errors: [`Could not find outlet "${outletName}" or "${outletNameFromExcel}" in row 9. Please ensure the outlet name appears in row 9 of the Excel sheet.`],
-      };
+    // Legacy fallback: first sheet with outlet-name column in row 9.
+    if (parsedRows.length === 0) {
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      let productionColumn: string | null = null;
+      const maxColumns = 50;
+
+      for (let col = 0; col < maxColumns; col++) {
+        const columnLetter = XLSX.utils.encode_col(col);
+        const cellAddress = `${columnLetter}9`;
+        const cellValue = getCellString(ws, cellAddress);
+
+        if (cellValue && (cellValue.toLowerCase() === outletName.toLowerCase() || cellValue.toLowerCase() === outletNameFromExcel.toLowerCase())) {
+          productionColumn = columnLetter;
+          console.log(`Kitchen reconciliation: legacy format outlet column found in ${columnLetter}9.`);
+          break;
+        }
+      }
+
+      if (!productionColumn) {
+        return {
+          productionDate,
+          stockCheckDate,
+          outletName,
+          matched: false,
+          discrepancies: [],
+          errors: [`Could not find kitchen production rows. Checked "Discrepancies" sheet and legacy outlet column in row 9 for "${outletName}".`],
+        };
+      }
+
+      for (let i = 8; i <= 500; i++) {
+        const productName = getCellString(ws, `C${i}`);
+        const unit = getCellString(ws, `E${i}`);
+        const kitchenProduction = getCellNumber(ws, `${productionColumn}${i}`);
+
+        if (!productName && unit == null && kitchenProduction == null) continue;
+        if (!productName || !unit || kitchenProduction == null) continue;
+
+        parsedRows.push({
+          productName,
+          unit,
+          kitchenProduction,
+        });
+      }
     }
 
-    for (let i = 8; i <= 500; i++) {
-      const productName = getCellString(ws, `C${i}`);
-      const unit = getCellString(ws, `E${i}`);
-      const quantity = getCellNumber(ws, `${productionColumn}${i}`);
-
-      if (!productName && unit == null && quantity == null) continue;
-      if (!productName || !unit || quantity == null) continue;
-
-      const key = `${productName.toLowerCase()}__${unit.toLowerCase()}`;
+    for (const row of parsedRows) {
+      const key = `${row.productName.toLowerCase()}__${row.unit.toLowerCase()}`;
       const product = productMap.get(key);
 
       if (!product) {
+        const openingStock = row.openingStockFromSheet ?? 0;
+        const receivedInStockCheck = row.receivedInStockCheckFromSheet ?? 0;
         discrepancies.push({
-          productName,
-          unit,
-          openingStock: 0,
-          receivedInStockCheck: 0,
-          kitchenProduction: quantity,
-          discrepancy: quantity,
+          productName: row.productName,
+          unit: row.unit,
+          openingStock,
+          receivedInStockCheck,
+          kitchenProduction: row.kitchenProduction,
+          discrepancy: row.kitchenProduction - openingStock - receivedInStockCheck,
         });
         continue;
       }
 
-      const receivedInStockCheck = stockCheckQuantityMap.get(product.id) ?? 0;
-      
-      // Get opening stock from the matched stock check
-      const openingStock = (() => {
-        if (!matchedStockCheck) return 0;
-        const count = matchedStockCheck.counts.find(c => c.productId === product.id);
-        return count?.openingStock ?? 0;
-      })();
-      
-      // Calculate discrepancy: Kitchen Production - Opening Stock - Received in Stock Check
-      const discrepancy = quantity - openingStock - receivedInStockCheck;
+      const fallbackReceived = stockCheckQuantityMap.get(product.id) ?? 0;
+      const fallbackOpening = openingStockMap.get(product.id) ?? 0;
+      const receivedInStockCheck = options?.manualStockByProductId
+        ? fallbackReceived
+        : (row.receivedInStockCheckFromSheet ?? fallbackReceived);
+      const openingStock = row.openingStockFromSheet ?? fallbackOpening;
+      const discrepancy = row.kitchenProduction - openingStock - receivedInStockCheck;
 
       discrepancies.push({
-        productName,
-        unit,
+        productName: row.productName,
+        unit: row.unit,
         openingStock,
         receivedInStockCheck,
-        kitchenProduction: quantity,
+        kitchenProduction: row.kitchenProduction,
         discrepancy,
       });
     }
@@ -1045,8 +1206,8 @@ export function exportKitchenStockDiscrepanciesToExcel(
     'Unit': d.unit,
     'Opening Stock': d.openingStock,
     'Received in Stock Check': d.receivedInStockCheck,
-    'Kitchen Production (Column K)': d.kitchenProduction,
-    'Discrepancy (K - Opening - Received)': d.discrepancy,
+    'Kitchen Production': d.kitchenProduction,
+    'Discrepancy (Kitchen - Opening - Received)': d.discrepancy,
   }));
 
   const wb = XLSX.utils.book_new();
