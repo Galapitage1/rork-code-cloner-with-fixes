@@ -902,8 +902,9 @@ export default function CampaignsScreen() {
                 console.log(`[WhatsApp CAMPAIGN] Successfully sent to ${customer.name}`);
                 return { success: true, customerId: customer.id };
               } else {
-                console.error(`[WhatsApp CAMPAIGN] Failed to send to ${customer.name}:`, result.error);
-                return { success: false, error: `${customer.name}: ${result.error || 'Unknown error'}` };
+                const detailedError = result.error || result.results?.errors?.[0] || 'Unknown error';
+                console.error(`[WhatsApp CAMPAIGN] Failed to send to ${customer.name}:`, detailedError);
+                return { success: false, error: `${customer.name}: ${detailedError}` };
               }
             } catch (error) {
               console.error(`[WhatsApp CAMPAIGN] Error sending to ${customer.name}:`, error);
@@ -941,9 +942,9 @@ export default function CampaignsScreen() {
             }
           }
 
-          const resultMessage = `Sent: ${successCount}\nFailed: ${failCount}${
+          const resultMessage = `Accepted by WhatsApp API: ${successCount}\nFailed: ${failCount}${
             errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
-          }`;
+          }\n\nNote: "Accepted" means WhatsApp queued it. Final delivery depends on recipient status, policy window, and webhook delivery events.`;
 
           Alert.alert(
             'WhatsApp Campaign Complete',

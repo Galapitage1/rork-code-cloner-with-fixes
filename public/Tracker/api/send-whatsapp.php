@@ -66,6 +66,7 @@ $recipients = isset($body['recipients']) ? $body['recipients'] : [];
 $mediaUrl = isset($body['mediaUrl']) ? trim($body['mediaUrl']) : '';
 $mediaType = isset($body['mediaType']) ? trim($body['mediaType']) : 'image';
 $caption = isset($body['caption']) ? trim($body['caption']) : '';
+$defaultCountryCode = isset($body['defaultCountryCode']) ? preg_replace('/[^0-9]/', '', trim((string)$body['defaultCountryCode'])) : '94';
 
 if (!empty($mediaUrl)) {
   if (!filter_var($mediaUrl, FILTER_VALIDATE_URL)) {
@@ -89,10 +90,38 @@ $results = [
   'failed' => 0,
   'errors' => [],
   'skipped' => 0,
+  'accepted' => 0,
+  'delivery_pending' => 0,
 ];
 
 logError('Starting to send to ' . count($recipients) . ' recipients');
 $batchStartTime = time();
+
+function normalizePhoneNumber($rawPhone, $defaultCountryCode = '') {
+  $phone = trim((string)$rawPhone);
+  if ($phone === '') {
+    return '';
+  }
+
+  $phone = preg_replace('/[^0-9+]/', '', $phone);
+  if ($phone === '') {
+    return '';
+  }
+
+  if (strpos($phone, '00') === 0) {
+    $phone = substr($phone, 2);
+  }
+
+  if (strpos($phone, '+') === 0) {
+    $phone = substr($phone, 1);
+  }
+
+  if (strpos($phone, '0') === 0 && !empty($defaultCountryCode)) {
+    $phone = $defaultCountryCode . ltrim($phone, '0');
+  }
+
+  return preg_replace('/[^0-9]/', '', $phone);
+}
 
 foreach ($recipients as $index => $recipient) {
   if (time() - $batchStartTime > 280) {
@@ -109,38 +138,20 @@ foreach ($recipients as $index => $recipient) {
       continue;
     }
 
-    $phoneRaw = trim((string)$recipient['phone']);
-    $phoneNormalized = preg_replace('/[^0-9+]/', '', $phoneRaw);
-
-    if (empty($phoneNormalized)) {
+    $phone = normalizePhoneNumber($recipient['phone'], $defaultCountryCode);
+    
+    if (empty($phone)) {
       $results['skipped']++;
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
       }
       continue;
     }
-
-    if (strpos($phoneNormalized, '00') === 0) {
-      $phoneNormalized = '+' . substr($phoneNormalized, 2);
-    }
-
-    if (substr($phoneNormalized, 0, 1) === '+') {
-      $phone = substr($phoneNormalized, 1);
-    } else {
-      $phone = $phoneNormalized;
-      if (substr($phone, 0, 1) === '0') {
-        $results['skipped']++;
-        if (count($results['errors']) < 50) {
-          $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone must include country code (e.g. +94771234567)';
-        }
-        continue;
-      }
-    }
-
-    if (!preg_match('/^[0-9]{8,15}$/', $phone)) {
+    
+    if (strlen($phone) < 8) {
       $results['skipped']++;
       if (count($results['errors']) < 50) {
-        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid international phone format';
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
       }
       continue;
     }
@@ -208,10 +219,15 @@ foreach ($recipients as $index => $recipient) {
       $errorMsg = isset($data['error']['message']) ? $data['error']['message'] : 'Failed to send message';
       $results['failed']++;
       if (count($results['errors']) < 50) {
-        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg}";
+        $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg} (HTTP {$httpCode})";
       }
-      logError("Failed for {$recipient['name']}: {$errorMsg}");
+      logError("Failed for {$recipient['name']} ({$phone}): {$errorMsg}. HTTP {$httpCode}. Response: {$response}");
     } else {
+      $results['accepted']++;
+      $messageStatus = isset($data['messages'][0]['message_status']) ? strtolower((string)$data['messages'][0]['message_status']) : '';
+      if ($messageStatus === 'accepted' || $messageStatus === '') {
+        $results['delivery_pending']++;
+      }
       $results['success']++;
       if (($index + 1) % 50 === 0) {
         logError("Progress: Successfully sent to {$results['success']} recipients");
@@ -242,4 +258,5 @@ if (count($results['errors']) >= 50) {
 respond([
   'success' => true,
   'results' => $results,
+  'deliveryNote' => 'Success means WhatsApp accepted the request. Final delivery status is confirmed via webhook events.',
 ]);
