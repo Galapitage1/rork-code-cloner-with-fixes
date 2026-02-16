@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, FlatList, ActivityIndicator, Alert, Switch, Modal, ScrollView, Dimensions, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
-import { FileSpreadsheet, UploadCloud, Download, ChevronDown, ChevronUp, Trash2, Calendar, AlertTriangle, CalendarDays, X } from 'lucide-react-native';
+import { FileSpreadsheet, UploadCloud, Download, ChevronDown, ChevronUp, Trash2, Calendar, AlertTriangle, CalendarDays } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useStock } from '@/contexts/StockContext';
@@ -40,6 +40,7 @@ type ReconciliationHistory = {
 };
 
 const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
+const CLEAR_SCOPE_ALL_OUTLETS = '__ALL_OUTLETS__';
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
@@ -76,9 +77,29 @@ export default function SalesUploadScreen() {
   const [showClearDataModal, setShowClearDataModal] = useState<boolean>(false);
   const [showClearDateCalendar, setShowClearDateCalendar] = useState<boolean>(false);
   const [clearDateInput, setClearDateInput] = useState<string>('');
+  const [clearOutletScope, setClearOutletScope] = useState<string>(CLEAR_SCOPE_ALL_OUTLETS);
+  const [showClearOutletOptions, setShowClearOutletOptions] = useState<boolean>(false);
   const [isClearing, setIsClearing] = useState<boolean>(false);
   const [showDeleteAllReconcileConfirm, setShowDeleteAllReconcileConfirm] = useState<boolean>(false);
   const [isDeletingAllReconcile, setIsDeletingAllReconcile] = useState<boolean>(false);
+
+  const clearOutletOptions = useMemo(() => {
+    const outletSet = new Set<string>();
+    outlets.forEach(o => {
+      if (o.name) outletSet.add(o.name);
+    });
+    reconcileHistory.forEach(r => {
+      if (r.outlet) outletSet.add(r.outlet);
+    });
+    reconciliationHistory.forEach(r => {
+      if (r.outlet) outletSet.add(r.outlet);
+    });
+    salesDeductions.forEach(d => {
+      if (d.outletName) outletSet.add(d.outletName);
+    });
+
+    return [CLEAR_SCOPE_ALL_OUTLETS, ...Array.from(outletSet).sort((a, b) => a.localeCompare(b))];
+  }, [outlets, reconcileHistory, reconciliationHistory, salesDeductions]);
 
   const getProductPair = useCallback((product: Product) => {
     const fromConversion = productConversions.find(c => c.fromProductId === product.id);
@@ -1369,19 +1390,25 @@ export default function SalesUploadScreen() {
     try {
       setIsClearing(true);
       console.log('\n=== CLEAR RECONCILIATION DATA BY DATE START ===');
+      const isAllOutlets = clearOutletScope === CLEAR_SCOPE_ALL_OUTLETS;
+      const clearScopeLabel = isAllOutlets ? 'All Outlets' : clearOutletScope;
+      const normalize = (value: string | undefined | null) => String(value || '').trim().toLowerCase();
+      const matchesOutlet = (outletName: string | undefined | null) => isAllOutlets || normalize(outletName) === normalize(clearOutletScope);
+
       console.log('Clearing reconciliation data for date:', clearDateInput);
+      console.log('Clear scope:', clearScopeLabel);
 
       // STEP 1: Clear local reconciliation history (UI view)
       console.log('Step 1: Clearing local reconciliation history...');
-      const updatedHistory = reconciliationHistory.filter(h => h.date !== clearDateInput);
+      const updatedHistory = reconciliationHistory.filter(h => !(h.date === clearDateInput && matchesOutlet(h.outlet)));
       await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(updatedHistory));
       setReconciliationHistory(updatedHistory);
       console.log('✓ Local reconciliation history cleared');
 
       // STEP 2: Mark reconciliation entries for this date as deleted in StockContext
       console.log('Step 2: Marking reconciliation entries as deleted in StockContext...');
-      const reconcileToDelete = reconcileHistory.filter(h => h.date === clearDateInput);
-      console.log(`Found ${reconcileToDelete.length} reconciliation entries to delete for ${clearDateInput}`);
+      const reconcileToDelete = reconcileHistory.filter(h => h.date === clearDateInput && matchesOutlet(h.outlet));
+      console.log(`Found ${reconcileToDelete.length} reconciliation entries to delete for ${clearDateInput} (${clearScopeLabel})`);
       
       for (const entry of reconcileToDelete) {
         try {
@@ -1392,10 +1419,53 @@ export default function SalesUploadScreen() {
         }
       }
 
-      // STEP 3: Restore inventory and mark sales deductions as deleted
-      console.log('Step 3: Restoring inventory and marking sales deductions as deleted...');
-      const deductionsForDate = salesDeductions.filter(d => d.salesDate === clearDateInput);
-      console.log(`Found ${deductionsForDate.length} sales deductions to restore for ${clearDateInput}`);
+      // STEP 3: Mark NEW reconciliation reports as deleted (sales/kitchen) and push to server
+      console.log('Step 3: Marking NEW reconciliation reports as deleted...');
+      const now = Date.now();
+      const localSalesReports = await getLocalSalesReports();
+      const localKitchenReports = await getLocalKitchenStockReports();
+
+      const salesReportsToDelete = localSalesReports.filter(r => r.date === clearDateInput && matchesOutlet(r.outlet) && !r.deleted);
+      const kitchenReportsToDelete = localKitchenReports.filter(r => r.date === clearDateInput && matchesOutlet(r.outlet) && !r.deleted);
+
+      console.log(`Found ${salesReportsToDelete.length} sales reports and ${kitchenReportsToDelete.length} kitchen reports to delete`);
+
+      for (const report of salesReportsToDelete) {
+        const deletedReport: SalesReport = {
+          ...report,
+          deleted: true,
+          updatedAt: now,
+          timestamp: now,
+        };
+        try {
+          await saveSalesReportLocally(deletedReport);
+          const synced = await saveSalesReportToServer(deletedReport);
+          console.log(`✓ Marked sales report deleted for ${report.outlet} ${report.date}${synced ? ' (synced)' : ' (local only)'}`);
+        } catch (reportError) {
+          console.error(`Failed to delete sales report ${report.id}:`, reportError);
+        }
+      }
+
+      for (const report of kitchenReportsToDelete) {
+        const deletedReport: KitchenStockReport = {
+          ...report,
+          deleted: true,
+          updatedAt: now,
+          timestamp: now,
+        };
+        try {
+          await saveKitchenStockReportLocally(deletedReport);
+          const synced = await saveKitchenStockReportToServer(deletedReport);
+          console.log(`✓ Marked kitchen report deleted for ${report.outlet} ${report.date}${synced ? ' (synced)' : ' (local only)'}`);
+        } catch (reportError) {
+          console.error(`Failed to delete kitchen report ${report.id}:`, reportError);
+        }
+      }
+
+      // STEP 4: Restore inventory and mark sales deductions as deleted
+      console.log('Step 4: Restoring inventory and marking sales deductions as deleted...');
+      const deductionsForDate = salesDeductions.filter(d => d.salesDate === clearDateInput && matchesOutlet(d.outletName));
+      console.log(`Found ${deductionsForDate.length} sales deductions to restore for ${clearDateInput} (${clearScopeLabel})`);
 
       for (const deduction of deductionsForDate) {
         const product = products.find(p => p.id === deduction.productId);
@@ -1429,7 +1499,7 @@ export default function SalesUploadScreen() {
 
       // Mark sales deductions as deleted (not removed) so they sync to server
       const updatedDeductions = salesDeductions.map(d => 
-        d.salesDate === clearDateInput 
+        d.salesDate === clearDateInput && matchesOutlet(d.outletName)
           ? { ...d, deleted: true as const, updatedAt: Date.now() }
           : d
       );
@@ -1440,8 +1510,8 @@ export default function SalesUploadScreen() {
       await AsyncStorage.setItem('@stock_app_inventory_stocks', JSON.stringify(updatedInventory));
       console.log('✓ Restored inventory');
 
-      // STEP 4: Sync deletions to server
-      console.log('Step 4: Syncing deletions to server...');
+      // STEP 5: Sync deletions to server
+      console.log('Step 5: Syncing deletions to server...');
       try {
         await syncAll(false);
         console.log('✓ Deletions synced to server successfully');
@@ -1453,9 +1523,11 @@ export default function SalesUploadScreen() {
 
       setShowClearDataModal(false);
       setClearDateInput('');
+      setClearOutletScope(CLEAR_SCOPE_ALL_OUTLETS);
+      setShowClearOutletOptions(false);
       Alert.alert(
         'Success', 
-        `Reconciliation data for ${clearDateInput} has been cleared and synced to server. Other devices will sync this deletion on their next sync cycle.`
+        `Reconciliation data for ${clearDateInput} (${clearScopeLabel}) has been cleared and synced to server. Other devices will sync this deletion on their next sync cycle.`
       );
     } catch (error) {
       console.error('Failed to clear reconciliation data:', error);
@@ -1463,7 +1535,7 @@ export default function SalesUploadScreen() {
     } finally {
       setIsClearing(false);
     }
-  }, [clearDateInput, reconciliationHistory, salesDeductions, products, inventoryStocks, productConversions, reconcileHistory, deleteReconcileHistory, syncAll]);
+  }, [clearDateInput, clearOutletScope, reconciliationHistory, salesDeductions, products, inventoryStocks, productConversions, reconcileHistory, deleteReconcileHistory, syncAll]);
 
   const discrepanciesCount = useMemo(() => {
     if (!result) return 0;
@@ -2152,7 +2224,7 @@ export default function SalesUploadScreen() {
             <AlertTriangle color="#FF9F0A" size={20} />
             <Text style={[styles.cardTitle, { color: '#FF9F0A' }]}>Super Admin: Reconciliation Management</Text>
           </View>
-          <Text style={styles.cardDesc}>Manage reconciliation data. Clear data for a specific date or delete all reconciliation data from local storage and server.</Text>
+          <Text style={styles.cardDesc}>Manage reconciliation data. Clear data for a specific date and outlet scope, or delete all reconciliation data from local storage and server.</Text>
           
           <TouchableOpacity
             style={[styles.primaryBtn, { backgroundColor: '#FF9F0A', marginBottom: 12 }]}
@@ -2160,7 +2232,7 @@ export default function SalesUploadScreen() {
           >
             <View style={styles.btnInner}>
               <Calendar color="#fff" size={18} />
-              <Text style={styles.primaryBtnText}>Clear Data by Date</Text>
+              <Text style={styles.primaryBtnText}>Clear Data by Date/Outlet</Text>
             </View>
           </TouchableOpacity>
           
@@ -2659,6 +2731,8 @@ export default function SalesUploadScreen() {
         onRequestClose={() => {
           setShowClearDataModal(false);
           setClearDateInput('');
+          setClearOutletScope(CLEAR_SCOPE_ALL_OUTLETS);
+          setShowClearOutletOptions(false);
         }}
       >
         <View style={styles.confirmModalOverlay}>
@@ -2668,24 +2742,66 @@ export default function SalesUploadScreen() {
               <Text style={styles.confirmModalTitle}>Clear Reconciliation Data</Text>
             </View>
             <Text style={styles.confirmModalMessage}>
-              Enter the date (DD/MM/YYYY) to clear all reconciliation data. This will:
+              Select date and outlet scope to clear reconciliation data. This will:
               {`\n`}• Remove reconciliation history{`\n`}• Delete sales deduction records{`\n`}• Restore inventory quantities{`\n`}• Update live inventory
             </Text>
+            <Text style={styles.clearInputLabel}>Date</Text>
             <TouchableOpacity 
               style={styles.dateInputContainer}
-              onPress={() => setShowClearDateCalendar(true)}
+              onPress={() => {
+                setShowClearOutletOptions(false);
+                setShowClearDateCalendar(true);
+              }}
             >
               <CalendarDays size={20} color={Colors.light.tint} />
               <Text style={[styles.dateInput, !clearDateInput && { color: Colors.light.tabIconDefault }]}>
                 {clearDateInput || 'Select date...'}
               </Text>
             </TouchableOpacity>
+            <Text style={styles.clearInputLabel}>Outlet Scope</Text>
+            <TouchableOpacity
+              style={styles.outletScopeSelector}
+              onPress={() => setShowClearOutletOptions(prev => !prev)}
+              disabled={isClearing}
+            >
+              <Text style={[styles.outletScopeSelectorText, clearOutletScope === CLEAR_SCOPE_ALL_OUTLETS && styles.outletScopeSelectorTextMuted]}>
+                {clearOutletScope === CLEAR_SCOPE_ALL_OUTLETS ? 'All Outlets' : clearOutletScope}
+              </Text>
+              <ChevronDown size={18} color={Colors.light.tabIconDefault} />
+            </TouchableOpacity>
+
+            {showClearOutletOptions && (
+              <View style={styles.outletScopeOptions}>
+                <ScrollView nestedScrollEnabled style={styles.outletScopeOptionsScroll}>
+                  {clearOutletOptions.map((option) => {
+                    const selected = clearOutletScope === option;
+                    const label = option === CLEAR_SCOPE_ALL_OUTLETS ? 'All Outlets' : option;
+                    return (
+                      <TouchableOpacity
+                        key={option}
+                        style={[styles.outletScopeOption, selected && styles.outletScopeOptionSelected]}
+                        onPress={() => {
+                          setClearOutletScope(option);
+                          setShowClearOutletOptions(false);
+                        }}
+                      >
+                        <Text style={[styles.outletScopeOptionText, selected && styles.outletScopeOptionTextSelected]}>
+                          {label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
             <View style={styles.confirmModalButtons}>
               <TouchableOpacity
                 style={[styles.confirmModalButton, styles.confirmModalButtonCancel]}
                 onPress={() => {
                   setShowClearDataModal(false);
                   setClearDateInput('');
+                  setClearOutletScope(CLEAR_SCOPE_ALL_OUTLETS);
+                  setShowClearOutletOptions(false);
                 }}
                 disabled={isClearing}
               >
@@ -3205,6 +3321,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  clearInputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
   dateInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3215,13 +3337,61 @@ const styles = StyleSheet.create({
     borderColor: Colors.light.border,
     borderRadius: 8,
     backgroundColor: Colors.light.background,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   dateInput: {
     flex: 1,
     fontSize: 16,
     color: Colors.light.text,
     padding: 0,
+  },
+  outletScopeSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: Colors.light.background,
+    marginBottom: 12,
+  },
+  outletScopeSelectorText: {
+    fontSize: 16,
+    color: Colors.light.text,
+    flex: 1,
+  },
+  outletScopeSelectorTextMuted: {
+    color: Colors.light.tabIconDefault,
+  },
+  outletScopeOptions: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: Colors.light.background,
+    marginBottom: 24,
+    overflow: 'hidden',
+  },
+  outletScopeOptionsScroll: {
+    maxHeight: 180,
+  },
+  outletScopeOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  outletScopeOptionSelected: {
+    backgroundColor: 'rgba(0, 122, 255, 0.08)',
+  },
+  outletScopeOptionText: {
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  outletScopeOptionTextSelected: {
+    color: Colors.light.tint,
+    fontWeight: '700',
   },
   historyDate: {
     fontSize: 16,

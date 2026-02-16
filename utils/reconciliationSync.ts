@@ -187,7 +187,9 @@ export async function saveKitchenStockReportLocally(report: KitchenStockReport):
     
     if (existingIndex >= 0) {
       const existing = reports[existingIndex];
-      const hasChanges = JSON.stringify(existing.products) !== JSON.stringify(report.products);
+      const hasChanges =
+        JSON.stringify(existing.products) !== JSON.stringify(report.products) ||
+        (existing.deleted || false) !== (report.deleted || false);
       
       if (hasChanges) {
         reports[existingIndex] = report;
@@ -215,7 +217,8 @@ export async function saveSalesReportLocally(report: SalesReport): Promise<void>
       const existing = reports[existingIndex];
       const hasChanges = 
         JSON.stringify(existing.salesData) !== JSON.stringify(report.salesData) ||
-        JSON.stringify(existing.rawConsumption) !== JSON.stringify(report.rawConsumption);
+        JSON.stringify(existing.rawConsumption) !== JSON.stringify(report.rawConsumption) ||
+        (existing.deleted || false) !== (report.deleted || false);
       
       if (hasChanges) {
         reports[existingIndex] = report;
