@@ -595,7 +595,7 @@ export function exportSalesDiscrepanciesToExcel(
   const summary = [
     { Field: 'Sales Date (from Excel H9)', Value: result.sheetDate ?? '' },
     { Field: 'Stock Check Date Used', Value: result.stockCheckDate ?? '' },
-    { Field: 'Outlet (from Excel J5)', Value: result.outletFromSheet ?? '' }
+    { Field: 'Outlet (from Excel J5)', Value: result.outletFromSheet ?? '' },
     { Field: 'Date Matched', Value: result.dateMatched ? `Yes - Date Reconsolidated: ${reconciliationTimestamp}` : 'No' },
     { Field: 'Formula', Value: 'Discrepancy = Opening + Received - Sales - Closing - Wastage' },
     { Field: 'Note', Value: 'Opening, Received, Wastage, and Closing are ACTUAL values from the Stock Check' },
