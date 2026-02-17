@@ -324,10 +324,10 @@
             <div class="muted" id="sessionInfo"></div>
           </div>
           <div style="display:flex;gap:8px;">
-            <button id="appHomeBtn" class="secondary">Home</button>
-            <button id="outletSettingsBtn" class="secondary">Outlet Settings</button>
-            <button id="refreshBtn" class="secondary">Refresh</button>
-            <button id="logoutBtn" class="secondary">Logout</button>
+            <button id="appHomeBtn" type="button" class="secondary">Home</button>
+            <button id="outletSettingsBtn" type="button" class="secondary">Outlet Settings</button>
+            <button id="refreshBtn" type="button" class="secondary">Refresh</button>
+            <button id="logoutBtn" type="button" class="secondary">Logout</button>
           </div>
         </div>
       </div>
@@ -495,9 +495,23 @@
       localStorage.removeItem(TOKEN_KEY);
       sessionStorage.removeItem(TOKEN_BACKUP_KEY);
     }
+    function cameFromHomePage() {
+      const ref = document.referrer || '';
+      if (!ref) return false;
+      try {
+        const refUrl = new URL(ref);
+        return refUrl.origin === window.location.origin && refUrl.pathname === '/home';
+      } catch (_) {
+        return false;
+      }
+    }
     function goHome() {
       if (token) {
         sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+      }
+      if (cameFromHomePage() && window.history.length > 1) {
+        window.history.back();
+        return;
       }
       window.location.assign(HOME_URL);
     }
