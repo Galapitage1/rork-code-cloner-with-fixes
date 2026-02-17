@@ -46,22 +46,37 @@ jobs:
           EOF
 
       - name: Validate FTP secrets
+        id: validate
         env:
           DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
+          DEPLOY_FTP_HOST_VAR: ${{ vars.DEPLOY_FTP_HOST }}
           DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
+          DEPLOY_FTP_USER_VAR: ${{ vars.DEPLOY_FTP_USER }}
           DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
           GITHUBDEPLOY: ${{ secrets.GITHUBDEPLOY }}
           DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
+          DEPLOY_TARGET_PATH_VAR: ${{ vars.DEPLOY_TARGET_PATH }}
         run: |
+          ftp_host="$DEPLOY_FTP_HOST"
+          [ -z "$ftp_host" ] && ftp_host="$DEPLOY_FTP_HOST_VAR"
+          ftp_user="$DEPLOY_FTP_USER"
+          [ -z "$ftp_user" ] && ftp_user="$DEPLOY_FTP_USER_VAR"
+          target_path="$DEPLOY_TARGET_PATH"
+          [ -z "$target_path" ] && target_path="$DEPLOY_TARGET_PATH_VAR"
+
           ftp_password="$DEPLOY_FTP_PASSWORD"
           if [ -z "$ftp_password" ]; then
             ftp_password="$GITHUBDEPLOY"
           fi
 
           ftp_host_set=no
-          [ -n "$DEPLOY_FTP_HOST" ] && ftp_host_set=yes
+          [ -n "$ftp_host" ] && ftp_host_set=yes
           ftp_user_set=no
-          [ -n "$DEPLOY_FTP_USER" ] && ftp_user_set=yes
+          [ -n "$ftp_user" ] && ftp_user_set=yes
+          ftp_host_var_set=no
+          [ -n "$DEPLOY_FTP_HOST_VAR" ] && ftp_host_var_set=yes
+          ftp_user_var_set=no
+          [ -n "$DEPLOY_FTP_USER_VAR" ] && ftp_user_var_set=yes
           ftp_password_set=no
           [ -n "$DEPLOY_FTP_PASSWORD" ] && ftp_password_set=yes
           githubdeploy_set=no
@@ -69,31 +84,36 @@ jobs:
           ftp_password_effective_set=no
           [ -n "$ftp_password" ] && ftp_password_effective_set=yes
           target_path_set=no
-          [ -n "$DEPLOY_TARGET_PATH" ] && target_path_set=yes
+          [ -n "$target_path" ] && target_path_set=yes
+          target_path_var_set=no
+          [ -n "$DEPLOY_TARGET_PATH_VAR" ] && target_path_var_set=yes
 
-          echo "::notice::Secret status: DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set DEPLOY_TARGET_PATH=$target_path_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
+          echo "::notice::Secret status: DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_HOST_VAR=$ftp_host_var_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_USER_VAR=$ftp_user_var_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set DEPLOY_TARGET_PATH=$target_path_set DEPLOY_TARGET_PATH_VAR=$target_path_var_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
 
           missing=()
-          [ -z "$DEPLOY_FTP_HOST" ] && missing+=("DEPLOY_FTP_HOST")
-          [ -z "$DEPLOY_FTP_USER" ] && missing+=("DEPLOY_FTP_USER")
+          [ -z "$ftp_host" ] && missing+=("DEPLOY_FTP_HOST (or Actions variable DEPLOY_FTP_HOST)")
+          [ -z "$ftp_user" ] && missing+=("DEPLOY_FTP_USER (or Actions variable DEPLOY_FTP_USER)")
           [ -z "$ftp_password" ] && missing+=("DEPLOY_FTP_PASSWORD or GITHUBDEPLOY")
-          [ -z "$DEPLOY_TARGET_PATH" ] && missing+=("DEPLOY_TARGET_PATH")
+          [ -z "$target_path" ] && missing+=("DEPLOY_TARGET_PATH (or Actions variable DEPLOY_TARGET_PATH)")
 
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing required FTP secret(s): ${missing[*]}"
             exit 1
           fi
 
+          echo "FTP_HOST_EFFECTIVE=$ftp_host" >> "$GITHUB_ENV"
+          echo "FTP_USER_EFFECTIVE=$ftp_user" >> "$GITHUB_ENV"
+          echo "TARGET_PATH_EFFECTIVE=$target_path" >> "$GITHUB_ENV"
           echo "FTP_PASSWORD_EFFECTIVE=$ftp_password" >> "$GITHUB_ENV"
 
       - name: Upload deployment package via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ secrets.DEPLOY_FTP_HOST }}
-          username: ${{ secrets.DEPLOY_FTP_USER }}
+          server: ${{ env.FTP_HOST_EFFECTIVE }}
+          username: ${{ env.FTP_USER_EFFECTIVE }}
           password: ${{ env.FTP_PASSWORD_EFFECTIVE }}
           local-dir: deployment-package/
-          server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
+          server-dir: ${{ env.TARGET_PATH_EFFECTIVE }}/
           log-level: verbose
 
       - name: Optional HTTP verify deployed commit
