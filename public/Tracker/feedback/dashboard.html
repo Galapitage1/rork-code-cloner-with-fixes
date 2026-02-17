@@ -324,6 +324,7 @@
             <div class="muted" id="sessionInfo"></div>
           </div>
           <div style="display:flex;gap:8px;">
+            <button id="appHomeBtn" class="secondary">Home</button>
             <button id="outletSettingsBtn" class="secondary">Outlet Settings</button>
             <button id="refreshBtn" class="secondary">Refresh</button>
             <button id="logoutBtn" class="secondary">Logout</button>
@@ -925,6 +926,9 @@
       setStatus('loginStatus', 'Session cleared.');
     });
     qs('applyFiltersBtn').addEventListener('click', loadAnalytics);
+    qs('appHomeBtn').addEventListener('click', () => {
+      window.location.assign(`${window.location.origin}/home`);
+    });
     qs('outletSettingsBtn').addEventListener('click', () => {
       window.location.assign('./settings.html');
     });
