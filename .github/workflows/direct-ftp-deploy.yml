@@ -50,23 +50,33 @@ jobs:
         env:
           DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
           DEPLOY_FTP_HOST_VAR: ${{ vars.DEPLOY_FTP_HOST }}
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
           DEPLOY_FTP_USER: ${{ secrets.DEPLOY_FTP_USER }}
           DEPLOY_FTP_USER_VAR: ${{ vars.DEPLOY_FTP_USER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           DEPLOY_FTP_PASSWORD: ${{ secrets.DEPLOY_FTP_PASSWORD }}
           GITHUBDEPLOY: ${{ secrets.GITHUBDEPLOY }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           DEPLOY_TARGET_PATH: ${{ secrets.DEPLOY_TARGET_PATH }}
           DEPLOY_TARGET_PATH_VAR: ${{ vars.DEPLOY_TARGET_PATH }}
+          FTP_SERVER_DIR: ${{ secrets.FTP_SERVER_DIR }}
         run: |
           ftp_host="$DEPLOY_FTP_HOST"
           [ -z "$ftp_host" ] && ftp_host="$DEPLOY_FTP_HOST_VAR"
+          [ -z "$ftp_host" ] && ftp_host="$FTP_SERVER"
           ftp_user="$DEPLOY_FTP_USER"
           [ -z "$ftp_user" ] && ftp_user="$DEPLOY_FTP_USER_VAR"
+          [ -z "$ftp_user" ] && ftp_user="$FTP_USERNAME"
           target_path="$DEPLOY_TARGET_PATH"
           [ -z "$target_path" ] && target_path="$DEPLOY_TARGET_PATH_VAR"
+          [ -z "$target_path" ] && target_path="$FTP_SERVER_DIR"
 
           ftp_password="$DEPLOY_FTP_PASSWORD"
           if [ -z "$ftp_password" ]; then
             ftp_password="$GITHUBDEPLOY"
+          fi
+          if [ -z "$ftp_password" ]; then
+            ftp_password="$FTP_PASSWORD"
           fi
 
           ftp_host_set=no
@@ -75,20 +85,28 @@ jobs:
           [ -n "$ftp_user" ] && ftp_user_set=yes
           ftp_host_var_set=no
           [ -n "$DEPLOY_FTP_HOST_VAR" ] && ftp_host_var_set=yes
+          ftp_host_legacy_set=no
+          [ -n "$FTP_SERVER" ] && ftp_host_legacy_set=yes
           ftp_user_var_set=no
           [ -n "$DEPLOY_FTP_USER_VAR" ] && ftp_user_var_set=yes
+          ftp_user_legacy_set=no
+          [ -n "$FTP_USERNAME" ] && ftp_user_legacy_set=yes
           ftp_password_set=no
           [ -n "$DEPLOY_FTP_PASSWORD" ] && ftp_password_set=yes
           githubdeploy_set=no
           [ -n "$GITHUBDEPLOY" ] && githubdeploy_set=yes
+          ftp_password_legacy_set=no
+          [ -n "$FTP_PASSWORD" ] && ftp_password_legacy_set=yes
           ftp_password_effective_set=no
           [ -n "$ftp_password" ] && ftp_password_effective_set=yes
           target_path_set=no
           [ -n "$target_path" ] && target_path_set=yes
           target_path_var_set=no
           [ -n "$DEPLOY_TARGET_PATH_VAR" ] && target_path_var_set=yes
+          target_path_legacy_set=no
+          [ -n "$FTP_SERVER_DIR" ] && target_path_legacy_set=yes
 
-          echo "::notice::Secret status: DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_HOST_VAR=$ftp_host_var_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_USER_VAR=$ftp_user_var_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set DEPLOY_TARGET_PATH=$target_path_set DEPLOY_TARGET_PATH_VAR=$target_path_var_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
+          echo "::notice::Secret status: DEPLOY_FTP_HOST=$ftp_host_set DEPLOY_FTP_HOST_VAR=$ftp_host_var_set FTP_SERVER=$ftp_host_legacy_set DEPLOY_FTP_USER=$ftp_user_set DEPLOY_FTP_USER_VAR=$ftp_user_var_set FTP_USERNAME=$ftp_user_legacy_set DEPLOY_FTP_PASSWORD=$ftp_password_set GITHUBDEPLOY=$githubdeploy_set FTP_PASSWORD=$ftp_password_legacy_set DEPLOY_TARGET_PATH=$target_path_set DEPLOY_TARGET_PATH_VAR=$target_path_var_set FTP_SERVER_DIR=$target_path_legacy_set FTP_PASSWORD_EFFECTIVE=$ftp_password_effective_set"
 
           missing=()
           [ -z "$ftp_host" ] && missing+=("DEPLOY_FTP_HOST (or Actions variable DEPLOY_FTP_HOST)")
