@@ -3236,92 +3236,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const reconcileHistoryToSync = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
       let snapshotsToSync = snapshotsData ? JSON.parse(snapshotsData) : [];
       
-      // CLEANUP: Remove stock checks older than 40 days during sync (server keeps everything)
-      // CRITICAL: Keep deleted items for 30 days to prevent resurrection by old devices
-      // NOTE: Changed to 40 days to ensure stock check history is available after cache clear
-      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
-      if (stockChecksToSync.length > 0 && silent && !forceFullSync) {
-        const RETENTION_DAYS = 40;
-        const DELETED_RETENTION_DAYS = 30; // Keep deleted items longer to prevent resurrection
-        const retentionDaysAgo = new Date();
-        retentionDaysAgo.setDate(retentionDaysAgo.getDate() - RETENTION_DAYS);
-        const retentionDaysAgoStr = retentionDaysAgo.toISOString().split('T')[0];
-        
-        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        
-        const originalCount = stockChecksToSync.length;
-        stockChecksToSync = stockChecksToSync.filter((check: any) => {
-          // Keep deleted items for 30 days to prevent old devices from resurrecting them
-          if (check.deleted) {
-            const deletedAt = check.updatedAt || 0;
-            if (deletedAt > deletedRetentionTime) {
-              return true;
-            }
-            return false;
-          }
-          if (!check.date) return true;
-          return check.date >= retentionDaysAgoStr;
-        });
-        
-        if (originalCount > stockChecksToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - stockChecksToSync.length, 'old stock checks (older than 40 days)');
-        }
-      }
-      
-      // CLEANUP: Remove old requests during sync
-      // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
-      // Keep pending/rejected requests for 7 days only
-      // Keep deleted items for 30 days to prevent resurrection by old devices
-      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
-      if (requestsToSync.length > 0 && silent && !forceFullSync) {
-        const PENDING_RETENTION_DAYS = 7;
-        const APPROVED_RETENTION_DAYS = 90; // Keep approved requests longer for Live Inventory
-        const DELETED_RETENTION_DAYS = 30;
-        
-        const pendingRetentionTime = Date.now() - (PENDING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        const approvedRetentionTime = Date.now() - (APPROVED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        
-        const originalCount = requestsToSync.length;
-        let approvedKept = 0;
-        let pendingRemoved = 0;
-        
-        requestsToSync = requestsToSync.filter((request: any) => {
-          // Keep deleted items for 30 days to prevent old devices from resurrecting them
-          if (request.deleted) {
-            const deletedAt = request.updatedAt || 0;
-            if (deletedAt > deletedRetentionTime) {
-              return true;
-            }
-            return false;
-          }
-          if (!request.requestedAt) return true;
-          
-          // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory "Received" column)
-          if (request.status === 'approved') {
-            if (request.requestedAt >= approvedRetentionTime) {
-              approvedKept++;
-              return true;
-            }
-            console.log('StockContext syncAll: Removing approved request older than 90 days:', request.id);
-            return false;
-          }
-          
-          // Pending/rejected requests: keep for 7 days only
-          if (request.requestedAt < pendingRetentionTime) {
-            pendingRemoved++;
-            return false;
-          }
-          return true;
-        });
-        
-        if (originalCount > requestsToSync.length) {
-          console.log('StockContext syncAll: Cleaned up', originalCount - requestsToSync.length, 'old requests from local storage');
-          console.log('StockContext syncAll: Kept', approvedKept, 'approved requests (90 day retention for Live Inventory)');
-          console.log('StockContext syncAll: Removed', pendingRemoved, 'old pending/rejected requests (7 day retention)');
-          console.log('StockContext syncAll: Server still has all historical data');
-        }
-      }
+      // Keep full stock check/request history locally and on sync payloads.
+      // Historical Live Inventory (Received/Wastage) must only change via manual cleanup.
       
       // CLEANUP: Keep only last 30 days of snapshots (reduced from 90 to save storage)
       // Snapshots contain full inventory details and can be very large
@@ -3352,10 +3268,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext syncAll: Data to sync - products:', productsToSync.length, 'stockChecks:', stockChecksToSync.length, 'requests:', requestsToSync.length, 'outlets:', outletsToSync.length, 'conversions:', conversionsToSync.length, 'inventory:', inventoryToSync.length, 'salesDeductions:', salesDeductionsToSync.length, 'reconcileHistory:', reconcileHistoryToSync.length, 'snapshots:', snapshotsToSync.length);
       console.log('StockContext syncAll: This is a', silent ? 'BACKGROUND' : 'MANUAL', 'sync');
       
-      // CRITICAL: Pass minDays: 40 for stockChecks when forceFullSync is true (cache was cleared)
-      // This ensures the server returns up to 40 days of stock check history
-      const stockChecksMinDays = forceFullSync ? 40 : undefined;
-      
       // CRITICAL: When forceFullSync is true (cache was cleared), use fetchOnly mode
       // This prevents empty local data from overwriting existing server data
       // We ONLY want to PULL data from server, not PUSH empty data to it
@@ -3377,8 +3289,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       const syncResults = await Promise.allSettled([
         syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: stockChecksMinDays || minDaysForRestore, fetchOnly, includeDeleted }),
-        syncData('requests', requestsToSync, currentUser.id, { minDays: forceFullSync ? 90 : minDaysForRestore, fetchOnly, includeDeleted }),
+        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: minDaysForRestore, fetchOnly, includeDeleted }),
+        syncData('requests', requestsToSync, currentUser.id, { minDays: minDaysForRestore, fetchOnly, includeDeleted }),
         syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
         syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
         syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
@@ -3403,44 +3315,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.error('StockContext syncAll: Requests sync FAILED:', syncResults[2].reason);
       }
       
-      // CLEANUP: After sync, keep only recent data locally
-      // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory received calculations)
-      // Keep pending/rejected requests for 7 days only
-      // Keep deleted items for 30 days to prevent resurrection by old devices
-      // CRITICAL: Skip cleanup when forceFullSync is true (cache was cleared, need ALL data)
-      if (silent && !forceFullSync) {
-        const PENDING_RETENTION_DAYS = 7;
-        const APPROVED_RETENTION_DAYS = 90;
-        const DELETED_RETENTION_DAYS = 30;
-        
-        const pendingRetentionTime = Date.now() - (PENDING_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        const approvedRetentionTime = Date.now() - (APPROVED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        const deletedRetentionTime = Date.now() - (DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-        
-        const beforeCount = (syncedRequests as any[]).length;
-        syncedRequests = (syncedRequests as any[]).filter((request: any) => {
-          // Keep deleted items for 30 days
-          if (request.deleted) {
-            const deletedAt = request.updatedAt || 0;
-            return deletedAt > deletedRetentionTime;
-          }
-          if (!request.requestedAt) return true;
-          
-          // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory "Received" column)
-          if (request.status === 'approved') {
-            return request.requestedAt >= approvedRetentionTime;
-          }
-          
-          // Pending/rejected requests: keep for 7 days only
-          return request.requestedAt >= pendingRetentionTime;
-        });
-        
-        if (beforeCount > (syncedRequests as any[]).length) {
-          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeCount - (syncedRequests as any[]).length, 'old requests');
-        }
-        
-        // Keep full reconciliation/sales history. These are cleared only via manual cleanup actions.
-      }
+      // Keep full request history for Live Inventory. Clear only via manual cleanup actions.
       
       const failedSyncs = syncResults.filter((r, i) => {
         if (r.status === 'rejected') {
