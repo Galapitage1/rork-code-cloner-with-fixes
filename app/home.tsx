@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
 import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, MapPin, Mail, CalendarDays } from 'lucide-react-native';
@@ -248,6 +248,20 @@ export default function HomeScreen() {
   }, [hasInitialSynced, syncUsers, syncStoresData]);
 
   const handleNavigate = async (route: string) => {
+    if (route === '/feedback-dashboard') {
+      const dashboardUrl =
+        Platform.OS === 'web' && typeof window !== 'undefined'
+          ? `${window.location.origin}/Tracker/feedback/dashboard.html`
+          : 'https://tracker.tecclk.com/Tracker/feedback/dashboard.html';
+
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.href = dashboardUrl;
+      } else {
+        await Linking.openURL(dashboardUrl);
+      }
+      return;
+    }
+
     if (route === '/moir' && currentUser?.username?.toLowerCase() === 'temp') {
       console.log('[HOME] Temp user clicking MOIR, checking users...');
       if (moirUsers.length === 0 && !moirLoading) {
@@ -285,6 +299,12 @@ export default function HomeScreen() {
   let allCards: NavCard[] = isSuperAdmin && settingsIndex >= 0 
     ? [
         ...visibleCards.slice(0, settingsIndex),
+        {
+          title: 'Feedback',
+          icon: BarChart3,
+          route: '/feedback-dashboard',
+          color: '#0F766E',
+        },
         {
           title: 'Activity Logs',
           icon: FileText,
