@@ -39,6 +39,15 @@ jobs:
           mkdir -p deployment-package/data
           echo '[]' > deployment-package/data/storage.json
 
+          cat > deployment-package/deploy-info.json <<EOF
+          {
+            "commit": "${GITHUB_SHA}",
+            "runId": "${GITHUB_RUN_ID}",
+            "runNumber": "${GITHUB_RUN_NUMBER}",
+            "generatedAtUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
         with:
@@ -118,7 +127,8 @@ jobs:
           elif [ "$ftp_enabled" = "true" ]; then
             echo "::notice::Deploy mode: FTP"
           else
-            echo "::warning::Auto-deploy skipped. Configure either SSH secrets (DEPLOY_SSH_*) or FTP secrets (DEPLOY_FTP_*), plus DEPLOY_TARGET_PATH."
+            echo "::error::Auto-deploy skipped. Configure either SSH secrets (DEPLOY_SSH_*) or FTP secrets (DEPLOY_FTP_*), plus DEPLOY_TARGET_PATH."
+            exit 1
           fi
 
       - name: Prepare FTP credentials
@@ -188,3 +198,22 @@ jobs:
           password: ${{ env.FTP_PASSWORD_EFFECTIVE }}
           local-dir: deployment-package/
           server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
+          log-level: verbose
+
+      - name: Optional HTTP verify deployed commit
+        if: steps.validate.outputs.ssh_enabled == 'true' || steps.validate.outputs.ftp_enabled == 'true'
+        env:
+          DEPLOY_VERIFY_URL: ${{ secrets.DEPLOY_VERIFY_URL }}
+        run: |
+          if [ -z "$DEPLOY_VERIFY_URL" ]; then
+            echo "No DEPLOY_VERIFY_URL set. Skipping HTTP deploy verification."
+            exit 0
+          fi
+
+          body="$(curl -fsSL --retry 3 --retry-delay 2 "$DEPLOY_VERIFY_URL")"
+          if printf '%s' "$body" | grep -q "$GITHUB_SHA"; then
+            echo "::notice::Verified deployed commit at $DEPLOY_VERIFY_URL"
+          else
+            echo "::error::Deployed commit verification failed at $DEPLOY_VERIFY_URL"
+            exit 1
+          fi

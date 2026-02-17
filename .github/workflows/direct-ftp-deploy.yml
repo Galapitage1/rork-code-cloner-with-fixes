@@ -36,6 +36,15 @@ jobs:
           mkdir -p deployment-package/data
           echo '[]' > deployment-package/data/storage.json
 
+          cat > deployment-package/deploy-info.json <<EOF
+          {
+            "commit": "${GITHUB_SHA}",
+            "runId": "${GITHUB_RUN_ID}",
+            "runNumber": "${GITHUB_RUN_NUMBER}",
+            "generatedAtUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
       - name: Validate FTP secrets
         env:
           DEPLOY_FTP_HOST: ${{ secrets.DEPLOY_FTP_HOST }}
@@ -85,3 +94,21 @@ jobs:
           password: ${{ env.FTP_PASSWORD_EFFECTIVE }}
           local-dir: deployment-package/
           server-dir: ${{ secrets.DEPLOY_TARGET_PATH }}/
+          log-level: verbose
+
+      - name: Optional HTTP verify deployed commit
+        env:
+          DEPLOY_VERIFY_URL: ${{ secrets.DEPLOY_VERIFY_URL }}
+        run: |
+          if [ -z "$DEPLOY_VERIFY_URL" ]; then
+            echo "No DEPLOY_VERIFY_URL set. Skipping HTTP deploy verification."
+            exit 0
+          fi
+
+          body="$(curl -fsSL --retry 3 --retry-delay 2 "$DEPLOY_VERIFY_URL")"
+          if printf '%s' "$body" | grep -q "$GITHUB_SHA"; then
+            echo "::notice::Verified deployed commit at $DEPLOY_VERIFY_URL"
+          else
+            echo "::error::Deployed commit verification failed at $DEPLOY_VERIFY_URL"
+            exit 1
+          fi
