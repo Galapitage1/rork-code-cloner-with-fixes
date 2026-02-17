@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Feedback</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --brand: #0d9488;
+      --brand-dark: #0f766e;
+      --good: #16a34a;
+      --warn: #ea580c;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: radial-gradient(circle at top right, #d1fae5, var(--bg) 35%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 640px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+    }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .sub { color: var(--muted); margin: 0 0 14px; }
+    .row { margin-bottom: 14px; }
+    label { font-weight: 600; display: block; margin-bottom: 8px; }
+    input, select, textarea, button {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 15px;
+      font-family: inherit;
+    }
+    textarea { min-height: 92px; resize: vertical; }
+    .rating {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+    }
+    .rating button {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 700;
+      padding: 12px 0;
+    }
+    .rating button.active {
+      border-color: var(--brand);
+      background: #ccfbf1;
+      color: var(--brand-dark);
+    }
+    .small-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .btn {
+      background: var(--brand);
+      border: none;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--brand-dark); }
+    .btn.secondary {
+      background: white;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .status {
+      margin-top: 10px;
+      color: var(--muted);
+      min-height: 20px;
+    }
+    .result {
+      margin-top: 14px;
+      border-radius: 12px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      display: none;
+    }
+    .result.good { border-color: #86efac; background: #f0fdf4; }
+    .result.bad { border-color: #fdba74; background: #fff7ed; }
+    .result h3 { margin: 0 0 8px; }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .muted-note {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      .small-grid, .actions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Quick Feedback</h1>
+    <p class="sub">Help us improve your experience. It takes less than a minute.</p>
+
+    <div class="row" id="outletPickerWrap" style="display:none;">
+      <label for="outletPicker">Outlet</label>
+      <select id="outletPicker"></select>
+    </div>
+
+    <div class="row">
+      <label>Overall Rating</label>
+      <div class="rating" id="overallRatingButtons"></div>
+    </div>
+
+    <div class="row small-grid">
+      <div>
+        <label for="serviceRating">Service</label>
+        <select id="serviceRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      </div>
+      <div>
+        <label for="qualityRating">Food/Drink Quality</label>
+        <select id="qualityRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      </div>
+      <div>
+        <label for="cleanlinessRating">Cleanliness</label>
+        <select id="cleanlinessRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      </div>
+      <div>
+        <label for="speedRating">Speed</label>
+        <select id="speedRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      </div>
+      <div>
+        <label for="valueRating">Value for Money</label>
+        <select id="valueRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      </div>
+    </div>
+
+    <div class="row">
+      <label for="comment">Comments (optional)</label>
+      <textarea id="comment" placeholder="Tell us what went well or what we should improve"></textarea>
+    </div>
+
+    <div class="row small-grid">
+      <div>
+        <label for="contactName">Your Name (optional)</label>
+        <input id="contactName" placeholder="Name" />
+      </div>
+      <div>
+        <label for="contactPhone">Phone (optional)</label>
+        <input id="contactPhone" placeholder="+94..." />
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="submitBtn">Submit Feedback</button>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="result" id="resultBox">
+      <h3 id="resultTitle"></h3>
+      <div id="resultText"></div>
+      <div class="actions" id="resultActions"></div>
+      <div class="muted-note" id="resultNote"></div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    let selectedOutlet = (params.get('outlet') || '').trim();
+    let selectedOutletId = '';
+    let outletConfig = {
+      googleReviewUrl: '',
+      whatsappNumber: '',
+      phoneNumber: '',
+      reviewRedirectEnabled: true,
+    };
+    let overallRating = 0;
+
+    const statusEl = document.getElementById('status');
+    const outletPickerWrap = document.getElementById('outletPickerWrap');
+    const outletPicker = document.getElementById('outletPicker');
+    const resultBox = document.getElementById('resultBox');
+    const resultTitle = document.getElementById('resultTitle');
+    const resultText = document.getElementById('resultText');
+    const resultActions = document.getElementById('resultActions');
+    const resultNote = document.getElementById('resultNote');
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg || '';
+      statusEl.style.color = isError ? '#b91c1c' : '#6b7280';
+    }
+
+    function renderOverallButtons() {
+      const wrap = document.getElementById('overallRatingButtons');
+      wrap.innerHTML = '';
+      for (let i = 1; i <= 5; i++) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = `${i} Star`;
+        btn.className = overallRating === i ? 'active' : '';
+        btn.addEventListener('click', () => {
+          overallRating = i;
+          renderOverallButtons();
+        });
+        wrap.appendChild(btn);
+      }
+    }
+
+    function fillOutletPicker(outlets) {
+      outletPicker.innerHTML = '';
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = 'Select outlet';
+      outletPicker.appendChild(first);
+      outlets.forEach((o) => {
+        const opt = document.createElement('option');
+        opt.value = o.name;
+        opt.textContent = o.name;
+        outletPicker.appendChild(opt);
+      });
+
+      if (selectedOutlet) {
+        outletPicker.value = selectedOutlet;
+      }
+      outletPicker.addEventListener('change', () => {
+        selectedOutlet = outletPicker.value;
+      });
+    }
+
+    function clearResult() {
+      resultBox.style.display = 'none';
+      resultBox.className = 'result';
+      resultActions.innerHTML = '';
+      resultNote.textContent = '';
+    }
+
+    function addActionButton(text, href, className = 'btn secondary') {
+      if (!href) return;
+      const a = document.createElement('a');
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = text;
+      a.className = className;
+      a.style.textDecoration = 'none';
+      a.style.textAlign = 'center';
+      a.style.display = 'inline-block';
+      a.style.padding = '10px 12px';
+      a.style.borderRadius = '10px';
+      resultActions.appendChild(a);
+    }
+
+    async function loadConfig() {
+      setStatus('Loading...');
+      try {
+        const endpoint = `../api/feedback-public-config.php?outlet=${encodeURIComponent(selectedOutlet)}`;
+        const res = await fetch(endpoint, { method: 'GET' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to load configuration');
+
+        if (data.resolvedOutlet) {
+          selectedOutlet = data.resolvedOutlet.name;
+          selectedOutletId = data.resolvedOutlet.id || '';
+        }
+        outletConfig = data.config || outletConfig;
+
+        const outlets = Array.isArray(data.outlets) ? data.outlets : [];
+        if (!selectedOutlet) {
+          outletPickerWrap.style.display = '';
+          fillOutletPicker(outlets);
+        } else {
+          fillOutletPicker(outlets);
+          outletPickerWrap.style.display = outlets.length > 1 ? '' : 'none';
+        }
+
+        setStatus('');
+      } catch (err) {
+        setStatus(err.message || 'Failed to load outlet configuration', true);
+      }
+    }
+
+    async function submitFeedback() {
+      clearResult();
+      if (!selectedOutlet) {
+        setStatus('Please select an outlet first.', true);
+        return;
+      }
+      if (overallRating < 1 || overallRating > 5) {
+        setStatus('Please choose an overall rating.', true);
+        return;
+      }
+
+      setStatus('Submitting...');
+      const payload = {
+        outlet: selectedOutlet,
+        outletId: selectedOutletId,
+        overallRating,
+        aspects: {
+          service: document.getElementById('serviceRating').value || null,
+          quality: document.getElementById('qualityRating').value || null,
+          cleanliness: document.getElementById('cleanlinessRating').value || null,
+          speed: document.getElementById('speedRating').value || null,
+          value: document.getElementById('valueRating').value || null,
+        },
+        comment: document.getElementById('comment').value || '',
+        contactName: document.getElementById('contactName').value || '',
+        contactPhone: document.getElementById('contactPhone').value || '',
+        sourceUrl: window.location.href,
+      };
+
+      try {
+        const res = await fetch('../api/feedback-submit.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to submit feedback');
+
+        setStatus('Submitted. Thank you.');
+        resultBox.style.display = 'block';
+        const step = data.nextStep || {};
+
+        if (step.type === 'google_review') {
+          resultBox.classList.add('good');
+          resultTitle.textContent = 'Thank you for the great rating!';
+          resultText.textContent = 'Would you like to share your experience on Google?';
+          addActionButton('Leave Google Review', step.googleReviewUrl, 'btn');
+          if (outletConfig.reviewRedirectEnabled && step.googleReviewUrl) {
+            resultNote.textContent = 'Redirecting to Google review page in 2 seconds...';
+            setTimeout(() => {
+              window.open(step.googleReviewUrl, '_blank');
+            }, 2000);
+          }
+        } else if (step.type === 'complaint') {
+          resultBox.classList.add('bad');
+          resultTitle.textContent = 'Thank you. We want to fix this.';
+          resultText.textContent = 'Please contact us directly so we can resolve your issue quickly.';
+          addActionButton('WhatsApp Us', step.whatsappUrl, 'btn secondary');
+          addActionButton('Call Us', step.callUrl, 'btn secondary');
+        } else {
+          resultBox.classList.add('good');
+          resultTitle.textContent = 'Thank you for your feedback!';
+          resultText.textContent = 'Your response was submitted successfully.';
+        }
+
+      } catch (err) {
+        setStatus(err.message || 'Failed to submit feedback', true);
+      }
+    }
+
+    document.getElementById('submitBtn').addEventListener('click', submitFeedback);
+
+    renderOverallButtons();
+    loadConfig();
+  </script>
+</body>
+</html>

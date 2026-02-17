@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Outlet Feedback QR Links</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --brand: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .top {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .top h1 { margin: 0 0 8px; }
+    .muted { color: var(--muted); }
+    button {
+      border: none;
+      border-radius: 8px;
+      background: var(--brand);
+      color: white;
+      font-weight: 700;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .url {
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+      margin-bottom: 8px;
+      min-height: 34px;
+    }
+    .qr {
+      width: 180px;
+      height: 180px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: block;
+      margin: 6px auto 8px;
+      background: #fff;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .btn-secondary {
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--border);
+      font-weight: 700;
+      padding: 9px 10px;
+      text-align: center;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1>Outlet Feedback QR Links</h1>
+      <p class="muted">Print these QR codes and place one at each sales outlet. Each QR routes to the same feedback form with that outlet preselected.</p>
+      <button onclick="window.print()">Print</button>
+      <span id="status" class="muted" style="margin-left:8px;"></span>
+    </div>
+
+    <div id="cards" class="grid"></div>
+  </div>
+
+  <script>
+    const cardsEl = document.getElementById('cards');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || '';
+    }
+
+    function feedbackUrlForOutlet(outletName) {
+      const base = `${window.location.origin}/Tracker/feedback/index.html`;
+      return `${base}?outlet=${encodeURIComponent(outletName)}`;
+    }
+
+    function qrImageUrl(data) {
+      return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data)}`;
+    }
+
+    function createCard(outlet) {
+      const url = feedbackUrlForOutlet(outlet.name);
+      const qr = qrImageUrl(url);
+      return `
+        <div class="card">
+          <h3>${outlet.name}</h3>
+          <div class="url">${url}</div>
+          <img class="qr" src="${qr}" alt="QR for ${outlet.name}" />
+          <div class="actions">
+            <a class="btn-secondary" href="${url}" target="_blank" rel="noopener">Open Form</a>
+            <button onclick="copyText('${url.replace(/'/g, "\\'")}')">Copy URL</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadOutlets() {
+      setStatus('Loading outlets...');
+      try {
+        const res = await fetch('../api/feedback-public-config.php', { method: 'GET' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to load outlets');
+        const outlets = Array.isArray(data.outlets) ? data.outlets : [];
+        cardsEl.innerHTML = outlets.length
+          ? outlets.map(createCard).join('')
+          : '<div class="card">No outlets found.</div>';
+        setStatus(`${outlets.length} outlet QR links ready.`);
+      } catch (err) {
+        cardsEl.innerHTML = `<div class="card">${err.message || 'Failed to load outlets'}</div>`;
+        setStatus('');
+      }
+    }
+
+    function copyText(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        setStatus('URL copied.');
+        setTimeout(() => setStatus(''), 1500);
+      }).catch(() => {
+        setStatus('Copy failed.');
+      });
+    }
+
+    window.copyText = copyText;
+    loadOutlets();
+  </script>
+</body>
+</html>
