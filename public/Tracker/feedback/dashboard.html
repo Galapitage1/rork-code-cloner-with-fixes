@@ -435,7 +435,7 @@
             <button id="refreshGoogleReviewsBtn" class="secondary" style="width:auto;">Refresh Google Reviews</button>
           </div>
         </div>
-        <p id="googleReviewsHint" class="muted" style="margin:6px 0 0;">Configure Google Places API key and per-outlet Place IDs in settings below.</p>
+        <p id="googleReviewsHint" class="muted" style="margin:6px 0 0;">Configure Google Places API key and per-outlet Place IDs in Outlet Settings.</p>
         <div id="googleReviewsStatus" class="status"></div>
         <div class="visual-grid" style="margin-bottom:10px;">
           <div class="pie-card">
@@ -460,32 +460,6 @@
         <div id="googleReviewsGrid" class="review-grid"></div>
       </div>
 
-      <div class="panel">
-        <h2>Outlet Routing Settings</h2>
-        <p class="muted">Set Google review, Place IDs, and complaint routes per outlet.</p>
-        <div class="row" style="margin-bottom:10px;">
-          <div>
-            <label for="googlePlacesApiKey">Google Places API Key (server-side)</label>
-            <input id="googlePlacesApiKey" type="password" placeholder="Leave blank to keep current key" />
-          </div>
-          <div>
-            <label for="clearGooglePlacesApiKey">Key Status</label>
-            <div id="googleApiKeyState" class="muted-box">Not configured</div>
-            <div style="margin-top:8px;">
-              <label for="clearGooglePlacesApiKey" style="font-size:12px;text-transform:none;letter-spacing:0;">
-                <input id="clearGooglePlacesApiKey" type="checkbox" style="width:auto;margin-right:6px;" />
-                Clear saved API key on next save
-              </label>
-            </div>
-          </div>
-        </div>
-        <div id="settingsGrid" class="settings-grid"></div>
-        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-          <button id="saveSettingsBtn">Save Settings</button>
-          <button id="changePasscodeBtn" class="secondary">Change Passcode</button>
-        </div>
-        <div id="settingsStatus" class="status"></div>
-      </div>
     </div>
   </div>
 
@@ -513,15 +487,6 @@
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
-    function setGoogleApiKeyState(configured, source = 'none') {
-      const sourceLabel = source === 'env'
-        ? 'Environment variable (FEEDBACK_GOOGLE_PLACES_API_KEY)'
-        : (source === 'settings' ? 'Dashboard settings' : 'None');
-      qs('googleApiKeyState').textContent = configured
-        ? `Google Places API key is configured. Active source: ${sourceLabel}.`
-        : 'Google Places API key is not configured.';
-    }
-
     async function apiRequest(action, method = 'GET', body = null, query = {}) {
       const url = new URL(API, window.location.href);
       url.searchParams.set('action', action);
@@ -689,62 +654,6 @@
       }).join('');
     }
 
-    function settingsValue(config, key, fallback = '') {
-      return (config && config[key] != null ? config[key] : fallback);
-    }
-
-    function renderSettings(outlets, settings) {
-      const outletConfigs = (settings && settings.outletConfigs) ? settings.outletConfigs : {};
-      qs('settingsGrid').innerHTML = (outlets || []).map((o) => {
-        const c = outletConfigs[o.name] || {};
-        const feedbackUrl = `${window.location.origin}/Tracker/feedback/index.html?outlet=${encodeURIComponent(o.name)}`;
-        return `
-          <div class="setting-card" data-outlet="${escapeHtml(o.name)}">
-            <h3>${escapeHtml(o.name)}</h3>
-            <div class="muted" style="margin-bottom:8px;word-break:break-all;">QR URL: ${escapeHtml(feedbackUrl)}</div>
-            <label>Google Review URL</label>
-            <input data-key="googleReviewUrl" value="${escapeHtml(settingsValue(c, 'googleReviewUrl', ''))}" />
-            <label style="margin-top:6px;">Google Place ID</label>
-            <input data-key="googlePlaceId" value="${escapeHtml(settingsValue(c, 'googlePlaceId', ''))}" placeholder="ChIJ..." />
-            <label style="margin-top:6px;">WhatsApp Number</label>
-            <input data-key="whatsappNumber" value="${escapeHtml(settingsValue(c, 'whatsappNumber', ''))}" />
-            <label style="margin-top:6px;">Phone Number</label>
-            <input data-key="phoneNumber" value="${escapeHtml(settingsValue(c, 'phoneNumber', ''))}" />
-            <label style="margin-top:6px;">Auto Redirect for 4-5</label>
-            <select data-key="reviewRedirectEnabled">
-              <option value="true" ${settingsValue(c, 'reviewRedirectEnabled', true) ? 'selected' : ''}>Enabled</option>
-              <option value="false" ${settingsValue(c, 'reviewRedirectEnabled', true) ? '' : 'selected'}>Disabled</option>
-            </select>
-          </div>
-        `;
-      }).join('');
-    }
-
-    function collectSettingsPayload() {
-      const cards = Array.from(document.querySelectorAll('.setting-card'));
-      const outletConfigs = {};
-      cards.forEach((card) => {
-        const outlet = card.getAttribute('data-outlet');
-        const values = {};
-        card.querySelectorAll('[data-key]').forEach((el) => {
-          const key = el.getAttribute('data-key');
-          values[key] = el.value;
-        });
-        values.reviewRedirectEnabled = values.reviewRedirectEnabled === 'true';
-        outletConfigs[outlet] = values;
-      });
-
-      const payload = { outletConfigs };
-      const apiKey = (qs('googlePlacesApiKey').value || '').trim();
-      if (apiKey) {
-        payload.googlePlacesApiKey = apiKey;
-      }
-      if (qs('clearGooglePlacesApiKey').checked) {
-        payload.clearGooglePlacesApiKey = true;
-      }
-      return payload;
-    }
-
     function getGoogleSortMode() {
       return (qs('googleReviewSort') && qs('googleReviewSort').value) ? qs('googleReviewSort').value : 'newest';
     }
@@ -851,7 +760,7 @@
       const wrap = qs('googleReviewsGrid');
       const mode = getGoogleSortMode();
       if (!apiKeyConfigured) {
-        wrap.innerHTML = '<div class="muted-box">Google Places API key is not configured. Add it in Outlet Routing Settings.</div>';
+        wrap.innerHTML = '<div class="muted-box">Google Places API key is not configured. Add it in Outlet Settings.</div>';
         renderGoogleReviewVisuals([]);
         return;
       }
@@ -946,7 +855,6 @@
         renderVisuals(data.summary || {}, data.outletBreakdown || []);
         renderOutletBars(data.outletBreakdown || []);
         renderRecent(data.recent || []);
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
         setStatus('globalStatus', '');
         loadGoogleReviews(false);
       } catch (err) {
@@ -964,9 +872,6 @@
         renderVisuals(data.summary || {}, data.outletBreakdown || []);
         renderOutletBars(data.outletBreakdown || []);
         renderRecent(data.recent || []);
-        renderSettings(data.outlets || [], data.settings || {});
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
-
         setText('sessionInfo', `Logged in as ${data.session.username || '-'} (${data.session.role || '-'})`);
         qs('loginPanel').classList.add('hide');
         qs('appPanel').classList.remove('hide');
@@ -1001,37 +906,6 @@
       }
     }
 
-    async function saveSettings() {
-      setStatus('settingsStatus', 'Saving...');
-      try {
-        const payload = collectSettingsPayload();
-        const data = await apiRequest('save-settings', 'POST', payload);
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
-        qs('googlePlacesApiKey').value = '';
-        qs('clearGooglePlacesApiKey').checked = false;
-        setStatus('settingsStatus', 'Settings saved.', true);
-        await loadGoogleReviews(true);
-      } catch (err) {
-        setStatus('settingsStatus', err.message || 'Failed to save settings');
-      }
-    }
-
-    async function changePasscode() {
-      const newPasscode = prompt('Enter new dashboard passcode (min 6 chars):', '');
-      if (newPasscode == null) return;
-      if (newPasscode.trim().length < 6) {
-        setStatus('settingsStatus', 'Passcode must be at least 6 characters.');
-        return;
-      }
-      setStatus('settingsStatus', 'Updating passcode...');
-      try {
-        await apiRequest('change-passcode', 'POST', { newPasscode: newPasscode.trim() });
-        setStatus('settingsStatus', 'Passcode updated.', true);
-      } catch (err) {
-        setStatus('settingsStatus', err.message || 'Failed to update passcode');
-      }
-    }
-
     async function logout() {
       try {
         await apiRequest('logout', 'POST', {});
@@ -1061,8 +935,6 @@
       renderGoogleReviews(googleReviewsState, googleReviewsMeta.apiKeyConfigured, googleReviewsMeta.configuredOutlets);
     });
     qs('refreshGoogleReviewsBtn').addEventListener('click', () => loadGoogleReviews(true));
-    qs('saveSettingsBtn').addEventListener('click', saveSettings);
-    qs('changePasscodeBtn').addEventListener('click', changePasscode);
     qs('logoutBtn').addEventListener('click', logout);
 
     if (token) {
