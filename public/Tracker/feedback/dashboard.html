@@ -425,10 +425,37 @@
       <div class="panel">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
           <h2 style="margin:0;">Google Reviews by Outlet</h2>
-          <button id="refreshGoogleReviewsBtn" class="secondary" style="width:auto;">Refresh Google Reviews</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="googleReviewSort" style="width:auto;min-width:170px;">
+              <option value="newest">Newest Ratings</option>
+              <option value="highest">Highest Ratings</option>
+              <option value="lowest">Lowest Ratings</option>
+            </select>
+            <button id="refreshGoogleReviewsBtn" class="secondary" style="width:auto;">Refresh Google Reviews</button>
+          </div>
         </div>
         <p id="googleReviewsHint" class="muted" style="margin:6px 0 0;">Configure Google Places API key and per-outlet Place IDs in settings below.</p>
         <div id="googleReviewsStatus" class="status"></div>
+        <div class="visual-grid" style="margin-bottom:10px;">
+          <div class="pie-card">
+            <h3>Google Rating Mix</h3>
+            <div class="pie-wrap">
+              <div id="googleRatingPie" class="pie"></div>
+              <div id="googleRatingLegend"></div>
+            </div>
+          </div>
+          <div class="pie-card">
+            <h3>Google Reviews by Outlet</h3>
+            <div class="pie-wrap">
+              <div id="googleOutletPie" class="pie"></div>
+              <div id="googleOutletLegend"></div>
+            </div>
+          </div>
+          <div class="pie-card">
+            <h3>Google Review Stats</h3>
+            <div id="googleReviewStats" class="muted"></div>
+          </div>
+        </div>
         <div id="googleReviewsGrid" class="review-grid"></div>
       </div>
 
@@ -467,6 +494,8 @@
     const PIE_COLORS = ['#0f766e', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6'];
     let token = localStorage.getItem(TOKEN_KEY) || '';
     let currentPayload = null;
+    let googleReviewsState = [];
+    let googleReviewsMeta = { apiKeyConfigured: false, configuredOutlets: 0 };
 
     function qs(id) { return document.getElementById(id); }
     function setText(id, value) { qs(id).textContent = value; }
@@ -715,23 +744,132 @@
       return payload;
     }
 
+    function getGoogleSortMode() {
+      return (qs('googleReviewSort') && qs('googleReviewSort').value) ? qs('googleReviewSort').value : 'newest';
+    }
+
+    function normalizeSortRating(value, mode) {
+      const n = Number(value || 0);
+      if (n > 0) return n;
+      return mode === 'lowest' ? 999 : -1;
+    }
+
+    function sortGoogleReviewRows(rows, mode) {
+      const list = Array.isArray(rows) ? rows.map((row) => ({
+        ...row,
+        reviews: Array.isArray(row.reviews) ? [...row.reviews] : [],
+      })) : [];
+
+      list.forEach((row) => {
+        row.reviews.sort((a, b) => {
+          const ar = Number(a.rating || 0);
+          const br = Number(b.rating || 0);
+          const at = Number(a.time || 0);
+          const bt = Number(b.time || 0);
+          if (mode === 'highest') {
+            if (br !== ar) return br - ar;
+            return bt - at;
+          }
+          if (mode === 'lowest') {
+            if (ar !== br) return ar - br;
+            return bt - at;
+          }
+          return bt - at;
+        });
+      });
+
+      list.sort((a, b) => {
+        const ar = normalizeSortRating(a.rating, mode);
+        const br = normalizeSortRating(b.rating, mode);
+        const at = Math.max(0, ...((a.reviews || []).map((r) => Number(r.time || 0))));
+        const bt = Math.max(0, ...((b.reviews || []).map((r) => Number(r.time || 0))));
+        if (mode === 'highest') {
+          if (br !== ar) return br - ar;
+          return bt - at;
+        }
+        if (mode === 'lowest') {
+          if (ar !== br) return ar - br;
+          return bt - at;
+        }
+        if (bt !== at) return bt - at;
+        return br - ar;
+      });
+
+      return list;
+    }
+
+    function renderGoogleReviewVisuals(rows) {
+      const list = Array.isArray(rows) ? rows : [];
+      const allReviews = [];
+      list.forEach((row) => {
+        (row.reviews || []).forEach((review) => {
+          const r = Number(review.rating || 0);
+          if (r >= 1 && r <= 5) {
+            allReviews.push({ rating: r });
+          }
+        });
+      });
+
+      const ratingDist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      allReviews.forEach((r) => {
+        ratingDist[r.rating] = (ratingDist[r.rating] || 0) + 1;
+      });
+
+      renderPie('googleRatingPie', 'googleRatingLegend', [
+        { label: '5 stars', value: ratingDist[5], color: '#16a34a' },
+        { label: '4 stars', value: ratingDist[4], color: '#84cc16' },
+        { label: '3 stars', value: ratingDist[3], color: '#eab308' },
+        { label: '2 stars', value: ratingDist[2], color: '#f97316' },
+        { label: '1 star', value: ratingDist[1], color: '#ef4444' },
+      ], 'No Google review rating data');
+
+      const outletSegments = list
+        .filter((row) => !row.error && Number(row.userRatingsTotal || 0) > 0)
+        .slice(0, 8)
+        .map((row, idx) => ({
+          label: row.outlet || 'Outlet',
+          value: Number(row.userRatingsTotal || 0),
+          color: PIE_COLORS[idx % PIE_COLORS.length],
+        }));
+      renderPie('googleOutletPie', 'googleOutletLegend', outletSegments, 'No outlet review totals');
+
+      const ratedOutlets = list.filter((row) => !row.error && Number(row.rating || 0) > 0);
+      const avgRating = ratedOutlets.length
+        ? (ratedOutlets.reduce((sum, row) => sum + Number(row.rating || 0), 0) / ratedOutlets.length)
+        : 0;
+      const outletCount = list.length;
+      const totalFetchedReviews = allReviews.length;
+      qs('googleReviewStats').innerHTML = `
+        <div class="legend-row"><span>Outlets shown</span><strong>${outletCount}</strong></div>
+        <div class="legend-row"><span>Sample reviews loaded</span><strong>${totalFetchedReviews}</strong></div>
+        <div class="legend-row"><span>Average outlet rating</span><strong>${avgRating.toFixed(2)}</strong></div>
+      `;
+    }
+
     function renderGoogleReviews(items, apiKeyConfigured, configuredOutlets) {
       const wrap = qs('googleReviewsGrid');
+      const mode = getGoogleSortMode();
       if (!apiKeyConfigured) {
         wrap.innerHTML = '<div class="muted-box">Google Places API key is not configured. Add it in Outlet Routing Settings.</div>';
+        renderGoogleReviewVisuals([]);
         return;
       }
       if (!configuredOutlets) {
         wrap.innerHTML = '<div class="muted-box">No outlets have Google Place ID configured yet.</div>';
+        renderGoogleReviewVisuals([]);
         return;
       }
       if (!items.length) {
         wrap.innerHTML = '<div class="muted-box">No Google review rows returned for the current filter.</div>';
+        renderGoogleReviewVisuals([]);
         return;
       }
 
-      wrap.innerHTML = items.map((row) => {
-        const reviews = Array.isArray(row.reviews) ? row.reviews.slice(0, 3) : [];
+      const sortedRows = sortGoogleReviewRows(items, mode);
+      renderGoogleReviewVisuals(sortedRows);
+
+      wrap.innerHTML = sortedRows.map((row) => {
+        const reviews = Array.isArray(row.reviews) ? row.reviews.slice(0, 5) : [];
         const rating = Number(row.rating || 0);
         const total = Number(row.userRatingsTotal || 0);
         const sourceLabel = row.source === 'cache' ? 'cached' : (row.source === 'stale-cache' ? 'stale cache' : 'live');
@@ -771,13 +909,22 @@
           outlet,
           force: forceRefresh ? '1' : '',
         });
+        googleReviewsState = Array.isArray(data.reviews) ? data.reviews : [];
+        googleReviewsMeta = {
+          apiKeyConfigured: !!data.apiKeyConfigured,
+          configuredOutlets: Number(data.configuredOutlets || 0),
+        };
         const sourceText = data.apiKeySource ? ` Key source: ${data.apiKeySource}.` : '';
+        const modeText = ` View: ${getGoogleSortMode()}.`;
         qs('googleReviewsHint').textContent = data.message
-          ? `${data.message}${sourceText}`
-          : 'Reviews are grouped by outlet based on each outlet Google Place ID.';
-        renderGoogleReviews(data.reviews || [], !!data.apiKeyConfigured, Number(data.configuredOutlets || 0));
+          ? `${data.message}${sourceText}${modeText}`
+          : `Reviews are grouped by outlet based on each outlet Google Place ID.${modeText}`;
+        renderGoogleReviews(googleReviewsState, googleReviewsMeta.apiKeyConfigured, googleReviewsMeta.configuredOutlets);
         setStatus('googleReviewsStatus', 'Google reviews loaded.', true);
       } catch (err) {
+        googleReviewsState = [];
+        googleReviewsMeta = { apiKeyConfigured: false, configuredOutlets: 0 };
+        renderGoogleReviewVisuals([]);
         setStatus('googleReviewsStatus', err.message || 'Failed to load Google reviews');
       }
     }
@@ -904,6 +1051,11 @@
     });
     qs('applyFiltersBtn').addEventListener('click', loadAnalytics);
     qs('refreshBtn').addEventListener('click', bootstrap);
+    qs('googleReviewSort').addEventListener('change', () => {
+      const hintEl = qs('googleReviewsHint');
+      hintEl.textContent = hintEl.textContent.replace(/\s*View: [^.]+\./g, '').trim() + ` View: ${getGoogleSortMode()}.`;
+      renderGoogleReviews(googleReviewsState, googleReviewsMeta.apiKeyConfigured, googleReviewsMeta.configuredOutlets);
+    });
     qs('refreshGoogleReviewsBtn').addEventListener('click', () => loadGoogleReviews(true));
     qs('saveSettingsBtn').addEventListener('click', saveSettings);
     qs('changePasscodeBtn').addEventListener('click', changePasscode);
