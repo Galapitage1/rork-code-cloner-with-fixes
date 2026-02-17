@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Outlet Routing Settings</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --brand: #0f766e;
+      --border: #e5e7eb;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 14px;
+      box-shadow: 0 3px 18px rgba(15, 23, 42, 0.04);
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    .muted { color: var(--muted); }
+    .status {
+      min-height: 20px;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    .danger { color: var(--danger); }
+    .good { color: #166534; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 9px 11px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      font-size: 14px;
+      font-family: inherit;
+    }
+    button {
+      cursor: pointer;
+      background: var(--brand);
+      border: none;
+      color: #fff;
+      font-weight: 700;
+    }
+    button.secondary {
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .setting-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+    .setting-card h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+    .muted-box {
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 13px;
+    }
+    @media (max-width: 980px) {
+      .row { grid-template-columns: 1fr; }
+      .settings-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
+        <div>
+          <h1 style="margin-bottom:4px;">Outlet Routing Settings</h1>
+          <div class="muted" id="sessionInfo">Checking session...</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="backBtn" class="secondary" style="width:auto;">Back to Dashboard</button>
+          <button id="homeBtn" class="secondary" style="width:auto;">Home</button>
+          <button id="logoutBtn" class="secondary" style="width:auto;">Logout</button>
+        </div>
+      </div>
+      <div id="globalStatus" class="status"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Google Places Key</h2>
+      <div class="row">
+        <div>
+          <label for="googlePlacesApiKey">Google Places API Key (server-side)</label>
+          <input id="googlePlacesApiKey" type="password" placeholder="Leave blank to keep current key" />
+        </div>
+        <div>
+          <label for="clearGooglePlacesApiKey">Key Status</label>
+          <div id="googleApiKeyState" class="muted-box">Not configured</div>
+          <div style="margin-top:8px;">
+            <label for="clearGooglePlacesApiKey" style="font-size:12px;text-transform:none;letter-spacing:0;">
+              <input id="clearGooglePlacesApiKey" type="checkbox" style="width:auto;margin-right:6px;" />
+              Clear saved API key on next save
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Per Outlet Settings</h2>
+      <p class="muted">Set Google review, Place IDs, and complaint routes per outlet.</p>
+      <div id="settingsGrid" class="settings-grid"></div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+        <button id="saveSettingsBtn">Save Settings</button>
+        <button id="changePasscodeBtn" class="secondary">Change Passcode</button>
+      </div>
+      <div id="settingsStatus" class="status"></div>
+    </div>
+  </div>
+
+  <script>
+    const API = '../api/feedback-admin.php';
+    const TOKEN_KEY = 'feedback_admin_token';
+    let token = localStorage.getItem(TOKEN_KEY) || '';
+
+    function qs(id) { return document.getElementById(id); }
+    function setText(id, value) { qs(id).textContent = value; }
+    function setStatus(id, msg, good = false) {
+      const el = qs(id);
+      el.textContent = msg || '';
+      el.className = 'status ' + (good ? 'good' : (msg ? 'danger' : ''));
+    }
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function setGoogleApiKeyState(configured, source = 'none') {
+      const sourceLabel = source === 'env'
+        ? 'Environment variable (FEEDBACK_GOOGLE_PLACES_API_KEY)'
+        : (source === 'settings' ? 'Dashboard settings' : 'None');
+      qs('googleApiKeyState').textContent = configured
+        ? `Google Places API key is configured. Active source: ${sourceLabel}.`
+        : 'Google Places API key is not configured.';
+    }
+
+    async function apiRequest(action, method = 'GET', body = null, query = {}) {
+      const url = new URL(API, window.location.href);
+      url.searchParams.set('action', action);
+      Object.keys(query).forEach((k) => {
+        if (query[k] !== '' && query[k] != null) {
+          url.searchParams.set(k, query[k]);
+        }
+      });
+
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (body) headers['Content-Type'] = 'application/json';
+
+      const res = await fetch(url.toString(), {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : null,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Request failed');
+      }
+      return data;
+    }
+
+    function settingsValue(config, key, fallback = '') {
+      return (config && config[key] != null ? config[key] : fallback);
+    }
+
+    function renderSettings(outlets, settings) {
+      const outletConfigs = (settings && settings.outletConfigs) ? settings.outletConfigs : {};
+      qs('settingsGrid').innerHTML = (outlets || []).map((o) => {
+        const c = outletConfigs[o.name] || {};
+        const feedbackUrl = `${window.location.origin}/Tracker/feedback/index.html?outlet=${encodeURIComponent(o.name)}`;
+        return `
+          <div class="setting-card" data-outlet="${escapeHtml(o.name)}">
+            <h3>${escapeHtml(o.name)}</h3>
+            <div class="muted" style="margin-bottom:8px;word-break:break-all;">QR URL: ${escapeHtml(feedbackUrl)}</div>
+            <label>Google Review URL</label>
+            <input data-key="googleReviewUrl" value="${escapeHtml(settingsValue(c, 'googleReviewUrl', ''))}" />
+            <label style="margin-top:6px;">Google Place ID</label>
+            <input data-key="googlePlaceId" value="${escapeHtml(settingsValue(c, 'googlePlaceId', ''))}" placeholder="ChIJ..." />
+            <label style="margin-top:6px;">WhatsApp Number</label>
+            <input data-key="whatsappNumber" value="${escapeHtml(settingsValue(c, 'whatsappNumber', ''))}" />
+            <label style="margin-top:6px;">Phone Number</label>
+            <input data-key="phoneNumber" value="${escapeHtml(settingsValue(c, 'phoneNumber', ''))}" />
+            <label style="margin-top:6px;">Auto Redirect for 4-5</label>
+            <select data-key="reviewRedirectEnabled">
+              <option value="true" ${settingsValue(c, 'reviewRedirectEnabled', true) ? 'selected' : ''}>Enabled</option>
+              <option value="false" ${settingsValue(c, 'reviewRedirectEnabled', true) ? '' : 'selected'}>Disabled</option>
+            </select>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function collectSettingsPayload() {
+      const cards = Array.from(document.querySelectorAll('.setting-card'));
+      const outletConfigs = {};
+      cards.forEach((card) => {
+        const outlet = card.getAttribute('data-outlet');
+        const values = {};
+        card.querySelectorAll('[data-key]').forEach((el) => {
+          const key = el.getAttribute('data-key');
+          values[key] = el.value;
+        });
+        values.reviewRedirectEnabled = values.reviewRedirectEnabled === 'true';
+        outletConfigs[outlet] = values;
+      });
+
+      const payload = { outletConfigs };
+      const apiKey = (qs('googlePlacesApiKey').value || '').trim();
+      if (apiKey) {
+        payload.googlePlacesApiKey = apiKey;
+      }
+      if (qs('clearGooglePlacesApiKey').checked) {
+        payload.clearGooglePlacesApiKey = true;
+      }
+      return payload;
+    }
+
+    async function bootstrap() {
+      setStatus('globalStatus', 'Loading settings...');
+      try {
+        const data = await apiRequest('bootstrap', 'GET');
+        renderSettings(data.outlets || [], data.settings || {});
+        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
+        setText('sessionInfo', `Logged in as ${data.session.username || '-'} (${data.session.role || '-'})`);
+        setStatus('globalStatus', '');
+      } catch (err) {
+        localStorage.removeItem(TOKEN_KEY);
+        token = '';
+        setStatus('globalStatus', err.message || 'Session invalid. Redirecting...', false);
+        setTimeout(() => {
+          window.location.assign('./dashboard.html');
+        }, 800);
+      }
+    }
+
+    async function saveSettings() {
+      setStatus('settingsStatus', 'Saving...');
+      try {
+        const payload = collectSettingsPayload();
+        const data = await apiRequest('save-settings', 'POST', payload);
+        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
+        qs('googlePlacesApiKey').value = '';
+        qs('clearGooglePlacesApiKey').checked = false;
+        setStatus('settingsStatus', 'Settings saved.', true);
+      } catch (err) {
+        setStatus('settingsStatus', err.message || 'Failed to save settings');
+      }
+    }
+
+    async function changePasscode() {
+      const newPasscode = prompt('Enter new dashboard passcode (min 6 chars):', '');
+      if (newPasscode == null) return;
+      if (newPasscode.trim().length < 6) {
+        setStatus('settingsStatus', 'Passcode must be at least 6 characters.');
+        return;
+      }
+      setStatus('settingsStatus', 'Updating passcode...');
+      try {
+        await apiRequest('change-passcode', 'POST', { newPasscode: newPasscode.trim() });
+        setStatus('settingsStatus', 'Passcode updated.', true);
+      } catch (err) {
+        setStatus('settingsStatus', err.message || 'Failed to update passcode');
+      }
+    }
+
+    async function logout() {
+      try {
+        await apiRequest('logout', 'POST', {});
+      } catch (_) {}
+      localStorage.removeItem(TOKEN_KEY);
+      token = '';
+      window.location.assign('./dashboard.html');
+    }
+
+    qs('backBtn').addEventListener('click', () => {
+      window.location.assign('./dashboard.html');
+    });
+    qs('homeBtn').addEventListener('click', () => {
+      window.location.assign(`${window.location.origin}/home`);
+    });
+    qs('logoutBtn').addEventListener('click', logout);
+    qs('saveSettingsBtn').addEventListener('click', saveSettings);
+    qs('changePasscodeBtn').addEventListener('click', changePasscode);
+
+    if (!token) {
+      window.location.assign('./dashboard.html');
+    } else {
+      bootstrap();
+    }
+  </script>
+</body>
+</html>

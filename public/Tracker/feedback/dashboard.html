@@ -324,6 +324,7 @@
             <div class="muted" id="sessionInfo"></div>
           </div>
           <div style="display:flex;gap:8px;">
+            <button id="outletSettingsBtn" class="secondary">Outlet Settings</button>
             <button id="refreshBtn" class="secondary">Refresh</button>
             <button id="logoutBtn" class="secondary">Logout</button>
           </div>
@@ -1050,6 +1051,9 @@
       setStatus('loginStatus', 'Session cleared.');
     });
     qs('applyFiltersBtn').addEventListener('click', loadAnalytics);
+    qs('outletSettingsBtn').addEventListener('click', () => {
+      window.location.assign('./settings.html');
+    });
     qs('refreshBtn').addEventListener('click', bootstrap);
     qs('googleReviewSort').addEventListener('change', () => {
       const hintEl = qs('googleReviewsHint');
