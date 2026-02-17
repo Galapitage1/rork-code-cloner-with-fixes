@@ -145,7 +145,25 @@ async function writeReportsWithBestEffortCache<T extends { date?: string; update
     if (!isQuotaExceededError(error)) {
       throw error;
     }
-    console.warn(`[RECONCILIATION SYNC] Could not cache ${label} locally due to storage quota; relying on server data`);
+    // Targeted cleanup: clear only this reconciliation cache key, then retry tiny cache.
+    // This avoids clearing unrelated app data.
+    console.warn(`[RECONCILIATION SYNC] ${label} still exceeds quota; clearing only ${key} and retrying minimal cache`);
+    try {
+      await AsyncStorage.removeItem(key);
+    } catch {
+      // Ignore cleanup errors; continue with best effort.
+    }
+
+    const tiny = sortedReports.slice(0, 5);
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(tiny));
+      console.warn(`[RECONCILIATION SYNC] Rebuilt ${label} cache with tiny set (${tiny.length} records)`);
+    } catch (retryError) {
+      if (!isQuotaExceededError(retryError)) {
+        throw retryError;
+      }
+      console.warn(`[RECONCILIATION SYNC] Could not cache ${label} locally after targeted cleanup; relying on server data`);
+    }
   }
 }
 
