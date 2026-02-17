@@ -466,15 +466,41 @@
 
   <script>
     const API = '../api/feedback-admin.php';
+    const HOME_URL = 'https://tracker.tecclk.com/home';
     const TOKEN_KEY = 'feedback_admin_token';
+    const TOKEN_BACKUP_KEY = 'feedback_admin_token_backup';
     const PIE_COLORS = ['#0f766e', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6'];
-    let token = localStorage.getItem(TOKEN_KEY) || '';
+    let token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_BACKUP_KEY) || '';
     let currentPayload = null;
     let googleReviewsState = [];
     let googleReviewsMeta = { apiKeyConfigured: false, configuredOutlets: 0 };
 
+    if (token && !localStorage.getItem(TOKEN_KEY)) {
+      localStorage.setItem(TOKEN_KEY, token);
+    }
+    if (token && !sessionStorage.getItem(TOKEN_BACKUP_KEY)) {
+      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+    }
+
     function qs(id) { return document.getElementById(id); }
     function setText(id, value) { qs(id).textContent = value; }
+    function persistToken(value) {
+      token = value || '';
+      if (!token) return;
+      localStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+    }
+    function clearToken() {
+      token = '';
+      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_BACKUP_KEY);
+    }
+    function goHome() {
+      if (token) {
+        sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+      }
+      window.location.assign(HOME_URL);
+    }
     function setStatus(id, msg, good = false) {
       const el = qs(id);
       el.textContent = msg || '';
@@ -880,8 +906,7 @@
         loadGoogleReviews(false);
 
       } catch (err) {
-        localStorage.removeItem(TOKEN_KEY);
-        token = '';
+        clearToken();
         qs('loginPanel').classList.remove('hide');
         qs('appPanel').classList.add('hide');
         setStatus('loginStatus', err.message || 'Session invalid. Please login again.');
@@ -898,8 +923,7 @@
       }
       try {
         const data = await apiRequest('login', 'POST', { username, passcode });
-        token = data.token;
-        localStorage.setItem(TOKEN_KEY, token);
+        persistToken(data.token);
         setStatus('loginStatus', data.mustChangePasscode ? 'Login successful. Please change passcode now.' : 'Login successful.', true);
         await bootstrap();
       } catch (err) {
@@ -911,24 +935,18 @@
       try {
         await apiRequest('logout', 'POST', {});
       } catch (_) {}
-      localStorage.removeItem(TOKEN_KEY);
-      token = '';
+      clearToken();
       location.reload();
     }
 
     qs('loginBtn').addEventListener('click', login);
-    qs('homeBtn').addEventListener('click', () => {
-      window.location.assign(`${window.location.origin}/home`);
-    });
+    qs('homeBtn').addEventListener('click', goHome);
     qs('clearTokenBtn').addEventListener('click', () => {
-      localStorage.removeItem(TOKEN_KEY);
-      token = '';
+      clearToken();
       setStatus('loginStatus', 'Session cleared.');
     });
     qs('applyFiltersBtn').addEventListener('click', loadAnalytics);
-    qs('appHomeBtn').addEventListener('click', () => {
-      window.location.assign(`${window.location.origin}/home`);
-    });
+    qs('appHomeBtn').addEventListener('click', goHome);
     qs('outletSettingsBtn').addEventListener('click', () => {
       window.location.assign('./settings.html');
     });

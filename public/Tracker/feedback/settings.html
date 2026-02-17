@@ -157,11 +157,31 @@
 
   <script>
     const API = '../api/feedback-admin.php';
+    const HOME_URL = 'https://tracker.tecclk.com/home';
     const TOKEN_KEY = 'feedback_admin_token';
-    let token = localStorage.getItem(TOKEN_KEY) || '';
+    const TOKEN_BACKUP_KEY = 'feedback_admin_token_backup';
+    let token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_BACKUP_KEY) || '';
+
+    if (token && !localStorage.getItem(TOKEN_KEY)) {
+      localStorage.setItem(TOKEN_KEY, token);
+    }
+    if (token && !sessionStorage.getItem(TOKEN_BACKUP_KEY)) {
+      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+    }
 
     function qs(id) { return document.getElementById(id); }
     function setText(id, value) { qs(id).textContent = value; }
+    function clearToken() {
+      token = '';
+      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_BACKUP_KEY);
+    }
+    function goHome() {
+      if (token) {
+        sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+      }
+      window.location.assign(HOME_URL);
+    }
     function setStatus(id, msg, good = false) {
       const el = qs(id);
       el.textContent = msg || '';
@@ -274,8 +294,7 @@
         setText('sessionInfo', `Logged in as ${data.session.username || '-'} (${data.session.role || '-'})`);
         setStatus('globalStatus', '');
       } catch (err) {
-        localStorage.removeItem(TOKEN_KEY);
-        token = '';
+        clearToken();
         setStatus('globalStatus', err.message || 'Session invalid. Redirecting...', false);
         setTimeout(() => {
           window.location.assign('./dashboard.html');
@@ -317,8 +336,7 @@
       try {
         await apiRequest('logout', 'POST', {});
       } catch (_) {}
-      localStorage.removeItem(TOKEN_KEY);
-      token = '';
+      clearToken();
       window.location.assign('./dashboard.html');
     }
 
@@ -326,7 +344,7 @@
       window.location.assign('./dashboard.html');
     });
     qs('homeBtn').addEventListener('click', () => {
-      window.location.assign(`${window.location.origin}/home`);
+      goHome();
     });
     qs('logoutBtn').addEventListener('click', logout);
     qs('saveSettingsBtn').addEventListener('click', saveSettings);
