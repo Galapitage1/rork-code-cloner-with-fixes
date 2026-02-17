@@ -67,11 +67,86 @@ async function readReportsFromStorage<T>(key: string): Promise<T[]> {
   }
 }
 
-async function writeReportsWithoutPruning<T>(
+function isQuotaExceededError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  return lower.includes('quota') || lower.includes('exceeded');
+}
+
+function sortReportsForCache<T extends { date?: string; updatedAt?: number }>(reports: T[]): T[] {
+  return [...reports].sort((a, b) => {
+    const dateCompare = (b.date || '').localeCompare(a.date || '');
+    if (dateCompare !== 0) return dateCompare;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+}
+
+function filterReportsByRetentionWindow<T extends { date?: string; updatedAt?: number; deleted?: boolean }>(
+  reports: T[],
+  daysToKeep: number,
+): T[] {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+
+  const deletedCutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+
+  return reports.filter((report) => {
+    if (report.deleted) {
+      return (report.updatedAt || 0) >= deletedCutoff;
+    }
+
+    if (!report.date) {
+      return true;
+    }
+
+    return report.date >= cutoffDateStr;
+  });
+}
+
+async function writeReportsWithBestEffortCache<T extends { date?: string; updatedAt?: number; deleted?: boolean }>(
   key: string,
   reports: T[],
+  label: string,
 ): Promise<void> {
-  await AsyncStorage.setItem(key, JSON.stringify(reports));
+  const sortedReports = sortReportsForCache(reports);
+
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(sortedReports));
+    return;
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      throw error;
+    }
+
+    console.warn(`[RECONCILIATION SYNC] ${label} exceeded storage quota, applying adaptive local cache retention`);
+  }
+
+  const retentionWindows = [365, 180, 120, 90, 60, 45, 30, 14, 7];
+  for (const days of retentionWindows) {
+    const reduced = filterReportsByRetentionWindow(sortedReports, days);
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(reduced));
+      console.warn(`[RECONCILIATION SYNC] Cached ${label} with last ${days} days (${reduced.length}/${sortedReports.length} records)`);
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  // Last-resort: cache only the newest small slice, but do not fail reconciliation.
+  const minimal = sortedReports.slice(0, 20);
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(minimal));
+    console.warn(`[RECONCILIATION SYNC] Cached minimal ${label} (${minimal.length} records) due to storage quota`);
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      throw error;
+    }
+    console.warn(`[RECONCILIATION SYNC] Could not cache ${label} locally due to storage quota; relying on server data`);
+  }
 }
 
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
@@ -186,7 +261,7 @@ export async function saveKitchenStockReportLocally(report: KitchenStockReport):
       reports.push(report);
     }
     
-    await writeReportsWithoutPruning(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, reports);
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, reports, 'kitchen reports');
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`Failed to save kitchen stock report locally: ${reason}`);
@@ -215,7 +290,7 @@ export async function saveSalesReportLocally(report: SalesReport): Promise<void>
       reports.push(report);
     }
     
-    await writeReportsWithoutPruning(STORAGE_KEYS.SALES_REPORTS, reports);
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.SALES_REPORTS, reports, 'sales reports');
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`Failed to save sales report locally: ${reason}`);
@@ -264,7 +339,7 @@ export async function syncKitchenStockReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(merged));
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, merged, 'kitchen reports');
     
     const changedReports = merged.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
@@ -323,7 +398,7 @@ export async function syncSalesReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(merged));
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.SALES_REPORTS, merged, 'sales reports');
     
     const changedReports = merged.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
@@ -383,12 +458,29 @@ export async function getKitchenStockReportsByOutletAndDateRange(
   endDate: string
 ): Promise<KitchenStockReport[]> {
   try {
-    const allReports = await getLocalKitchenStockReports();
-    return allReports.filter(
+    const localReports = await getLocalKitchenStockReports();
+    const localOutletReports = localReports.filter(r => r.outlet === outlet && !r.deleted);
+    const oldestLocalDate = localOutletReports.length > 0
+      ? localOutletReports.reduce((min, r) => (r.date < min ? r.date : min), localOutletReports[0].date)
+      : null;
+
+    const shouldFetchFromServer = !oldestLocalDate || oldestLocalDate > startDate;
+    if (!shouldFetchFromServer) {
+      return localOutletReports.filter(r => r.date >= startDate && r.date <= endDate);
+    }
+
+    const serverReports = await getKitchenStockReportsFromServer();
+    const merged = mergeReports(localReports, serverReports);
+
+    // Best-effort cache update; if storage quota is reached we still return server-backed data.
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, merged, 'kitchen reports');
+
+    return merged.filter(r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted);
+  } catch {
+    const localReports = await getLocalKitchenStockReports();
+    return localReports.filter(
       r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted
     );
-  } catch {
-    return [];
   }
 }
 
@@ -398,11 +490,28 @@ export async function getSalesReportsByOutletAndDateRange(
   endDate: string
 ): Promise<SalesReport[]> {
   try {
-    const allReports = await getLocalSalesReports();
-    return allReports.filter(
+    const localReports = await getLocalSalesReports();
+    const localOutletReports = localReports.filter(r => r.outlet === outlet && !r.deleted);
+    const oldestLocalDate = localOutletReports.length > 0
+      ? localOutletReports.reduce((min, r) => (r.date < min ? r.date : min), localOutletReports[0].date)
+      : null;
+
+    const shouldFetchFromServer = !oldestLocalDate || oldestLocalDate > startDate;
+    if (!shouldFetchFromServer) {
+      return localOutletReports.filter(r => r.date >= startDate && r.date <= endDate);
+    }
+
+    const serverReports = await getSalesReportsFromServer();
+    const merged = mergeReports(localReports, serverReports);
+
+    // Best-effort cache update; if storage quota is reached we still return server-backed data.
+    await writeReportsWithBestEffortCache(STORAGE_KEYS.SALES_REPORTS, merged, 'sales reports');
+
+    return merged.filter(r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted);
+  } catch {
+    const localReports = await getLocalSalesReports();
+    return localReports.filter(
       r => r.outlet === outlet && r.date >= startDate && r.date <= endDate && !r.deleted
     );
-  } catch {
-    return [];
   }
 }
