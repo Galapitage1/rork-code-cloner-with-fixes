@@ -134,27 +134,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         console.log('StockContext loadData: PAUSING automatic sync to prevent data loss');
         syncInProgressRef.current = true;
         
-        // Clean up old sales deductions on startup
-        try {
-          const storedSalesDeductions = await AsyncStorage.getItem(STORAGE_KEYS.SALES_DEDUCTIONS);
-          if (storedSalesDeductions) {
-            const parsed = JSON.parse(storedSalesDeductions);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const ninetyDaysAgo = new Date();
-              ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-              const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
-              
-              const recentDeductions = parsed.filter((d: any) => d.salesDate >= ninetyDaysAgoStr).slice(0, 300);
-              if (recentDeductions.length < parsed.length) {
-                console.log('StockContext loadData: Cleaned up', parsed.length - recentDeductions.length, 'old sales deductions');
-                await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(recentDeductions));
-              }
-            }
-          }
-        } catch (cleanupError) {
-          console.error('StockContext loadData: Failed to cleanup old sales deductions:', cleanupError);
-        }
-        
         const [productsData, stockChecksData, requestsData, outletsData, showProductListData, conversionsData, inventoryData, salesDeductionsData, viewModeData, reconcileHistoryData, syncPausedData, snapshotsData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
           AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
@@ -2779,48 +2758,20 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   const saveSalesDeductions = useCallback(async (deductions: SalesDeduction[]) => {
     try {
       const deductionsWithTimestamp = deductions.map(d => ({ ...d, updatedAt: d.updatedAt || Date.now() }));
+      const sortedDeductions = deductionsWithTimestamp.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      const dataToSave = JSON.stringify(sortedDeductions);
+      const sizeInKB = Math.round(dataToSave.length / 1024);
+      console.log('saveSalesDeductions: Saving full history:', sortedDeductions.length, 'items, size:', sizeInKB, 'KB');
       
-      // Aggressive cleanup: Only keep last 90 days of data
-      const ninetyDaysAgo = new Date();
-      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-      const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
-      
-      console.log('saveSalesDeductions: Filtering deductions older than', ninetyDaysAgoStr);
-      const recentDeductions = deductionsWithTimestamp.filter(d => d.salesDate >= ninetyDaysAgoStr);
-      
-      if (recentDeductions.length < deductionsWithTimestamp.length) {
-        console.log('saveSalesDeductions: Removed', deductionsWithTimestamp.length - recentDeductions.length, 'old deductions (older than 90 days)');
-      }
-      
-      // Further limit to prevent quota errors
-      const MAX_DEDUCTIONS = 300;
-      const sortedDeductions = recentDeductions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      const limitedDeductions = sortedDeductions.slice(0, MAX_DEDUCTIONS);
-      
-      if (limitedDeductions.length < recentDeductions.length) {
-        console.log('saveSalesDeductions: Keeping only latest', MAX_DEDUCTIONS, 'items (reduced from', recentDeductions.length, ') to prevent storage quota issues');
-      }
-      
-      try {
-        const dataToSave = JSON.stringify(limitedDeductions);
-        const sizeInKB = Math.round(dataToSave.length / 1024);
-        console.log('saveSalesDeductions: Saving', limitedDeductions.length, 'items, size:', sizeInKB, 'KB');
-        
-        await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, dataToSave);
-        setSalesDeductions(limitedDeductions.filter(d => !d.deleted));
-      } catch (storageError: any) {
-        if (storageError?.message?.includes('QuotaExceeded') || storageError?.message?.includes('quota')) {
-          console.warn('saveSalesDeductions: Still exceeding quota, reducing to 100 items');
-          const drasticallyReducedDeductions = sortedDeductions.slice(0, 100);
-          await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(drasticallyReducedDeductions));
-          setSalesDeductions(drasticallyReducedDeductions.filter(d => !d.deleted));
-        } else {
-          throw storageError;
-        }
-      }
+      await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, dataToSave);
+      setSalesDeductions(sortedDeductions.filter(d => !d.deleted));
       
       console.log('saveSalesDeductions: Saved successfully');
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes('QuotaExceeded') || reason.toLowerCase().includes('quota')) {
+        throw new Error('Unable to save full sold history due to device storage quota. Please use manual cleanup in Settings, then retry.');
+      }
       console.error('Failed to save sales deductions:', error);
       throw error;
     }
@@ -3017,31 +2968,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   const saveReconcileHistory = useCallback(async (history: SalesReconciliationHistory[]) => {
     try {
       const historyWithTimestamp = history.map(h => ({ ...h, updatedAt: h.updatedAt || Date.now() }));
-      
-      const MAX_HISTORY_ITEMS = 30;
       const sortedHistory = historyWithTimestamp.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-      const limitedHistory = sortedHistory.slice(0, MAX_HISTORY_ITEMS);
-      
-      if (limitedHistory.length < historyWithTimestamp.length) {
-        console.log('saveReconcileHistory: Keeping only latest', MAX_HISTORY_ITEMS, 'items (reduced from', historyWithTimestamp.length, ') to prevent storage quota issues');
-      }
-      
-      try {
-        await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(limitedHistory));
-        setReconcileHistory(limitedHistory.filter(h => !h.deleted));
-      } catch (storageError: any) {
-        if (storageError?.message?.includes('QuotaExceeded') || storageError?.message?.includes('quota')) {
-          console.warn('saveReconcileHistory: Still exceeding quota with', MAX_HISTORY_ITEMS, 'items, reducing to 10');
-          const drasticallyReducedHistory = sortedHistory.slice(0, 10);
-          await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(drasticallyReducedHistory));
-          setReconcileHistory(drasticallyReducedHistory.filter(h => !h.deleted));
-        } else {
-          throw storageError;
-        }
-      }
+      await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(sortedHistory));
+      setReconcileHistory(sortedHistory.filter(h => !h.deleted));
       
       console.log('saveReconcileHistory: Saved locally, will sync on next interval');
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes('QuotaExceeded') || reason.toLowerCase().includes('quota')) {
+        throw new Error('Unable to save full reconciliation history due to device storage quota. Please use manual cleanup in Settings, then retry.');
+      }
       console.error('Failed to save reconcile history:', error);
       throw error;
     }
@@ -3503,41 +3439,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.log('StockContext syncAll: Post-sync cleanup - removed', beforeCount - (syncedRequests as any[]).length, 'old requests');
         }
         
-        // CRITICAL: Clean up old reconciliation history (keep only last 40 days)
-        console.log('StockContext syncAll: Cleaning up old reconciliation history (keeping last 40 days)...');
-        const fortyDaysAgo = new Date();
-        fortyDaysAgo.setDate(fortyDaysAgo.getDate() - 40);
-        const fortyDaysAgoStr = fortyDaysAgo.toISOString().split('T')[0];
-        
-        const beforeReconcileCount = (syncedReconcileHistory as any[]).length;
-        syncedReconcileHistory = (syncedReconcileHistory as any[]).filter((history: any) => {
-          // Keep deleted items for 30 days to prevent resurrection
-          if (history.deleted) {
-            const deletedAt = history.updatedAt || 0;
-            return deletedAt > deletedRetentionTime;
-          }
-          return !history.date || history.date >= fortyDaysAgoStr;
-        });
-        
-        if (beforeReconcileCount > (syncedReconcileHistory as any[]).length) {
-          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeReconcileCount - (syncedReconcileHistory as any[]).length, 'old reconciliation entries (older than 40 days)');
-        }
-        
-        // CRITICAL: Clean up old sales deductions (keep only last 40 days)
-        console.log('StockContext syncAll: Cleaning up old sales deductions (keeping last 40 days)...');
-        const beforeDeductionsCount = (syncedSalesDeductions as any[]).length;
-        syncedSalesDeductions = (syncedSalesDeductions as any[]).filter((deduction: any) => {
-          // Keep deleted items for 30 days to prevent resurrection
-          if (deduction.deleted) {
-            const deletedAt = deduction.updatedAt || 0;
-            return deletedAt > deletedRetentionTime;
-          }
-          return !deduction.salesDate || deduction.salesDate >= fortyDaysAgoStr;
-        });
-        
-        if (beforeDeductionsCount > (syncedSalesDeductions as any[]).length) {
-          console.log('StockContext syncAll: Post-sync cleanup - removed', beforeDeductionsCount - (syncedSalesDeductions as any[]).length, 'old sales deductions (older than 40 days)');
-        }
+        // Keep full reconciliation/sales history. These are cleared only via manual cleanup actions.
       }
       
       const failedSyncs = syncResults.filter((r, i) => {
@@ -3607,10 +3509,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(syncedReconcileHistory));
       } catch (quotaError: any) {
         if (quotaError?.message?.includes('QuotaExceeded') || quotaError?.message?.includes('quota')) {
-          console.warn('StockContext syncAll: Reconcile history exceeded quota, trimming to 20 items');
-          const sortedHistory = (syncedReconcileHistory as any[]).sort((a, b) => (b.loadDate || '').localeCompare(a.loadDate || ''));
-          const trimmedHistory = sortedHistory.slice(0, 20);
-          await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(trimmedHistory));
+          throw new Error('Unable to save full reconciliation history due to device storage quota. Please use manual cleanup in Settings, then sync again.');
         } else {
           throw quotaError;
         }

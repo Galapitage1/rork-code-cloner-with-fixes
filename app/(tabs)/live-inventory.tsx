@@ -417,76 +417,57 @@ function LiveInventoryScreen() {
             }
           });
         } else {
-          // Sales: First check if this is a raw material with consumption data from reconciliation
-          // For raw materials, use "Raw consumption" data from reconciliation history
+          // Sales: use NEW sales reports as primary source (fallback to legacy reconcileHistory)
           const productInfo = products.find(p => p.id === pair.wholeId);
           const isRawMaterial = productInfo && productInfo.type === 'raw';
+          const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
           
           if (isRawMaterial) {
-            // Check reconciliation history for raw consumption data for THIS product and date
-            console.log(`[RAW MATERIAL CHECK] Product: ${wholeProduct.name}, Outlet: ${selectedOutlet}, Date: ${date}`);
-            console.log(`[RAW MATERIAL CHECK] Total reconcileHistory entries: ${reconcileHistory.length}`);
-            
-            const reconcileForDate = reconcileHistory.find(
-              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+            // First try NEW sales report raw consumption
+            const wholeRawConsumptionFromReport = salesReport?.rawConsumption?.find(
+              rc => rc.rawProductId === pair.wholeId
             );
-            
-            console.log(`[RAW MATERIAL CHECK] Found reconciliation for date?`, !!reconcileForDate);
-            if (reconcileForDate) {
-              console.log(`[RAW MATERIAL CHECK] Reconciliation has rawConsumption?`, !!reconcileForDate.rawConsumption);
-              console.log(`[RAW MATERIAL CHECK] rawConsumption entries:`, reconcileForDate.rawConsumption?.length || 0);
-              if (reconcileForDate.rawConsumption && reconcileForDate.rawConsumption.length > 0) {
-                console.log(`[RAW MATERIAL CHECK] Raw consumption data:`, JSON.stringify(reconcileForDate.rawConsumption, null, 2));
-              }
-            }
-            
-            if (reconcileForDate && reconcileForDate.rawConsumption) {
-              console.log(`Product ${wholeProduct.name} is a RAW material - checking raw consumption from reconciliation`);
-              // CRITICAL: Check BOTH whole and slices product IDs (prefer whole)
-              const wholeRawConsumption = reconcileForDate.rawConsumption.find(
-                rc => rc.rawProductId === pair.wholeId
-              );
-              const slicesRawConsumption = reconcileForDate.rawConsumption.find(
-                rc => rc.rawProductId === pair.slicesId
-              );
-              
-              const rawConsumption = wholeRawConsumption || slicesRawConsumption;
-              
-              console.log(`[RAW MATERIAL CHECK] Looking for wholeProductId: ${pair.wholeId}`);
-              console.log(`[RAW MATERIAL CHECK] Looking for slicesProductId: ${pair.slicesId}`);
-              console.log(`[RAW MATERIAL CHECK] Found matching raw consumption?`, !!rawConsumption);
-              
-              if (rawConsumption) {
-                // Check if new format (with consumedWhole/consumedSlices) or old format (consumed only)
-                if ('consumedWhole' in rawConsumption && 'consumedSlices' in rawConsumption) {
-                  // New format - use directly
-                  soldWhole = (rawConsumption as any).consumedWhole || 0;
-                  soldSlices = (rawConsumption as any).consumedSlices || 0;
-                  console.log(`  Raw consumption (new format): ${soldWhole}W + ${soldSlices}S`);
-                } else {
-                  // Old format - convert
-                  const consumedQty = rawConsumption.consumed;
-                  const conversionFactor = pair.factor;
-                  
-                  soldWhole = Math.floor(consumedQty);
-                  soldSlices = Math.round((consumedQty % 1) * conversionFactor);
-                  
-                  console.log(`  Raw consumption (old format): ${consumedQty} = ${soldWhole}W + ${soldSlices}S`);
-                }
-              } else {
-                console.log(`  No raw consumption data found in reconciliation for ${wholeProduct.name}`);
-                console.log(`  Available raw product IDs in reconciliation:`, reconcileForDate.rawConsumption.map(rc => rc.rawProductId).join(', '));
-              }
+            const slicesRawConsumptionFromReport = salesReport?.rawConsumption?.find(
+              rc => rc.rawProductId === pair.slicesId
+            );
+            const rawConsumptionFromReport = wholeRawConsumptionFromReport || slicesRawConsumptionFromReport;
+
+            if (rawConsumptionFromReport) {
+              soldWhole = rawConsumptionFromReport.consumedWhole || 0;
+              soldSlices = rawConsumptionFromReport.consumedSlices || 0;
+              console.log(`[SALES OUTLET] Raw consumption from sales report for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
             } else {
-              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
-              console.log(`  Searched in ${reconcileHistory.length} reconciliation entries`);
+              // Fallback to legacy reconciliation history for backward compatibility
+              const reconcileForDate = reconcileHistory.find(
+                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+              );
+
+              if (reconcileForDate && reconcileForDate.rawConsumption) {
+                const wholeRawConsumption = reconcileForDate.rawConsumption.find(
+                rc => rc.rawProductId === pair.wholeId
+                );
+                const slicesRawConsumption = reconcileForDate.rawConsumption.find(
+                rc => rc.rawProductId === pair.slicesId
+                );
+
+                const rawConsumption = wholeRawConsumption || slicesRawConsumption;
+                if (rawConsumption) {
+                  if ('consumedWhole' in rawConsumption && 'consumedSlices' in rawConsumption) {
+                    soldWhole = (rawConsumption as any).consumedWhole || 0;
+                    soldSlices = (rawConsumption as any).consumedSlices || 0;
+                  } else {
+                    const consumedQty = (rawConsumption as any).consumed || 0;
+                    soldWhole = Math.floor(consumedQty);
+                    soldSlices = Math.round((consumedQty % 1) * pair.factor);
+                  }
+                  console.log(`[SALES OUTLET] Raw consumption from legacy reconciliation for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
+                }
+              }
             }
           } else {
             // For menu/kitchen products (not raw materials), get sold data from NEW sales reports
             console.log(`[SALES OUTLET] Product ${wholeProduct.name} on ${date} - checking NEW sales reports`);
             console.log('[SALES OUTLET] Total sales reports:', salesReports.length);
-            
-            const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
             
             console.log('[SALES OUTLET] Found sales report for date?', !!salesReport);
             
@@ -837,68 +818,51 @@ function LiveInventoryScreen() {
           outRequests.forEach(req => { sold += req.quantity; });
         } else {
           // Sales: First check if this is a raw material with consumption data from reconciliation
-          // For raw materials, use "Raw consumption" data from reconciliation history
+          // For raw materials, use NEW sales report raw consumption first
           const isRawMaterial = product.type === 'raw';
+          const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
           
           if (isRawMaterial) {
-            // Check reconciliation history for raw consumption data for THIS product and date
-            console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Product: ${product.name}, Outlet: ${selectedOutlet}, Date: ${date}`);
-            
-            const reconcileForDate = reconcileHistory.find(
-              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+            const rawConsumptionFromReport = salesReport?.rawConsumption?.find(
+              rc => rc.rawProductId === product.id
             );
-            
-            console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Found reconciliation?`, !!reconcileForDate);
-            if (reconcileForDate) {
-              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Has rawConsumption?`, !!reconcileForDate.rawConsumption);
-              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] rawConsumption entries:`, reconcileForDate.rawConsumption?.length || 0);
-            }
-            
-            if (reconcileForDate && reconcileForDate.rawConsumption) {
-              console.log(`Product ${product.name} is a RAW material - checking raw consumption from reconciliation`);
-              const rawConsumption = reconcileForDate.rawConsumption.find(
+
+            if (rawConsumptionFromReport) {
+              sold = (rawConsumptionFromReport.consumedWhole || 0) + (rawConsumptionFromReport.consumedSlices || 0);
+              console.log(`Raw consumption from sales report for ${product.name}: ${sold}`);
+            } else {
+              // Fallback to legacy reconciliation history
+              const reconcileForDate = reconcileHistory.find(
+                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+              );
+              const rawConsumption = reconcileForDate?.rawConsumption?.find(
                 rc => rc.rawProductId === product.id
               );
-              
-              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Looking for rawProductId: ${product.id}`);
-              console.log(`[RAW MATERIAL CHECK - NO CONVERSION] Found matching?`, !!rawConsumption);
-              
+
               if (rawConsumption) {
-                sold = rawConsumption.consumed;
-                console.log(`  Raw consumption from reconciliation: ${sold}`);
-              } else {
-                console.log(`  No raw consumption data found in reconciliation for ${product.name}`);
-                if (reconcileForDate.rawConsumption.length > 0) {
-                  console.log(`  Available raw product IDs:`, reconcileForDate.rawConsumption.map(rc => rc.rawProductId).join(', '));
+                if ('consumedWhole' in rawConsumption && 'consumedSlices' in rawConsumption) {
+                  sold = (rawConsumption as any).consumedWhole || 0;
+                } else {
+                  sold = (rawConsumption as any).consumed || 0;
                 }
               }
-            } else {
-              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no raw consumption data`);
             }
           } else {
-            // For menu/kitchen products (not raw materials), use reconcileHistory.salesData
-            // This contains the Sold (AC) column data from the discrepancies tab
-            console.log(`Product ${product.name} on ${date} - checking reconcileHistory.salesData`);
-            
-            const reconcileForDate = reconcileHistory.find(
-              r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-            );
-            
-            if (reconcileForDate && reconcileForDate.salesData) {
-              // Find the sold data for this product from the reconciliation
-              const salesData = reconcileForDate.salesData.find(
+            // For menu/kitchen products, use NEW sales report data first
+            const salesDataFromReport = salesReport?.salesData?.find(sd => sd.productId === product.id);
+            if (salesDataFromReport) {
+              sold = (salesDataFromReport.soldWhole || 0) + (salesDataFromReport.soldSlices || 0);
+            } else {
+              // Fallback to legacy reconciliation history
+              const reconcileForDate = reconcileHistory.find(
+                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+              );
+              const legacySalesData = reconcileForDate?.salesData?.find(
                 sd => sd.productId === product.id
               );
-              
-              if (salesData) {
-                // The 'sold' field contains the value from Sold (AC) column
-                sold = salesData.sold;
-                console.log(`  Sold from reconciliation (AC column): ${sold}`);
-              } else {
-                console.log(`  No salesData found for product ${product.name} in reconciliation`);
+              if (legacySalesData) {
+                sold = legacySalesData.sold;
               }
-            } else {
-              console.log(`  No reconciliation found for outlet ${selectedOutlet} on ${date}, or no salesData`);
             }
           }
         }

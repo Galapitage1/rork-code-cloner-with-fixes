@@ -67,25 +67,11 @@ async function readReportsFromStorage<T>(key: string): Promise<T[]> {
   }
 }
 
-async function writeReportsWithPruning<T extends { date: string }>(
+async function writeReportsWithoutPruning<T>(
   key: string,
   reports: T[],
 ): Promise<void> {
-  const pruneWindows = [60, 45, 30, 14];
-  let lastError: unknown;
-
-  for (const days of pruneWindows) {
-    const pruned = pruneOldReports(reports, days);
-    try {
-      await AsyncStorage.setItem(key, JSON.stringify(pruned));
-      return;
-    } catch (error) {
-      lastError = error;
-      console.warn(`[RECONCILIATION SYNC] Failed writing ${key} with ${days}d window`, error);
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(`Failed to write ${key}`);
+  await AsyncStorage.setItem(key, JSON.stringify(reports));
 }
 
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
@@ -200,7 +186,7 @@ export async function saveKitchenStockReportLocally(report: KitchenStockReport):
       reports.push(report);
     }
     
-    await writeReportsWithPruning(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, reports);
+    await writeReportsWithoutPruning(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, reports);
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`Failed to save kitchen stock report locally: ${reason}`);
@@ -229,7 +215,7 @@ export async function saveSalesReportLocally(report: SalesReport): Promise<void>
       reports.push(report);
     }
     
-    await writeReportsWithPruning(STORAGE_KEYS.SALES_REPORTS, reports);
+    await writeReportsWithoutPruning(STORAGE_KEYS.SALES_REPORTS, reports);
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`Failed to save sales report locally: ${reason}`);
@@ -278,12 +264,9 @@ export async function syncKitchenStockReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    const pruned = pruneOldReports(merged, 45);
-    console.log('[RECONCILIATION SYNC] After pruning:', pruned.length);
+    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(merged));
     
-    await AsyncStorage.setItem(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, JSON.stringify(pruned));
-    
-    const changedReports = pruned.filter(r => {
+    const changedReports = merged.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
@@ -340,12 +323,9 @@ export async function syncSalesReports(): Promise<void> {
     const merged = mergeReports(localReports, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
     
-    const pruned = pruneOldReports(merged, 45);
-    console.log('[RECONCILIATION SYNC] After pruning:', pruned.length);
+    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(merged));
     
-    await AsyncStorage.setItem(STORAGE_KEYS.SALES_REPORTS, JSON.stringify(pruned));
-    
-    const changedReports = pruned.filter(r => {
+    const changedReports = merged.filter(r => {
       const serverReport = serverReports.find(sr => sr.outlet === r.outlet && sr.date === r.date);
       return !serverReport || r.updatedAt > (serverReport.updatedAt || 0);
     });
@@ -386,20 +366,6 @@ function mergeReports<T extends { outlet: string; date: string; updatedAt: numbe
   });
   
   return Array.from(merged.values()).filter(r => !r.deleted);
-}
-
-function pruneOldReports<T extends { date: string }>(reports: T[], daysToKeep: number): T[] {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-  const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
-  
-  const pruned = reports.filter(r => r.date >= cutoffDateStr);
-  
-  if (pruned.length < reports.length) {
-    console.log(`[RECONCILIATION SYNC] Pruned ${reports.length - pruned.length} old reports (keeping last ${daysToKeep} days)`);
-  }
-  
-  return pruned;
 }
 
 export async function syncAllReconciliationData(): Promise<void> {
