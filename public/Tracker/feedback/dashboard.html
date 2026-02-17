@@ -483,9 +483,12 @@
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
-    function setGoogleApiKeyState(configured) {
+    function setGoogleApiKeyState(configured, source = 'none') {
+      const sourceLabel = source === 'env'
+        ? 'Environment variable (FEEDBACK_GOOGLE_PLACES_API_KEY)'
+        : (source === 'settings' ? 'Dashboard settings' : 'None');
       qs('googleApiKeyState').textContent = configured
-        ? 'Google Places API key is configured on server.'
+        ? `Google Places API key is configured. Active source: ${sourceLabel}.`
         : 'Google Places API key is not configured.';
     }
 
@@ -768,8 +771,9 @@
           outlet,
           force: forceRefresh ? '1' : '',
         });
+        const sourceText = data.apiKeySource ? ` Key source: ${data.apiKeySource}.` : '';
         qs('googleReviewsHint').textContent = data.message
-          ? data.message
+          ? `${data.message}${sourceText}`
           : 'Reviews are grouped by outlet based on each outlet Google Place ID.';
         renderGoogleReviews(data.reviews || [], !!data.apiKeyConfigured, Number(data.configuredOutlets || 0));
         setStatus('googleReviewsStatus', 'Google reviews loaded.', true);
@@ -794,7 +798,7 @@
         renderVisuals(data.summary || {}, data.outletBreakdown || []);
         renderOutletBars(data.outletBreakdown || []);
         renderRecent(data.recent || []);
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured);
+        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
         setStatus('globalStatus', '');
         loadGoogleReviews(false);
       } catch (err) {
@@ -813,7 +817,7 @@
         renderOutletBars(data.outletBreakdown || []);
         renderRecent(data.recent || []);
         renderSettings(data.outlets || [], data.settings || {});
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured);
+        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
 
         setText('sessionInfo', `Logged in as ${data.session.username || '-'} (${data.session.role || '-'})`);
         qs('loginPanel').classList.add('hide');
@@ -854,7 +858,7 @@
       try {
         const payload = collectSettingsPayload();
         const data = await apiRequest('save-settings', 'POST', payload);
-        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured);
+        setGoogleApiKeyState(!!data.googlePlacesApiKeyConfigured, data.googlePlacesApiKeySource || 'none');
         qs('googlePlacesApiKey').value = '';
         qs('clearGooglePlacesApiKey').checked = false;
         setStatus('settingsStatus', 'Settings saved.', true);

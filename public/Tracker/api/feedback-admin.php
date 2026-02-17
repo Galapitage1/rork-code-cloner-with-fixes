@@ -381,11 +381,13 @@ if ($action === 'save-settings') {
   }
   $adminConfig['updatedBy'] = fb_str($session['username'] ?? 'unknown', 120);
   fb_save_admin_config($adminConfig);
+  $keyInfo = fb_get_google_places_api_key_info();
 
   fb_respond([
     'success' => true,
     'settings' => $settings,
-    'googlePlacesApiKeyConfigured' => fb_str($adminConfig['googlePlacesApiKey'] ?? '', 300) !== '',
+    'googlePlacesApiKeyConfigured' => fb_str($keyInfo['key'] ?? '', 300) !== '',
+    'googlePlacesApiKeySource' => fb_str($keyInfo['source'] ?? 'none', 20),
   ]);
 }
 
@@ -396,8 +398,9 @@ if ($action === 'google-reviews') {
   $now = fb_now_ms();
 
   $settings = fb_get_feedback_settings();
-  $adminConfig = fb_get_admin_config();
-  $apiKey = fb_str($adminConfig['googlePlacesApiKey'] ?? '', 300);
+  $keyInfo = fb_get_google_places_api_key_info();
+  $apiKey = fb_str($keyInfo['key'] ?? '', 300);
+  $apiKeySource = fb_str($keyInfo['source'] ?? 'none', 20);
 
   $outlets = fb_get_outlets();
   if ($requestedOutlet !== '') {
@@ -411,6 +414,7 @@ if ($action === 'google-reviews') {
     fb_respond([
       'success' => true,
       'apiKeyConfigured' => false,
+      'apiKeySource' => $apiKeySource,
       'message' => 'Google Places API key is not configured.',
       'reviews' => [],
     ]);
@@ -476,6 +480,7 @@ if ($action === 'google-reviews') {
   fb_respond([
     'success' => true,
     'apiKeyConfigured' => true,
+    'apiKeySource' => $apiKeySource,
     'configuredOutlets' => $configuredOutlets,
     'reviews' => $rows,
   ]);
@@ -505,7 +510,7 @@ if ($action === 'analytics' || $action === 'bootstrap') {
   $recent = array_slice($filtered, $offset, $limit);
 
   $settings = fb_get_feedback_settings();
-  $adminConfig = fb_get_admin_config();
+  $keyInfo = fb_get_google_places_api_key_info();
   fb_respond([
     'success' => true,
     'filters' => [
@@ -525,7 +530,8 @@ if ($action === 'analytics' || $action === 'bootstrap') {
       'hasMore' => ($offset + $limit) < $total,
     ],
     'settings' => $settings,
-    'googlePlacesApiKeyConfigured' => fb_str($adminConfig['googlePlacesApiKey'] ?? '', 300) !== '',
+    'googlePlacesApiKeyConfigured' => fb_str($keyInfo['key'] ?? '', 300) !== '',
+    'googlePlacesApiKeySource' => fb_str($keyInfo['source'] ?? 'none', 20),
     'outlets' => fb_get_outlets(),
     'session' => [
       'username' => fb_str($session['username'] ?? '', 120),

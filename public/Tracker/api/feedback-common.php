@@ -278,6 +278,33 @@ function fb_get_admin_config(): array {
   return $config;
 }
 
+function fb_get_google_places_api_key_info(): array {
+  $envGooglePlacesKey = getenv('FEEDBACK_GOOGLE_PLACES_API_KEY');
+  if (is_string($envGooglePlacesKey) && trim($envGooglePlacesKey) !== '') {
+    return [
+      'key' => trim($envGooglePlacesKey),
+      'source' => 'env',
+    ];
+  }
+
+  $config = fb_read_json('feedback_admin_config.json', []);
+  $stored = '';
+  if (is_array($config)) {
+    $stored = fb_str($config['googlePlacesApiKey'] ?? '', 300);
+  }
+  if ($stored !== '') {
+    return [
+      'key' => $stored,
+      'source' => 'settings',
+    ];
+  }
+
+  return [
+    'key' => '',
+    'source' => 'none',
+  ];
+}
+
 function fb_save_admin_config(array $config): bool {
   return fb_write_json('feedback_admin_config.json', $config);
 }
