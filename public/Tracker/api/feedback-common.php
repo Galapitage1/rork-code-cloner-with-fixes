@@ -183,6 +183,7 @@ function fb_save_feedback_settings(array $settings): bool {
 function fb_default_outlet_config(): array {
   return [
     'googleReviewUrl' => '',
+    'googlePlaceId' => '',
     'whatsappNumber' => '',
     'phoneNumber' => '',
     'reviewRedirectEnabled' => true,
@@ -261,10 +262,17 @@ function fb_get_admin_config(): array {
   if (!isset($config['sessionTtlHours']) || !is_numeric($config['sessionTtlHours'])) {
     $config['sessionTtlHours'] = 12;
   }
+  if (!isset($config['googlePlacesApiKey']) || !is_string($config['googlePlacesApiKey'])) {
+    $config['googlePlacesApiKey'] = '';
+  }
 
   $envPass = getenv('FEEDBACK_ADMIN_PASSCODE');
   if (is_string($envPass) && trim($envPass) !== '') {
     $config['adminPasscode'] = trim($envPass);
+  }
+  $envGooglePlacesKey = getenv('FEEDBACK_GOOGLE_PLACES_API_KEY');
+  if (is_string($envGooglePlacesKey) && trim($envGooglePlacesKey) !== '') {
+    $config['googlePlacesApiKey'] = trim($envGooglePlacesKey);
   }
 
   return $config;
