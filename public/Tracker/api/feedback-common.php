@@ -233,6 +233,47 @@ function fb_to_wa_link(string $phone, string $message = ''): string {
   return $url;
 }
 
+function fb_normalize_google_place_id(string $value): string {
+  $raw = trim($value);
+  if ($raw === '') {
+    return '';
+  }
+
+  if (preg_match('/place_id:([A-Za-z0-9_-]+)/i', $raw, $m)) {
+    return $m[1];
+  }
+
+  if (filter_var($raw, FILTER_VALIDATE_URL)) {
+    $parts = @parse_url($raw);
+    if (is_array($parts)) {
+      $query = [];
+      if (isset($parts['query']) && is_string($parts['query'])) {
+        parse_str($parts['query'], $query);
+      }
+
+      $queryPlaceId = fb_str($query['place_id'] ?? '', 220);
+      if ($queryPlaceId !== '' && preg_match('/^[A-Za-z0-9_-]{10,}$/', $queryPlaceId)) {
+        return $queryPlaceId;
+      }
+
+      $q = fb_str($query['q'] ?? '', 400);
+      if ($q !== '' && preg_match('/place_id:([A-Za-z0-9_-]+)/i', $q, $m)) {
+        return $m[1];
+      }
+    }
+  }
+
+  if (preg_match('/^[A-Za-z0-9_-]{10,}$/', $raw)) {
+    return $raw;
+  }
+
+  if (preg_match('/([A-Za-z0-9_-]{10,})/', $raw, $m)) {
+    return $m[1];
+  }
+
+  return '';
+}
+
 function fb_feedback_file(): string {
   return 'customer_feedback.json';
 }

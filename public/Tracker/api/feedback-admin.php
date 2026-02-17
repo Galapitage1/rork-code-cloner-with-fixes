@@ -360,7 +360,7 @@ if ($action === 'save-settings') {
     }
     $clean[$name] = [
       'googleReviewUrl' => fb_str($config['googleReviewUrl'] ?? '', 600),
-      'googlePlaceId' => fb_str($config['googlePlaceId'] ?? '', 200),
+      'googlePlaceId' => fb_normalize_google_place_id(fb_str($config['googlePlaceId'] ?? '', 600)),
       'whatsappNumber' => fb_clean_phone(fb_str($config['whatsappNumber'] ?? '', 40)),
       'phoneNumber' => fb_clean_phone(fb_str($config['phoneNumber'] ?? '', 40)),
       'reviewRedirectEnabled' => fb_bool($config['reviewRedirectEnabled'] ?? true),
@@ -430,7 +430,7 @@ if ($action === 'google-reviews') {
       continue;
     }
     $config = fb_get_outlet_config($outletName, $settings);
-    $placeId = fb_str($config['googlePlaceId'] ?? '', 200);
+    $placeId = fb_normalize_google_place_id(fb_str($config['googlePlaceId'] ?? '', 600));
     if ($placeId === '') {
       continue;
     }
