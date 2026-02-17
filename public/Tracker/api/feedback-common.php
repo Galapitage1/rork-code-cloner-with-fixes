@@ -115,6 +115,10 @@ function fb_get_outlets(): array {
     if (isset($outlet['deleted']) && $outlet['deleted'] === true) {
       continue;
     }
+    $outletType = strtolower(fb_str($outlet['outletType'] ?? '', 20));
+    if ($outletType !== 'sales') {
+      continue;
+    }
 
     $name = fb_str($outlet['name'] ?? '', 120);
     if ($name === '') {
@@ -124,7 +128,7 @@ function fb_get_outlets(): array {
     $result[] = [
       'id' => fb_str($outlet['id'] ?? '', 120),
       'name' => $name,
-      'outletType' => fb_str($outlet['outletType'] ?? '', 20),
+      'outletType' => $outletType,
     ];
   }
 

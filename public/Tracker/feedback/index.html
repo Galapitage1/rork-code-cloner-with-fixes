@@ -50,22 +50,70 @@
     }
     textarea { min-height: 92px; resize: vertical; }
     .rating {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
+      display: flex;
       gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
     }
-    .rating button {
-      width: 100%;
+    .emoji-btn {
+      width: auto;
+      min-width: 64px;
       border: 1px solid var(--border);
       background: #f9fafb;
       cursor: pointer;
       font-weight: 700;
-      padding: 12px 0;
+      padding: 10px 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 4px;
+      transition: transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
     }
-    .rating button.active {
+    .emoji-btn .emoji {
+      font-size: 24px;
+      line-height: 1;
+      animation: floaty 2.2s ease-in-out infinite;
+    }
+    .emoji-btn .score {
+      font-size: 12px;
+      line-height: 1;
+      color: var(--muted);
+    }
+    .emoji-btn.active {
       border-color: var(--brand);
       background: #ccfbf1;
       color: var(--brand-dark);
+      transform: translateY(-1px);
+    }
+    .emoji-btn.active .emoji {
+      animation: none;
+    }
+    .emoji-btn.active .score {
+      color: var(--brand-dark);
+    }
+    .emoji-btn:nth-child(2n) .emoji {
+      animation-delay: 0.15s;
+    }
+    .emoji-btn:nth-child(3n) .emoji {
+      animation-delay: 0.3s;
+    }
+    .aspect-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .aspect-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: #fff;
+    }
+    .aspect-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 8px;
     }
     .small-grid {
       display: grid;
@@ -111,8 +159,17 @@
       font-size: 13px;
       color: var(--muted);
     }
+    @keyframes floaty {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-2px); }
+    }
     @media (max-width: 640px) {
       .small-grid, .actions { grid-template-columns: 1fr; }
+      .emoji-btn {
+        min-width: 58px;
+        padding: 10px 6px;
+      }
+      .emoji-btn .emoji { font-size: 22px; }
     }
   </style>
 </head>
@@ -131,27 +188,9 @@
       <div class="rating" id="overallRatingButtons"></div>
     </div>
 
-    <div class="row small-grid">
-      <div>
-        <label for="serviceRating">Service</label>
-        <select id="serviceRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
-      </div>
-      <div>
-        <label for="qualityRating">Food/Drink Quality</label>
-        <select id="qualityRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
-      </div>
-      <div>
-        <label for="cleanlinessRating">Cleanliness</label>
-        <select id="cleanlinessRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
-      </div>
-      <div>
-        <label for="speedRating">Speed</label>
-        <select id="speedRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
-      </div>
-      <div>
-        <label for="valueRating">Value for Money</label>
-        <select id="valueRating"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
-      </div>
+    <div class="row">
+      <label>Rate Each Area</label>
+      <div class="aspect-grid" id="aspectRatings"></div>
     </div>
 
     <div class="row">
@@ -194,6 +233,27 @@
       reviewRedirectEnabled: true,
     };
     let overallRating = 0;
+    const ratingScale = [
+      { value: 1, emoji: '😡', label: 'Very bad' },
+      { value: 2, emoji: '😕', label: 'Bad' },
+      { value: 3, emoji: '😐', label: 'Okay' },
+      { value: 4, emoji: '🙂', label: 'Good' },
+      { value: 5, emoji: '😍', label: 'Excellent' },
+    ];
+    const aspectMeta = [
+      { key: 'service', label: 'Service' },
+      { key: 'quality', label: 'Food/Drink Quality' },
+      { key: 'cleanliness', label: 'Cleanliness' },
+      { key: 'speed', label: 'Speed' },
+      { key: 'value', label: 'Value for Money' },
+    ];
+    const aspectRatings = {
+      service: 0,
+      quality: 0,
+      cleanliness: 0,
+      speed: 0,
+      value: 0,
+    };
 
     const statusEl = document.getElementById('status');
     const outletPickerWrap = document.getElementById('outletPickerWrap');
@@ -209,20 +269,50 @@
       statusEl.style.color = isError ? '#b91c1c' : '#6b7280';
     }
 
+    function createRatingButton(rating, selectedValue, onSelect) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `emoji-btn${selectedValue === rating.value ? ' active' : ''}`;
+      btn.setAttribute('aria-label', `${rating.value} - ${rating.label}`);
+      btn.innerHTML = `<span class="emoji" aria-hidden="true">${rating.emoji}</span><span class="score">${rating.value}</span>`;
+      btn.addEventListener('click', () => onSelect(rating.value));
+      return btn;
+    }
+
     function renderOverallButtons() {
       const wrap = document.getElementById('overallRatingButtons');
       wrap.innerHTML = '';
-      for (let i = 1; i <= 5; i++) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = `${i} Star`;
-        btn.className = overallRating === i ? 'active' : '';
-        btn.addEventListener('click', () => {
-          overallRating = i;
+      ratingScale.forEach((rating) => {
+        wrap.appendChild(createRatingButton(rating, overallRating, (value) => {
+          overallRating = value;
           renderOverallButtons();
+        }));
+      });
+    }
+
+    function renderAspectRatings() {
+      const wrap = document.getElementById('aspectRatings');
+      wrap.innerHTML = '';
+      aspectMeta.forEach((aspect) => {
+        const card = document.createElement('div');
+        card.className = 'aspect-card';
+
+        const title = document.createElement('div');
+        title.className = 'aspect-title';
+        title.textContent = aspect.label;
+        card.appendChild(title);
+
+        const row = document.createElement('div');
+        row.className = 'rating';
+        ratingScale.forEach((rating) => {
+          row.appendChild(createRatingButton(rating, aspectRatings[aspect.key], (value) => {
+            aspectRatings[aspect.key] = value;
+            renderAspectRatings();
+          }));
         });
-        wrap.appendChild(btn);
-      }
+        card.appendChild(row);
+        wrap.appendChild(card);
+      });
     }
 
     function fillOutletPicker(outlets) {
@@ -310,17 +400,15 @@
       }
 
       setStatus('Submitting...');
+      const aspectsPayload = {};
+      Object.keys(aspectRatings).forEach((key) => {
+        aspectsPayload[key] = aspectRatings[key] > 0 ? aspectRatings[key] : null;
+      });
       const payload = {
         outlet: selectedOutlet,
         outletId: selectedOutletId,
         overallRating,
-        aspects: {
-          service: document.getElementById('serviceRating').value || null,
-          quality: document.getElementById('qualityRating').value || null,
-          cleanliness: document.getElementById('cleanlinessRating').value || null,
-          speed: document.getElementById('speedRating').value || null,
-          value: document.getElementById('valueRating').value || null,
-        },
+        aspects: aspectsPayload,
         comment: document.getElementById('comment').value || '',
         contactName: document.getElementById('contactName').value || '',
         contactPhone: document.getElementById('contactPhone').value || '',
@@ -371,6 +459,7 @@
     document.getElementById('submitBtn').addEventListener('click', submitFeedback);
 
     renderOverallButtons();
+    renderAspectRatings();
     loadConfig();
   </script>
 </body>
