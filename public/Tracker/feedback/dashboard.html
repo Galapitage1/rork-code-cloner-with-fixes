@@ -495,12 +495,25 @@
       localStorage.removeItem(TOKEN_KEY);
       sessionStorage.removeItem(TOKEN_BACKUP_KEY);
     }
+    function buildHomeUrlFromReferrer() {
+      const ref = document.referrer || '';
+      if (!ref) return HOME_URL;
+      try {
+        const refUrl = new URL(ref);
+        if (!/tecclk\.com$/i.test(refUrl.hostname)) {
+          return HOME_URL;
+        }
+        return `${refUrl.origin}/home`;
+      } catch (_) {
+        return HOME_URL;
+      }
+    }
     function cameFromHomePage() {
       const ref = document.referrer || '';
       if (!ref) return false;
       try {
         const refUrl = new URL(ref);
-        return refUrl.origin === window.location.origin && refUrl.pathname === '/home';
+        return /\/home\/?$/.test(refUrl.pathname);
       } catch (_) {
         return false;
       }
@@ -513,7 +526,7 @@
         window.history.back();
         return;
       }
-      window.location.assign(HOME_URL);
+      window.location.assign(buildHomeUrlFromReferrer());
     }
     function setStatus(id, msg, good = false) {
       const el = qs(id);

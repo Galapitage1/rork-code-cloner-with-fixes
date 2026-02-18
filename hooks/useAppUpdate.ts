@@ -6,6 +6,33 @@ export function useAppUpdate() {
   const [isChecking, setIsChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const checkInProgressRef = useRef(false);
+  const currentVersionRef = useRef<string | null>(null);
+
+  const normalizeVersion = (value: string | null | undefined): string => {
+    if (!value) return '';
+    try {
+      const parsed = new URL(value, window.location.origin);
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return value;
+    }
+  };
+
+  const getHashFromHtml = (html: string): string => {
+    const scriptMatch = html.match(/<script[^>]*src="([^"]*\/_expo\/static\/js\/web\/entry-[^"]+)"/i);
+    if (!scriptMatch) return '';
+    return normalizeVersion(scriptMatch[1]);
+  };
+
+  const getCurrentRuntimeVersion = (): string => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return '';
+    const scripts = Array.from(document.querySelectorAll('script[src]'));
+    const entryScript = scripts.find((script) => {
+      const src = (script as HTMLScriptElement).src || '';
+      return src.includes('/_expo/static/js/web/entry-');
+    }) as HTMLScriptElement | undefined;
+    return normalizeVersion(entryScript?.src || '');
+  };
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -20,8 +47,9 @@ export function useAppUpdate() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
-        const response = await fetch('/index.html', {
-          headers: { 'Cache-Control': 'no-cache' },
+        const response = await fetch(`/index.html?__version_check=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
           signal: controller.signal
         });
         
@@ -32,14 +60,18 @@ export function useAppUpdate() {
         }
         
         const html = await response.text();
-        const currentHash = getHashFromHtml(html);
-        
-        const storedHash = localStorage.getItem('app-version-hash');
-        
-        if (storedHash && storedHash !== currentHash) {
+        const remoteHash = getHashFromHtml(html);
+        const currentRuntimeVersion = currentVersionRef.current || getCurrentRuntimeVersion();
+        if (currentRuntimeVersion && remoteHash && currentRuntimeVersion !== remoteHash) {
           setUpdateAvailable(true);
-        } else if (!storedHash) {
-          localStorage.setItem('app-version-hash', currentHash);
+          return;
+        }
+
+        const storedHash = normalizeVersion(localStorage.getItem('app-version-hash') || '');
+        if (storedHash && remoteHash && storedHash !== remoteHash) {
+          setUpdateAvailable(true);
+        } else if (remoteHash && !storedHash) {
+          localStorage.setItem('app-version-hash', remoteHash);
         }
       } catch {
         // Silently handle update check errors
@@ -49,16 +81,16 @@ export function useAppUpdate() {
       }
     };
 
-    const getHashFromHtml = (html: string): string => {
-      const scriptMatch = html.match(/<script[^>]*src="([^"]+)"/);
-      return scriptMatch ? scriptMatch[1] : Date.now().toString();
-    };
+    currentVersionRef.current = getCurrentRuntimeVersion();
+    if (currentVersionRef.current) {
+      localStorage.setItem('app-version-hash', currentVersionRef.current);
+    }
 
     const initialTimer = setTimeout(() => {
       checkForUpdate();
     }, 2000);
 
-    const interval = setInterval(checkForUpdate, 10 * 60 * 1000);
+    const interval = setInterval(checkForUpdate, 2 * 60 * 1000);
 
     return () => {
       clearTimeout(initialTimer);
@@ -77,15 +109,18 @@ export function useAppUpdate() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
-        const html = await fetch('/index.html', {
-          headers: { 'Cache-Control': 'no-cache' },
+        const html = await fetch(`/index.html?__reload_check=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
           signal: controller.signal
         }).then(r => r.text());
         
         clearTimeout(timeoutId);
         
         const currentHash = getHashFromHtml(html);
-        localStorage.setItem('app-version-hash', currentHash);
+        if (currentHash) {
+          localStorage.setItem('app-version-hash', currentHash);
+        }
         
         if ('serviceWorker' in navigator) {
           const registrations = await navigator.serviceWorker.getRegistrations();
@@ -105,11 +140,6 @@ export function useAppUpdate() {
         window.location.reload();
       }
     }
-  };
-
-  const getHashFromHtml = (html: string): string => {
-    const scriptMatch = html.match(/<script[^>]*src="([^"]+)"/);
-    return scriptMatch ? scriptMatch[1] : Date.now().toString();
   };
 
   const dismissUpdate = () => {
