@@ -78,6 +78,22 @@
       color: var(--text);
       border: 1px solid var(--border);
     }
+    .home-icon-btn {
+      width: auto;
+      padding: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .home-icon-btn svg {
+      width: 24px;
+      height: 24px;
+      stroke: #0f766e;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .settings-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -116,7 +132,12 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
           <button id="backBtn" type="button" class="secondary" style="width:auto;">Back to Dashboard</button>
-          <button id="homeBtn" type="button" class="secondary" style="width:auto;">Home</button>
+          <button id="homeBtn" type="button" class="secondary home-icon-btn" aria-label="Home" title="Home">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 10a2 2 0 0 1 .71-1.53l7-6a2 2 0 0 1 2.58 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              <path d="M9 21v-8a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v8"></path>
+            </svg>
+          </button>
           <button id="logoutBtn" type="button" class="secondary" style="width:auto;">Logout</button>
         </div>
       </div>
@@ -178,6 +199,16 @@
     function goHome() {
       if (token) {
         sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+      }
+      const ref = document.referrer || '';
+      if (ref) {
+        try {
+          const refUrl = new URL(ref);
+          if (refUrl.origin === window.location.origin && /\/home\/?$/.test(refUrl.pathname) && window.history.length > 1) {
+            window.history.back();
+            return;
+          }
+        } catch (_) {}
       }
       window.location.assign('/home');
     }
