@@ -466,7 +466,6 @@
 
   <script>
     const API = '../api/feedback-admin.php';
-    const HOME_URL = 'https://tracker.tecclk.com/home';
     const TOKEN_KEY = 'feedback_admin_token';
     const TOKEN_BACKUP_KEY = 'feedback_admin_token_backup';
     const PIE_COLORS = ['#0f766e', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6'];
@@ -495,38 +494,11 @@
       localStorage.removeItem(TOKEN_KEY);
       sessionStorage.removeItem(TOKEN_BACKUP_KEY);
     }
-    function buildHomeUrlFromReferrer() {
-      const ref = document.referrer || '';
-      if (!ref) return HOME_URL;
-      try {
-        const refUrl = new URL(ref);
-        if (!/tecclk\.com$/i.test(refUrl.hostname)) {
-          return HOME_URL;
-        }
-        return `${refUrl.origin}/home`;
-      } catch (_) {
-        return HOME_URL;
-      }
-    }
-    function cameFromHomePage() {
-      const ref = document.referrer || '';
-      if (!ref) return false;
-      try {
-        const refUrl = new URL(ref);
-        return /\/home\/?$/.test(refUrl.pathname);
-      } catch (_) {
-        return false;
-      }
-    }
     function goHome() {
       if (token) {
         sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
       }
-      if (cameFromHomePage() && window.history.length > 1) {
-        window.history.back();
-        return;
-      }
-      window.location.assign(buildHomeUrlFromReferrer());
+      window.location.assign('/home');
     }
     function setStatus(id, msg, good = false) {
       const el = qs(id);

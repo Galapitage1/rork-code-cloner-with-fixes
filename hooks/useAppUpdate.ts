@@ -7,6 +7,7 @@ export function useAppUpdate() {
   const [dismissed, setDismissed] = useState(false);
   const checkInProgressRef = useRef(false);
   const currentVersionRef = useRef<string | null>(null);
+  const appBasePathRef = useRef<string>('');
 
   const normalizeVersion = (value: string | null | undefined): string => {
     if (!value) return '';
@@ -34,6 +35,27 @@ export function useAppUpdate() {
     return normalizeVersion(entryScript?.src || '');
   };
 
+  const getAppBasePath = (): string => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return '';
+    const scripts = Array.from(document.querySelectorAll('script[src]'));
+    const entryScript = scripts.find((script) => {
+      const src = (script as HTMLScriptElement).src || '';
+      return src.includes('/_expo/static/js/web/entry-');
+    }) as HTMLScriptElement | undefined;
+
+    if (!entryScript?.src) return '';
+    try {
+      const parsed = new URL(entryScript.src, window.location.origin);
+      const marker = '/_expo/static/js/web/entry-';
+      const markerIndex = parsed.pathname.indexOf(marker);
+      if (markerIndex < 0) return '';
+      const prefix = parsed.pathname.slice(0, markerIndex).replace(/\/$/, '');
+      return prefix;
+    } catch {
+      return '';
+    }
+  };
+
   useEffect(() => {
     if (Platform.OS !== 'web') return;
 
@@ -47,7 +69,8 @@ export function useAppUpdate() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
-        const response = await fetch(`/index.html?__version_check=${Date.now()}`, {
+        const indexUrl = `${appBasePathRef.current}/index.html?__version_check=${Date.now()}`;
+        const response = await fetch(indexUrl, {
           cache: 'no-store',
           headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
           signal: controller.signal
@@ -81,6 +104,7 @@ export function useAppUpdate() {
       }
     };
 
+    appBasePathRef.current = getAppBasePath();
     currentVersionRef.current = getCurrentRuntimeVersion();
     if (currentVersionRef.current) {
       localStorage.setItem('app-version-hash', currentVersionRef.current);
@@ -91,10 +115,30 @@ export function useAppUpdate() {
     }, 2000);
 
     const interval = setInterval(checkForUpdate, 2 * 60 * 1000);
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkForUpdate();
+      }
+    };
+    const onWindowFocus = () => {
+      checkForUpdate();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onWindowFocus);
+    }
 
     return () => {
       clearTimeout(initialTimer);
       clearInterval(interval);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onWindowFocus);
+      }
     };
   }, []);
 
@@ -109,7 +153,8 @@ export function useAppUpdate() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
-        const html = await fetch(`/index.html?__reload_check=${Date.now()}`, {
+        const indexUrl = `${appBasePathRef.current}/index.html?__reload_check=${Date.now()}`;
+        const html = await fetch(indexUrl, {
           cache: 'no-store',
           headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
           signal: controller.signal
