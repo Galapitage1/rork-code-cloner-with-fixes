@@ -528,13 +528,13 @@
       if (ref) {
         try {
           const refUrl = new URL(ref);
-          if (refUrl.origin === window.location.origin && /\/home\/?$/.test(refUrl.pathname) && window.history.length > 1) {
+          if (refUrl.origin === window.location.origin && window.history.length > 1) {
             window.history.back();
             return;
           }
         } catch (_) {}
       }
-      window.location.assign('/home');
+      window.location.assign('/');
     }
     function setStatus(id, msg, good = false) {
       const el = qs(id);
