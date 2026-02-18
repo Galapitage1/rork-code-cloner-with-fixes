@@ -255,7 +255,7 @@ export default function HomeScreen() {
           : 'https://tracker.tecclk.com/Tracker/feedback/dashboard.html';
 
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.location.href = dashboardUrl;
+        window.open(dashboardUrl, '_blank');
       } else {
         await Linking.openURL(dashboardUrl);
       }

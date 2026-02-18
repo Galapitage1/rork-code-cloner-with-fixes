@@ -524,15 +524,9 @@
       if (token) {
         sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
       }
-      const ref = document.referrer || '';
-      if (ref) {
-        try {
-          const refUrl = new URL(ref);
-          if (refUrl.origin === window.location.origin && window.history.length > 1) {
-            window.history.back();
-            return;
-          }
-        } catch (_) {}
+      if (window.opener) {
+        window.close();
+        return;
       }
       window.location.assign('/');
     }
