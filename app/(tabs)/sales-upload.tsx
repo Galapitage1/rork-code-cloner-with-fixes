@@ -1028,83 +1028,126 @@ export default function SalesUploadScreen() {
             const existingReports = await getLocalSalesReports();
             const existingReport = existingReports.find(r => r.outlet === outlet && r.date === date && !r.deleted);
             
-            // Build sales data array from reconciled rows
-            // CRITICAL FIX: For products with unit conversions, create DUPLICATE entries
-            // for BOTH whole and slices product IDs with the SAME sold data
-            // This ensures live inventory can find the data regardless of which product ID it searches
+            // Build sales data array from reconciled rows.
+            // For products with unit conversions, keep contributions from whole and slices separately,
+            // then let Live Inventory combine them using the conversion factor.
             const salesDataForReport: Array<{
               productId: string;
               productName: string;
               unit: string;
               soldWhole: number;
               soldSlices: number;
+              sourceUnit?: 'whole' | 'slices' | 'aggregate';
             }> = [];
-            
-            const processedPairs = new Set<string>();
-            
+
+            const pairSalesTotals = new Map<string, {
+              wholeProductId: string;
+              slicesProductId: string;
+              conversionFactor: number;
+              wholeUnitSold: number;
+              slicesUnitSold: number;
+            }>();
+            const standaloneSalesTotals = new Map<string, number>();
+
+            const normalizeFromTotalSlices = (totalSlices: number, conversionFactor: number) => {
+              const factor = conversionFactor > 0 ? conversionFactor : 1;
+              const roundedTotalSlices = Math.round(totalSlices * 1000) / 1000;
+              let whole = Math.floor(roundedTotalSlices / factor);
+              let slices = Math.round((roundedTotalSlices - (whole * factor)) * 1000) / 1000;
+
+              if (slices >= factor) {
+                const extraWhole = Math.floor(slices / factor);
+                whole += extraWhole;
+                slices = Math.round((slices % factor) * 1000) / 1000;
+              }
+
+              if (Math.abs(slices) < 0.0001) slices = 0;
+              return { whole, slices };
+            };
+
             salesDataArray.forEach(sd => {
               const product = products.find(p => p.id === sd.productId);
-              const productPair = product ? getProductPair(product) : null;
-              
-              let soldWhole = sd.sold;
-              let soldSlices = 0;
-              
-              if (productPair && product) {
-                // Skip if we already processed this product pair
-                const pairKey = `${productPair.wholeProductId}-${productPair.slicesProductId}`;
-                if (processedPairs.has(pairKey)) {
-                  return;
-                }
-                processedPairs.add(pairKey);
-                
-                const isWholeProduct = product.id === productPair.wholeProductId;
-                const conversionFactor = productPair.conversionFactor;
-                
-                // Convert sold value to whole + slices format
-                if (isWholeProduct) {
-                  soldWhole = Math.floor(sd.sold);
-                  soldSlices = Math.round((sd.sold % 1) * conversionFactor);
-                } else {
-                  soldWhole = Math.floor(sd.sold / conversionFactor);
-                  soldSlices = Math.round(sd.sold % conversionFactor);
-                }
-                
-                // CRITICAL: Create entries for BOTH whole and slices products with SAME sold data
-                const wholeProduct = products.find(p => p.id === productPair.wholeProductId);
-                const slicesProduct = products.find(p => p.id === productPair.slicesProductId);
-                
-                if (wholeProduct) {
-                  salesDataForReport.push({
-                    productId: wholeProduct.id,
-                    productName: wholeProduct.name,
-                    unit: wholeProduct.unit,
-                    soldWhole,
-                    soldSlices,
-                  });
-                  console.log(`Added sales data for WHOLE product: ${wholeProduct.name} -> ${soldWhole}W/${soldSlices}S`);
-                }
-                
-                if (slicesProduct) {
-                  salesDataForReport.push({
-                    productId: slicesProduct.id,
-                    productName: slicesProduct.name,
-                    unit: slicesProduct.unit,
-                    soldWhole,
-                    soldSlices,
-                  });
-                  console.log(`Added sales data for SLICES product: ${slicesProduct.name} -> ${soldWhole}W/${soldSlices}S`);
-                }
-              } else {
-                // No unit conversion - create single entry
-                salesDataForReport.push({
-                  productId: sd.productId,
-                  productName: product?.name || '',
-                  unit: product?.unit || '',
-                  soldWhole,
-                  soldSlices,
-                });
-                console.log(`Added sales data for product (no conversion): ${product?.name} -> ${soldWhole}`);
+              if (!product) return;
+
+              const productPair = getProductPair(product);
+              if (!productPair) {
+                const prev = standaloneSalesTotals.get(product.id) || 0;
+                standaloneSalesTotals.set(product.id, prev + (sd.sold || 0));
+                return;
               }
+
+              const pairKey = `${productPair.wholeProductId}-${productPair.slicesProductId}`;
+              const existing = pairSalesTotals.get(pairKey) || {
+                wholeProductId: productPair.wholeProductId,
+                slicesProductId: productPair.slicesProductId,
+                conversionFactor: productPair.conversionFactor,
+                wholeUnitSold: 0,
+                slicesUnitSold: 0,
+              };
+
+              if (product.id === productPair.wholeProductId) {
+                existing.wholeUnitSold += (sd.sold || 0);
+              } else if (product.id === productPair.slicesProductId) {
+                existing.slicesUnitSold += (sd.sold || 0);
+              }
+
+              pairSalesTotals.set(pairKey, existing);
+            });
+
+            pairSalesTotals.forEach(pairTotal => {
+              const wholeProduct = products.find(p => p.id === pairTotal.wholeProductId);
+              const slicesProduct = products.find(p => p.id === pairTotal.slicesProductId);
+              if (!wholeProduct || !slicesProduct) return;
+
+              const wholeContributionSlices = pairTotal.wholeUnitSold * pairTotal.conversionFactor;
+              const slicesContributionSlices = pairTotal.slicesUnitSold;
+              const totalContributionSlices = wholeContributionSlices + slicesContributionSlices;
+
+              if (Math.abs(totalContributionSlices) < 0.0001) {
+                return;
+              }
+
+              const wholeContribution = normalizeFromTotalSlices(wholeContributionSlices, pairTotal.conversionFactor);
+              const slicesContribution = normalizeFromTotalSlices(slicesContributionSlices, pairTotal.conversionFactor);
+              const combinedContribution = normalizeFromTotalSlices(totalContributionSlices, pairTotal.conversionFactor);
+
+              salesDataForReport.push({
+                productId: wholeProduct.id,
+                productName: wholeProduct.name,
+                unit: wholeProduct.unit,
+                soldWhole: wholeContribution.whole,
+                soldSlices: wholeContribution.slices,
+                sourceUnit: 'whole',
+              });
+
+              salesDataForReport.push({
+                productId: slicesProduct.id,
+                productName: slicesProduct.name,
+                unit: slicesProduct.unit,
+                soldWhole: slicesContribution.whole,
+                soldSlices: slicesContribution.slices,
+                sourceUnit: 'slices',
+              });
+
+              console.log(
+                `Added sales data for conversion pair ${wholeProduct.name}: whole=${wholeContribution.whole}W/${wholeContribution.slices}S, slices=${slicesContribution.whole}W/${slicesContribution.slices}S, combined=${combinedContribution.whole}W/${combinedContribution.slices}S`
+              );
+            });
+
+            standaloneSalesTotals.forEach((soldQty, productId) => {
+              if (!soldQty) return;
+              const product = products.find(p => p.id === productId);
+              if (!product) return;
+
+              salesDataForReport.push({
+                productId,
+                productName: product.name,
+                unit: product.unit,
+                soldWhole: soldQty,
+                soldSlices: 0,
+                sourceUnit: 'aggregate',
+              });
+              console.log(`Added sales data for product (no conversion): ${product.name} -> ${soldQty}`);
             });
             
             // Build raw consumption array

@@ -475,35 +475,105 @@ function LiveInventoryScreen() {
               console.log('[SALES OUTLET] salesData entries in report:', salesReport.salesData.length);
               console.log('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
               console.log('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
-              
-              // CRITICAL FIX: Sales report now contains DUPLICATE entries for products with unit conversions
-              // Both whole and slices product IDs have entries with the SAME soldWhole/soldSlices values
-              // We should use whichever entry we find (prefer whole product entry)
-              const wholeSalesData = salesReport.salesData.find(sd => sd.productId === pair.wholeId);
-              const slicesSalesData = salesReport.salesData.find(sd => sd.productId === pair.slicesId);
-              
-              console.log('[SALES OUTLET] Found wholeSalesData?', !!wholeSalesData);
-              console.log('[SALES OUTLET] Found slicesSalesData?', !!slicesSalesData);
-              
-              // Use whichever entry we found (prefer whole product, but use slices if whole not found)
-              // IMPORTANT: Do NOT add them together - they contain the same data
-              const salesData = wholeSalesData || slicesSalesData;
-              
-              if (salesData) {
-                soldWhole = salesData.soldWhole || 0;
-                soldSlices = salesData.soldSlices || 0;
-                console.log(`[SALES OUTLET] ✓ Using sales data from: ${salesData.productName} (${salesData.unit})`);
-                console.log(`[SALES OUTLET]   Product ID: ${salesData.productId}`);
-                console.log(`[SALES OUTLET]   Sold: ${soldWhole}W + ${soldSlices}S`);
-                
-                if (wholeSalesData && slicesSalesData) {
-                  console.log(`[SALES OUTLET]   Note: Both whole and slices entries found (using whole entry)`);
-                  console.log(`[SALES OUTLET]   Whole entry: ${wholeSalesData.soldWhole}W/${wholeSalesData.soldSlices}S`);
-                  console.log(`[SALES OUTLET]   Slices entry: ${slicesSalesData.soldWhole}W/${slicesSalesData.soldSlices}S`);
+
+              const pairSalesEntries = salesReport.salesData.filter(
+                sd => sd.productId === pair.wholeId || sd.productId === pair.slicesId
+              );
+
+              console.log('[SALES OUTLET] Found pairSalesEntries:', pairSalesEntries.length);
+
+              if (pairSalesEntries.length > 0) {
+                const toTotalSlices = (entry: SalesReport['salesData'][number]) =>
+                  ((entry.soldWhole || 0) * pair.factor) + (entry.soldSlices || 0);
+
+                let totalSoldSlices = 0;
+                const entriesWithSource = pairSalesEntries.filter((entry) => !!entry.sourceUnit);
+
+                if (entriesWithSource.length > 0) {
+                  const wholeEntry = entriesWithSource.find(
+                    entry => entry.productId === pair.wholeId && entry.sourceUnit === 'whole'
+                  );
+                  const slicesEntry = entriesWithSource.find(
+                    entry => entry.productId === pair.slicesId && entry.sourceUnit === 'slices'
+                  );
+                  const aggregateEntry = entriesWithSource.find(entry => entry.sourceUnit === 'aggregate');
+
+                  if (wholeEntry) {
+                    totalSoldSlices += toTotalSlices(wholeEntry);
+                  }
+                  if (slicesEntry) {
+                    totalSoldSlices += toTotalSlices(slicesEntry);
+                  }
+
+                  // Backward compatibility if only aggregate-format data exists.
+                  if (!wholeEntry && !slicesEntry && aggregateEntry) {
+                    totalSoldSlices += toTotalSlices(aggregateEntry);
+                  }
+
+                  // Safety fallback if sourceUnit exists but doesn't match expected shape.
+                  if (totalSoldSlices === 0 && entriesWithSource.some(entry => (entry.soldWhole || 0) > 0 || (entry.soldSlices || 0) > 0)) {
+                    totalSoldSlices = entriesWithSource.reduce((sum, entry) => sum + toTotalSlices(entry), 0);
+                  }
+                } else {
+                  // Legacy format fallback:
+                  // - Old reports could duplicate combined values for both whole/slices IDs.
+                  // - Newer/partial data may store separate contributions per unit.
+                  const wholeEntry = pairSalesEntries.find(entry => entry.productId === pair.wholeId);
+                  const slicesEntry = pairSalesEntries.find(entry => entry.productId === pair.slicesId);
+                  let usedLegacyDuplicate = false;
+
+                  const hasLegacyDuplicate =
+                    !!wholeEntry &&
+                    !!slicesEntry &&
+                    (wholeEntry.soldWhole || 0) === (slicesEntry.soldWhole || 0) &&
+                    (wholeEntry.soldSlices || 0) === (slicesEntry.soldSlices || 0);
+
+                  if (hasLegacyDuplicate && wholeEntry) {
+                    totalSoldSlices = toTotalSlices(wholeEntry);
+                    usedLegacyDuplicate = true;
+                  } else {
+                    totalSoldSlices = pairSalesEntries.reduce((sum, entry) => sum + toTotalSlices(entry), 0);
+                  }
+
+                  // Recovery fallback for older reports that stored only one side of whole/slice sales:
+                  // Recalculate from reconcileHistory if it provides a richer pair breakdown.
+                  if (usedLegacyDuplicate) {
+                    const legacyReconcile = reconcileHistory.find(
+                      r => r.outlet === selectedOutlet && r.date === date && !r.deleted
+                    );
+
+                    if (legacyReconcile?.salesData && legacyReconcile.salesData.length > 0) {
+                      const reconcileTotalSlices = legacyReconcile.salesData.reduce((sum, entry) => {
+                        if (entry.productId === pair.wholeId) {
+                          return sum + ((entry.sold || 0) * pair.factor);
+                        }
+                        if (entry.productId === pair.slicesId) {
+                          return sum + (entry.sold || 0);
+                        }
+                        return sum;
+                      }, 0);
+
+                      if (reconcileTotalSlices > totalSoldSlices) {
+                        console.log(
+                          `[SALES OUTLET] Using reconcileHistory fallback for ${wholeProduct.name}: ${totalSoldSlices} -> ${reconcileTotalSlices} slices`
+                        );
+                        totalSoldSlices = reconcileTotalSlices;
+                      }
+                    }
+                  }
                 }
-              }
-              
-              if (!salesData) {
+
+                soldWhole = Math.floor(totalSoldSlices / pair.factor);
+                soldSlices = Math.round(totalSoldSlices % pair.factor);
+
+                console.log(`[SALES OUTLET] ✓ Aggregated sales from ${pairSalesEntries.length} entries`);
+                console.log(`[SALES OUTLET]   Total sold: ${soldWhole}W + ${soldSlices}S (factor ${pair.factor})`);
+                pairSalesEntries.forEach((entry) => {
+                  console.log(
+                    `[SALES OUTLET]   Entry ${entry.productName} (${entry.unit}) id=${entry.productId} source=${entry.sourceUnit || 'legacy'} -> ${entry.soldWhole}W/${entry.soldSlices}S`
+                  );
+                });
+              } else {
                 console.log('[SALES OUTLET] ⚠️ No salesData found for either unit');
                 console.log('[SALES OUTLET] Looking for wholeId:', pair.wholeId);
                 console.log('[SALES OUTLET] Looking for slicesId:', pair.slicesId);

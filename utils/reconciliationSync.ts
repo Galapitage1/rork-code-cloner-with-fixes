@@ -29,6 +29,7 @@ export type SalesReport = {
     unit: string;
     soldWhole: number;
     soldSlices: number;
+    sourceUnit?: 'whole' | 'slices' | 'aggregate';
   }[];
   rawConsumption: {
     rawProductId: string;
