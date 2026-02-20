@@ -48,6 +48,7 @@ function LiveInventoryScreen() {
   const [showOutletModal, setShowOutletModal] = useState<boolean>(false);
   const [showCalendar, setShowCalendar] = useState<boolean>(false);
   const [dateRange, setDateRange] = useState<'week' | 'month'>('week');
+  const [productSearch, setProductSearch] = useState<string>('');
   const [editingCell, setEditingCell] = useState<{productId: string; date: string; field: 'currentWhole' | 'currentSlices'} | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const editInputRef = useRef<TextInput>(null);
@@ -1074,6 +1075,12 @@ function LiveInventoryScreen() {
     }
   }
 
+  const filteredProductInventoryHistory = useMemo(() => {
+    const query = productSearch.trim().toLowerCase();
+    if (!query) return productInventoryHistory;
+    return productInventoryHistory.filter(item => item.productName.toLowerCase().includes(query));
+  }, [productInventoryHistory, productSearch]);
+
   const handleExportDiscrepancies = async () => {
     try {
       if (productInventoryHistory.length === 0) {
@@ -1547,6 +1554,18 @@ function LiveInventoryScreen() {
             <Text style={styles.exportDiscrepancyButtonText}>Discrepancies</Text>
           </TouchableOpacity>
         </View>
+
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search by product name"
+            placeholderTextColor={Colors.light.muted}
+            value={productSearch}
+            onChangeText={setProductSearch}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
       </View>
 
       {!selectedOutlet ? (
@@ -1561,11 +1580,15 @@ function LiveInventoryScreen() {
           <Text style={styles.emptyTitle}>Loading Data...</Text>
           <Text style={styles.emptyText}>Syncing latest reconciliation data from server</Text>
         </View>
-      ) : productInventoryHistory.length === 0 ? (
+      ) : filteredProductInventoryHistory.length === 0 ? (
         <View style={styles.emptyContainer}>
           <TrendingUp size={64} color={Colors.light.muted} />
-          <Text style={styles.emptyTitle}>No Inventory Data</Text>
-          <Text style={styles.emptyText}>No stock movements found for the selected date range</Text>
+          <Text style={styles.emptyTitle}>{productSearch.trim() ? 'No Matching Products' : 'No Inventory Data'}</Text>
+          <Text style={styles.emptyText}>
+            {productSearch.trim()
+              ? `No products found for "${productSearch.trim()}"`
+              : 'No stock movements found for the selected date range'}
+          </Text>
         </View>
       ) : (
         <>
@@ -1651,7 +1674,7 @@ function LiveInventoryScreen() {
           <ScrollView style={styles.scrollView}>
             <ScrollView horizontal showsHorizontalScrollIndicator>
               <View style={styles.tableContainer}>
-                {productInventoryHistory.map(item => (
+                {filteredProductInventoryHistory.map(item => (
                   <View key={item.productId} style={styles.productSection}>
                     {item.records.map((record, idx) => (
                       <View key={`${item.productId}-${record.date}`} style={styles.tableRow}>
@@ -2028,6 +2051,19 @@ const styles = StyleSheet.create({
   exportButtons: {
     flexDirection: 'row' as const,
     gap: 6,
+  },
+  searchContainer: {
+    marginTop: 2,
+  },
+  searchInput: {
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 13,
+    color: Colors.light.text,
   },
   exportButton: {
     flexDirection: 'row' as const,

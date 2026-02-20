@@ -4,6 +4,18 @@ import { Product, Recipe } from '@/types';
 import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
 
 const STORAGE_KEY = '@stock_app_recipes';
+const QUOTA_RECOVERY_KEYS = [
+  '@reconciliation_sales_reports',
+  '@reconciliation_kitchen_stock_reports',
+  '@stock_app_live_inventory_snapshots',
+  '@stock_app_activity_logs',
+] as const;
+
+function isQuotaExceededError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  return lower.includes('quota') || lower.includes('exceeded');
+}
 
 type RecipeContextType = {
   recipes: Recipe[];
@@ -56,8 +68,35 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
   }, []);
 
   const save = useCallback(async (next: Recipe[]) => {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    setRecipes(next);
+    const serialized = JSON.stringify(next);
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, serialized);
+      setRecipes(next);
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        throw error;
+      }
+      console.warn('[RECIPES] Local recipe save exceeded quota. Clearing temporary caches and retrying...');
+    }
+
+    for (const key of QUOTA_RECOVERY_KEYS) {
+      try {
+        await AsyncStorage.removeItem(key);
+      } catch {
+        // Keep going; this is best-effort cleanup.
+      }
+    }
+
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, serialized);
+      setRecipes(next);
+    } catch (retryError) {
+      if (isQuotaExceededError(retryError)) {
+        throw new Error('Unable to save recipes locally because device storage is full. Temporary caches were cleared, but more space is required. Run manual cleanup in Settings, then retry.');
+      }
+      throw retryError;
+    }
   }, []);
 
   const addOrUpdateRecipe = useCallback(async (recipe: Recipe) => {
@@ -120,8 +159,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
       const merged = mergeData(localRecipes, remoteData);
       const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'recipes' });
       
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(synced));
-      setRecipes(synced as Recipe[]);
+      await save(synced as Recipe[]);
       setLastSyncTime(Date.now());
     } catch (e) {
       if (!silent) {
@@ -133,7 +171,7 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
         setIsSyncing(false);
       }
     }
-  }, [currentUser]);
+  }, [currentUser, save]);
 
 
 
