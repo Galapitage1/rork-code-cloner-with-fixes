@@ -15,7 +15,6 @@ import { OrderProvider } from '@/contexts/OrderContext';
 import { StoresProvider, useStores } from '@/contexts/StoresContext';
 import { ProductionProvider, useProduction } from '@/contexts/ProductionContext';
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
-import { MoirProvider } from '@/contexts/MoirContext';
 import { LeaveProvider } from '@/contexts/LeaveContext';
 import { SMSCampaignContext } from '@/contexts/SMSCampaignContext';
 import { ProductTrackerProvider } from '@/contexts/ProductTrackerContext';
@@ -45,7 +44,6 @@ function RootLayoutNav() {
       <Stack.Screen name="product-conversions" options={{ headerShown: true }} />
       <Stack.Screen name="production-requests" options={{ title: 'Production Requests' }} />
       <Stack.Screen name="logs" options={{ title: 'Activity Logs' }} />
-      <Stack.Screen name="moir" options={{ headerShown: false }} />
       <Stack.Screen name="campaigns" options={{ title: 'Campaign Manager' }} />
       <Stack.Screen name="products" options={{ title: 'Products Management' }} />
       <Stack.Screen name="leave" options={{ headerShown: false }} />
@@ -207,8 +205,7 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <GestureHandlerRootView style={{ flex: 1 }}>
-            <MoirProvider>
-              <LeaveProvider>
+            <LeaveProvider>
               <SMSCampaignContext>
               <StoresProvider>
                 <ProductionProvider>
@@ -223,8 +220,7 @@ export default function RootLayout() {
                 </ProductionProvider>
               </StoresProvider>
               </SMSCampaignContext>
-              </LeaveProvider>
-            </MoirProvider>
+            </LeaveProvider>
           </GestureHandlerRootView>
         </AuthProvider>
       </QueryClientProvider>

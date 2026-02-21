@@ -1,9 +1,8 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, MapPin, Mail, CalendarDays } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
-import { useMoir } from '@/contexts/MoirContext';
 import { useRef, useEffect, useState } from 'react';
 import { useStores } from '@/contexts/StoresContext';
 
@@ -216,7 +215,6 @@ function NavigationCard({ card, onPress, unreadCount }: { card: NavCard; onPress
 export default function HomeScreen() {
   const router = useRouter();
   const { currentUser, logout, isSuperAdmin, syncUsers } = useAuth();
-  const { syncAllData, users: moirUsers, isLoading: moirLoading } = useMoir();
   const { syncAll: syncStoresData } = useStores();
   const [hasInitialSynced, setHasInitialSynced] = useState(false);
 
@@ -262,20 +260,6 @@ export default function HomeScreen() {
       return;
     }
 
-    if (route === '/moir' && currentUser?.username?.toLowerCase() === 'temp') {
-      console.log('[HOME] Temp user clicking MOIR, checking users...');
-      if (moirUsers.length === 0 && !moirLoading) {
-        console.log('[HOME] No MOIR users loaded, downloading now...');
-        try {
-          await syncAllData(false);
-          console.log('[HOME] MOIR data downloaded successfully');
-        } catch (error) {
-          console.error('[HOME] Failed to download MOIR data:', error);
-        }
-      } else {
-        console.log('[HOME] MOIR users already loaded:', moirUsers.length);
-      }
-    }
     router.push(route as any);
   };
 
@@ -315,25 +299,7 @@ export default function HomeScreen() {
       ]
     : visibleCards;
 
-  if (currentUser?.username?.toLowerCase() === 'temp') {
-    allCards = [{
-      title: 'MOIR',
-      icon: MapPin,
-      route: '/moir',
-      color: '#FFD700',
-    }];
-  } else {
-    allCards = [
-      {
-        title: 'MOIR',
-        icon: MapPin,
-        route: '/moir',
-        color: '#FFD700',
-      },
-      leaveCard,
-      ...allCards
-    ];
-  }
+  allCards = [leaveCard, ...allCards];
 
   return (
     <>

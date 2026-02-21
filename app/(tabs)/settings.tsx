@@ -2,13 +2,9 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIn
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState, useEffect, useCallback } from 'react';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
-import { Upload, Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, Download, AlertCircle, CheckCircle, MessageSquare, CalendarDays } from 'lucide-react-native';
+import { Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, AlertCircle, CheckCircle, MessageSquare, CalendarDays } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { useMoir } from '@/contexts/MoirContext';
 
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useOrders } from '@/contexts/OrderContext';
@@ -27,7 +23,6 @@ import { hasPermission } from '@/utils/permissions';
 import { useBackendStatus } from '@/utils/backendStatus';
 import Colors from '@/constants/colors';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import * as XLSX from 'xlsx';
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 
@@ -41,7 +36,6 @@ export default function SettingsScreen() {
   const { isSyncing: isStoresSyncing, lastSyncTime: storesLastSync, syncAll: syncStores, setUser: setStoresUser } = useStores();
   const { isSyncing: isProductionSyncing, lastSyncTime: productionLastSync, syncAll: syncProduction, setUser: setProductionUser } = useProduction();
   const { deleteUserData } = useProductUsage();
-  const { users: moirUsers, importUsersFromExcel: importMoirUsers, clearAllUsers: clearAllMoirUsers, syncAllData: syncMoirData } = useMoir();
   const router = useRouter();
   const [showOutletModal, setShowOutletModal] = useState<boolean>(false);
   const [editingOutlet, setEditingOutlet] = useState<Outlet | null>(null);
@@ -62,8 +56,6 @@ export default function SettingsScreen() {
   const [newUserRole, setNewUserRole] = useState<UserRole>('user');
   const [usersExpanded, setUsersExpanded] = useState<boolean>(true);
   const [outletsExpanded, setOutletsExpanded] = useState<boolean>(true);
-  const [moirExpanded, setMoirExpanded] = useState<boolean>(false);
-  const [isImportingMoir, setIsImportingMoir] = useState<boolean>(false);
   const [campaignsExpanded, setCampaignsExpanded] = useState<boolean>(false);
   const [emailApiKey, setEmailApiKey] = useState<string>('');
   const [emailApiProvider, setEmailApiProvider] = useState<'sendgrid' | 'aws-ses' | 'smtp'>('smtp');
@@ -354,8 +346,6 @@ export default function SettingsScreen() {
       'suppliers',
       'grns',
       'productions',
-      'moir_users',
-      'moir_attendance',
       'leave_requests',
     ];
 
@@ -436,7 +426,6 @@ export default function SettingsScreen() {
         { fn: syncOrders, name: 'Orders' },
         { fn: syncStores, name: 'Stores & GRN' },
         { fn: syncProduction, name: 'Production' },
-        { fn: syncMoirData, name: 'MOIR Data' },
       ];
       
       console.log('[SETTINGS] Executing', syncOperations.length, 'sync operations with 45-day restore...');
@@ -504,7 +493,7 @@ export default function SettingsScreen() {
           <Text style={styles.syncInfoText}>
             {isSyncPaused 
               ? 'Auto-sync is paused. Manual sync is still available. Resume to enable automatic syncing every 1 minute.'
-              : 'Your products, outlets, users, customers, recipes, and MOIR attendance users automatically sync every 1 minute across all your devices.'}
+              : 'Your products, outlets, users, customers, and recipes automatically sync every 1 minute across all your devices.'}
           </Text>
         </View>
 
@@ -1130,198 +1119,6 @@ export default function SettingsScreen() {
                 <Plus size={20} color={Colors.light.card} />
                 <Text style={styles.buttonText}>Add Leave Type</Text>
               </TouchableOpacity>
-            </>
-          )}
-        </View>
-      )}
-
-      {/* Moir Section */}
-      {isSuperAdmin && (
-        <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.sectionHeader}
-            onPress={() => setMoirExpanded(!moirExpanded)}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-              <UsersIcon size={24} color={Colors.light.tint} />
-              <Text style={styles.sectionTitle}>Moir ({moirUsers.length})</Text>
-            </View>
-            {moirExpanded ? (
-              <ChevronUp size={20} color={Colors.light.tint} />
-            ) : (
-              <ChevronDown size={20} color={Colors.light.tint} />
-            )}
-          </TouchableOpacity>
-
-          {moirExpanded && (
-            <>
-              <View style={styles.syncInfoCard}>
-                <Text style={styles.syncInfoText}>
-                  Manage MOIR attendance users.
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.button, styles.secondaryButton]}
-                onPress={() => router.push('/moir' as any)}
-              >
-                <UsersIcon size={20} color={Colors.light.tint} />
-                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Open Moir</Text>
-              </TouchableOpacity>
-
-              {moirUsers.slice(0, 5).map((user) => (
-                <View key={user.id} style={styles.listItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.listItemTitle}>{user.name}</Text>
-                    <Text style={styles.listItemSubtitle}>Phone: {user.phoneNumber || 'N/A'}</Text>
-                  </View>
-                </View>
-              ))}
-
-              {moirUsers.length > 5 && (
-                <Text style={styles.listItemSubtitle}>
-                  ... and {moirUsers.length - 5} more users
-                </Text>
-              )}
-
-              <TouchableOpacity
-                style={[styles.button, styles.secondaryButton]}
-                onPress={async () => {
-                  try {
-                    const headers = ['Name', 'Phone Number', 'Emergency Phone', 'Emergency Person', 'Allergies', 'Medication', 'Other Details'];
-                    const data = moirUsers.map(u => [
-                      u.name || '',
-                      u.phoneNumber || '',
-                      u.emergencyPhoneNumber || '',
-                      u.emergencyPerson || '',
-                      u.allergies || '',
-                      u.medication || '',
-                      u.otherDetails || ''
-                    ]);
-                    
-                    const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
-                    const wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, 'Moir Users');
-                    
-                    const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
-                    
-                    if (Platform.OS === 'web') {
-                      const blob = new Blob([Uint8Array.from(atob(wbout), c => c.charCodeAt(0))], {
-                        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                      });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `moir_users_${new Date().toISOString().split('T')[0]}.xlsx`;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    } else {
-                      const fileUri = `${FileSystem.documentDirectory}moir_users_${new Date().toISOString().split('T')[0]}.xlsx`;
-                      await FileSystem.writeAsStringAsync(fileUri, wbout, {
-                        encoding: FileSystem.EncodingType.Base64,
-                      });
-                      await Sharing.shareAsync(fileUri, {
-                        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        dialogTitle: 'Export Moir Users',
-                        UTI: 'com.microsoft.excel.xlsx',
-                      });
-                    }
-                    
-                    Alert.alert('Success', 'Moir users exported successfully');
-                  } catch (error) {
-                    console.error('Export error:', error);
-                    Alert.alert('Error', 'Failed to export Moir users');
-                  }
-                }}
-              >
-                <Download size={20} color={Colors.light.tint} />
-                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Export Excel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.button, styles.primaryButton]}
-                onPress={async () => {
-                  try {
-                    setIsImportingMoir(true);
-                    const result = await DocumentPicker.getDocumentAsync({ type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'] });
-                    if (result.assets && result.assets.length > 0) {
-                      const fileUri = result.assets[0].uri;
-                      let fileContent: string;
-                      if (Platform.OS === 'web') {
-                        const response = await fetch(fileUri);
-                        const blob = await response.blob();
-                        fileContent = await new Promise((resolve) => {
-                          const reader = new FileReader();
-                          reader.onloadend = () => resolve(reader.result as string);
-                          reader.readAsDataURL(blob);
-                        });
-                      } else {
-                        fileContent = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.Base64 });
-                      }
-                      const base64 = fileContent.split(',')[1] || fileContent;
-                      
-                      const workbook = XLSX.read(base64, { type: 'base64' });
-                      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                      const data = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as any[][];
-                      
-                      const usersData = data
-                        .slice(1)
-                        .filter((row: any) => row && row[0])
-                        .map((row: any) => ({
-                          name: String(row[0] || '').trim(),
-                          phoneNumber: row[1] ? String(row[1]).trim() : undefined,
-                          emergencyPhoneNumber: row[2] ? String(row[2]).trim() : undefined,
-                          emergencyPerson: row[3] ? String(row[3]).trim() : undefined,
-                          allergies: row[4] ? String(row[4]).trim() : undefined,
-                          medication: row[5] ? String(row[5]).trim() : undefined,
-                          otherDetails: row[6] ? String(row[6]).trim() : undefined,
-                        }));
-                      
-                      await importMoirUsers(usersData);
-                      Alert.alert('Success', 'MOIR users imported/updated successfully');
-                    }
-                  } catch {
-                    Alert.alert('Error', 'Failed to import MOIR users');
-                  } finally {
-                    setIsImportingMoir(false);
-                  }
-                }}
-                disabled={isImportingMoir}
-              >
-                {isImportingMoir ? (
-                  <ActivityIndicator color={Colors.light.card} />
-                ) : (
-                  <>
-                    <Upload size={20} color={Colors.light.card} />
-                    <Text style={styles.buttonText}>Import Excel</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-
-              {isSuperAdmin && moirUsers.length > 0 && (
-                <TouchableOpacity
-                  style={[styles.button, styles.dangerButton]}
-                  onPress={() => {
-                    openConfirm({
-                      title: 'Clear All MOIR Users',
-                      message: 'This will delete ALL MOIR users from this device and the server. This action cannot be undone.',
-                      destructive: true,
-                      testID: 'confirm-clear-moir',
-                      onConfirm: async () => {
-                        try {
-                          await clearAllMoirUsers();
-                          Alert.alert('Success', 'All MOIR users have been cleared');
-                        } catch {
-                          Alert.alert('Error', 'Failed to clear MOIR users');
-                        }
-                      },
-                    });
-                  }}
-                >
-                  <Trash2 size={20} color={Colors.light.card} />
-                  <Text style={styles.buttonText}>Clear All MOIR Users</Text>
-                </TouchableOpacity>
-              )}
             </>
           )}
         </View>
