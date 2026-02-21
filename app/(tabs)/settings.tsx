@@ -348,6 +348,7 @@ export default function SettingsScreen() {
       'liveInventorySnapshots',
       'customers',
       'recipes',
+      'linkedProducts',
       'orders',
       'stores',
       'suppliers',

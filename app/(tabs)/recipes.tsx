@@ -1,4 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform, ActivityIndicator, Dimensions } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMemo, useState, useCallback, useEffect } from 'react';
 import { useStock } from '@/contexts/StockContext';
@@ -6,8 +7,8 @@ import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useStores } from '@/contexts/StoresContext';
 import Colors from '@/constants/colors';
-import { Plus, Save, X, Upload, AlertCircle } from 'lucide-react-native';
-import { RecipeComponent, Recipe, Product } from '@/types';
+import { Plus, Save, X, Upload, AlertCircle, Link2, Trash2 } from 'lucide-react-native';
+import { RecipeComponent, Recipe, Product, LinkedProductComponent, LinkedProductMapping } from '@/types';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { parseRecipeExcelFile, UnmatchedItem, PendingIngredient } from '@/utils/recipeExcelParser';
@@ -17,11 +18,21 @@ import { formatCurrency } from '@/utils/currencyHelper';
 export default function RecipesScreen() {
   const { isAdmin, currency } = useAuth();
   const { products, productConversions, addProduct, syncAll } = useStock();
-  const { recipes, addOrUpdateRecipe, batchAddOrUpdateRecipes, getRecipeFor, syncRecipes } = useRecipes();
+  const {
+    recipes,
+    linkedProducts,
+    addOrUpdateRecipe,
+    batchAddOrUpdateRecipes,
+    getRecipeFor,
+    addOrUpdateLinkedProduct,
+    deleteLinkedProduct,
+    syncRecipes,
+  } = useRecipes();
   const { storeProducts } = useStores();
 
   const menuItems = useMemo(() => products.filter(p => p.type === 'menu'), [products]);
   const rawItems = useMemo(() => products.filter(p => p.type === 'raw'), [products]);
+  const kitchenItems = useMemo(() => products.filter(p => p.type === 'kitchen'), [products]);
   const [search, setSearch] = useState<string>('');
   const [editingMenuId, setEditingMenuId] = useState<string | null>(null);
   const [components, setComponents] = useState<RecipeComponent[]>([]);
@@ -50,6 +61,10 @@ export default function RecipesScreen() {
   const [newProductCategory, setNewProductCategory] = useState<string>('');
   const [isAddingProduct, setIsAddingProduct] = useState<boolean>(false);
   const [preferredUnits, setPreferredUnits] = useState<Record<string, string>>({});
+  const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
+  const [linkMenuSearch, setLinkMenuSearch] = useState<string>('');
+  const [selectedLinkMenuProductId, setSelectedLinkMenuProductId] = useState<string>('');
+  const [linkedComponentsDraft, setLinkedComponentsDraft] = useState<LinkedProductComponent[]>([]);
 
   const SAVED_MATCHES_KEY = '@recipe_import_saved_matches';
   const MODAL_EXPANDED_KEY = '@recipe_import_modal_expanded';
@@ -220,6 +235,111 @@ export default function RecipesScreen() {
     
     return groups;
   }, [filteredMenu]);
+
+  const linkedByMenuId = useMemo(() => {
+    const map = new Map<string, LinkedProductMapping>();
+    linkedProducts.forEach((item) => {
+      if (!item.deleted) {
+        map.set(item.menuProductId, item);
+      }
+    });
+    return map;
+  }, [linkedProducts]);
+
+  const activeLinkedProducts = useMemo(() => {
+    return linkedProducts
+      .filter(item => !item.deleted && Array.isArray(item.components) && item.components.length > 0)
+      .sort((a, b) => {
+        const menuA = menuItems.find(m => m.id === a.menuProductId)?.name || '';
+        const menuB = menuItems.find(m => m.id === b.menuProductId)?.name || '';
+        return menuA.localeCompare(menuB);
+      });
+  }, [linkedProducts, menuItems]);
+
+  const filteredLinkMenuOptions = useMemo(() => {
+    const q = linkMenuSearch.trim().toLowerCase();
+    if (!q) return menuItems;
+    return menuItems.filter(item => item.name.toLowerCase().includes(q));
+  }, [linkMenuSearch, menuItems]);
+
+  const openLinkEditor = useCallback((menuProductId?: string) => {
+    const fallbackMenuId = menuProductId || menuItems[0]?.id || '';
+    const existing = menuProductId ? linkedByMenuId.get(menuProductId) : undefined;
+
+    if (existing) {
+      setSelectedLinkMenuProductId(existing.menuProductId);
+      setLinkedComponentsDraft(existing.components.map(component => ({ ...component })));
+    } else {
+      setSelectedLinkMenuProductId(fallbackMenuId);
+      const defaultKitchenProductId = kitchenItems[0]?.id || '';
+      setLinkedComponentsDraft(defaultKitchenProductId ? [{ kitchenProductId: defaultKitchenProductId, quantityPerMenuUnit: 0 }] : []);
+    }
+
+    setLinkMenuSearch('');
+    setShowLinkModal(true);
+  }, [kitchenItems, linkedByMenuId, menuItems]);
+
+  const addLinkedComponentRow = useCallback(() => {
+    const defaultKitchenProductId = kitchenItems[0]?.id || '';
+    if (!defaultKitchenProductId) return;
+    setLinkedComponentsDraft(prev => [...prev, { kitchenProductId: defaultKitchenProductId, quantityPerMenuUnit: 0 }]);
+  }, [kitchenItems]);
+
+  const updateLinkedComponent = useCallback((index: number, patch: Partial<LinkedProductComponent>) => {
+    setLinkedComponentsDraft(prev => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  }, []);
+
+  const removeLinkedComponent = useCallback((index: number) => {
+    setLinkedComponentsDraft(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleSaveLinkedProduct = useCallback(async () => {
+    if (!selectedLinkMenuProductId) {
+      Alert.alert('Validation Error', 'Please select a menu product and unit.');
+      return;
+    }
+
+    const cleanComponents = linkedComponentsDraft
+      .map((component) => ({
+        kitchenProductId: component.kitchenProductId,
+        quantityPerMenuUnit: Number(component.quantityPerMenuUnit),
+      }))
+      .filter((component) => component.kitchenProductId && Number.isFinite(component.quantityPerMenuUnit) && component.quantityPerMenuUnit > 0);
+
+    if (cleanComponents.length === 0) {
+      Alert.alert('Validation Error', 'Add at least one kitchen product with quantity greater than 0.');
+      return;
+    }
+
+    const payload: LinkedProductMapping = {
+      id: `lnk-${selectedLinkMenuProductId}`,
+      menuProductId: selectedLinkMenuProductId,
+      components: cleanComponents,
+      updatedAt: Date.now(),
+    };
+
+    await addOrUpdateLinkedProduct(payload);
+    setShowLinkModal(false);
+    setLinkMenuSearch('');
+  }, [addOrUpdateLinkedProduct, linkedComponentsDraft, selectedLinkMenuProductId]);
+
+  const handleDeleteLinkedProduct = useCallback((menuProductId: string) => {
+    const menuProduct = menuItems.find(item => item.id === menuProductId);
+    Alert.alert(
+      'Delete Link',
+      `Remove linked kitchen products for "${menuProduct?.name || 'this menu product'}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteLinkedProduct(menuProductId);
+          },
+        },
+      ]
+    );
+  }, [deleteLinkedProduct, menuItems]);
 
   const openEditor = (menuId: string) => {
     setEditingMenuId(menuId);
@@ -741,6 +861,14 @@ export default function RecipesScreen() {
               style={styles.searchBar}
               inputStyle={styles.searchInput}
             />
+            <TouchableOpacity
+              style={styles.linkBtn}
+              onPress={() => openLinkEditor()}
+              disabled={kitchenItems.length === 0 || menuItems.length === 0}
+            >
+              <Link2 size={16} color="#fff" />
+              <Text style={styles.importBtnText}>Link</Text>
+            </TouchableOpacity>
             <TouchableOpacity 
               style={styles.importBtn} 
               onPress={handleImport}
@@ -756,6 +884,58 @@ export default function RecipesScreen() {
           </View>
 
           <ScrollView style={styles.list} contentContainerStyle={{ paddingBottom: 20 }}>
+            <View style={styles.linkedSectionCard}>
+              <View style={styles.linkedSectionHeader}>
+                <Text style={styles.linkedSectionTitle}>Linked Products</Text>
+                <TouchableOpacity style={styles.linkedSectionAddBtn} onPress={() => openLinkEditor()}>
+                  <Plus size={14} color="#fff" />
+                  <Text style={styles.linkedSectionAddText}>Add Link</Text>
+                </TouchableOpacity>
+              </View>
+              {activeLinkedProducts.length === 0 ? (
+                <Text style={styles.linkedSectionEmpty}>
+                  No linked products yet. Add links to deduct kitchen inventory when menu requests are approved.
+                </Text>
+              ) : (
+                activeLinkedProducts.map((linked) => {
+                  const menuProduct = menuItems.find(item => item.id === linked.menuProductId);
+                  return (
+                    <View key={linked.id} style={styles.linkedProductCard}>
+                      <View style={styles.linkedProductHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.linkedProductMenuName}>{menuProduct?.name || linked.menuProductId}</Text>
+                          <Text style={styles.linkedProductMenuUnit}>Unit: {menuProduct?.unit || '-'}</Text>
+                        </View>
+                        <View style={styles.linkedProductActions}>
+                          <TouchableOpacity style={styles.linkedActionBtn} onPress={() => openLinkEditor(linked.menuProductId)}>
+                            <Link2 size={14} color={Colors.light.tint} />
+                            <Text style={styles.linkedActionText}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.linkedActionBtn, styles.linkedDeleteBtn]} onPress={() => handleDeleteLinkedProduct(linked.menuProductId)}>
+                            <Trash2 size={14} color={Colors.light.danger} />
+                            <Text style={styles.linkedDeleteText}>Delete</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                      <View style={styles.linkedIngredients}>
+                        {linked.components.map((component, idx) => {
+                          const kitchenProduct = kitchenItems.find(item => item.id === component.kitchenProductId) || products.find(item => item.id === component.kitchenProductId);
+                          return (
+                            <View key={`${linked.id}-${component.kitchenProductId}-${idx}`} style={styles.linkedIngredientRow}>
+                              <Text style={styles.linkedIngredientName}>{kitchenProduct?.name || component.kitchenProductId}</Text>
+                              <Text style={styles.linkedIngredientQty}>
+                                {component.quantityPerMenuUnit} x {kitchenProduct?.unit || '-'}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </View>
+
             {Object.entries(groupedMenu).sort(([typeA], [typeB]) => typeA.localeCompare(typeB)).map(([type, categories]) => (
               <View key={type}>
                 <View style={styles.typeHeader}>
@@ -796,10 +976,16 @@ export default function RecipesScreen() {
                               <Text style={styles.sub}>Unit: {m.unit}</Text>
                               <Text style={styles.subSmall}>{r ? `${r.components.length} ingredient${r.components.length !== 1 ? 's' : ''}` : 'No recipe defined'}</Text>
                             </View>
-                            <TouchableOpacity style={styles.primaryBtn} onPress={() => openEditor(m.id)}>
-                              <Plus size={16} color="#fff" />
-                              <Text style={styles.primaryBtnText}>{r ? 'Edit' : 'Add'} Recipe</Text>
-                            </TouchableOpacity>
+                            <View style={styles.cardActions}>
+                              <TouchableOpacity style={styles.secondaryBtn} onPress={() => openLinkEditor(m.id)}>
+                                <Link2 size={14} color={Colors.light.tint} />
+                                <Text style={styles.secondaryBtnText}>{linkedByMenuId.has(m.id) ? 'Edit Link' : 'Link'}</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.primaryBtn} onPress={() => openEditor(m.id)}>
+                                <Plus size={16} color="#fff" />
+                                <Text style={styles.primaryBtnText}>{r ? 'Edit' : 'Add'} Recipe</Text>
+                              </TouchableOpacity>
+                            </View>
                           </View>
 
                           {r && (
@@ -908,6 +1094,90 @@ export default function RecipesScreen() {
                   <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }]} onPress={saveRecipe}>
                     <Save size={16} color="#fff" />
                     <Text style={styles.primaryBtnText}>Save</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal visible={showLinkModal} transparent animationType="fade" onRequestClose={() => setShowLinkModal(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalContent, { maxWidth: 700 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Link Menu To Kitchen Products</Text>
+                  <TouchableOpacity onPress={() => setShowLinkModal(false)}>
+                    <X size={22} color={Colors.light.text} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView style={{ maxHeight: 500 }} contentContainerStyle={{ padding: 14 }}>
+                  <Text style={styles.searchLabel}>Menu Product Search</Text>
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search menu product..."
+                    value={linkMenuSearch}
+                    onChangeText={setLinkMenuSearch}
+                    placeholderTextColor={Colors.light.muted}
+                  />
+                  <Text style={[styles.searchLabel, { marginTop: 10 }]}>Menu Product + Unit</Text>
+                  <View style={styles.pickerWrap}>
+                    <Picker
+                      selectedValue={selectedLinkMenuProductId}
+                      onValueChange={(value: string) => setSelectedLinkMenuProductId(value)}
+                    >
+                      {filteredLinkMenuOptions.map(item => (
+                        <Picker.Item key={item.id} label={`${item.name} (${item.unit})`} value={item.id} />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <View style={styles.linkedDraftHeader}>
+                    <Text style={styles.searchLabel}>Linked Kitchen Products</Text>
+                    <TouchableOpacity style={styles.linkedSectionAddBtn} onPress={addLinkedComponentRow}>
+                      <Plus size={14} color="#fff" />
+                      <Text style={styles.linkedSectionAddText}>Add Kitchen Product</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {kitchenItems.length === 0 && (
+                    <Text style={styles.linkedSectionEmpty}>No kitchen products available. Add kitchen products in Products first.</Text>
+                  )}
+
+                  {linkedComponentsDraft.map((component, index) => (
+                    <View key={`${component.kitchenProductId}-${index}`} style={styles.linkedDraftRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.qtyLabel}>Kitchen Product (with unit)</Text>
+                        <View style={styles.pickerWrap}>
+                          <Picker
+                            selectedValue={component.kitchenProductId}
+                            onValueChange={(value: string) => updateLinkedComponent(index, { kitchenProductId: value })}
+                          >
+                            {kitchenItems.map(item => (
+                              <Picker.Item key={item.id} label={`${item.name} (${item.unit})`} value={item.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </View>
+                      <View style={styles.linkedQtyInputWrap}>
+                        <Text style={styles.qtyLabel}>Qty per menu unit</Text>
+                        <TextInput
+                          style={styles.qtyInput}
+                          placeholder="0"
+                          keyboardType="decimal-pad"
+                          value={String(component.quantityPerMenuUnit || '')}
+                          onChangeText={(value) => updateLinkedComponent(index, { quantityPerMenuUnit: parseFloat(value) || 0 })}
+                          placeholderTextColor={Colors.light.muted}
+                        />
+                      </View>
+                      <TouchableOpacity style={styles.removeBtn} onPress={() => removeLinkedComponent(index)}>
+                        <X size={18} color={Colors.light.danger} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }]} onPress={handleSaveLinkedProduct}>
+                    <Save size={16} color="#fff" />
+                    <Text style={styles.primaryBtnText}>Save Link</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1286,11 +1556,32 @@ const styles = StyleSheet.create({
   toolbar: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   searchInput: { flex: 1, color: Colors.light.text },
+  linkBtn: { backgroundColor: Colors.light.tint, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', minWidth: 90 },
   importBtn: { backgroundColor: Colors.light.accent, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', minWidth: 100 },
   importBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   list: { flex: 1 },
+  linkedSectionCard: { backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, padding: 12, marginBottom: 10 },
+  linkedSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  linkedSectionTitle: { fontSize: 16, fontWeight: '800' as const, color: Colors.light.text },
+  linkedSectionAddBtn: { backgroundColor: Colors.light.tint, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  linkedSectionAddText: { color: '#fff', fontWeight: '700' as const, fontSize: 12 },
+  linkedSectionEmpty: { color: Colors.light.muted, fontSize: 13 },
+  linkedProductCard: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10, padding: 10, marginBottom: 8 },
+  linkedProductHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  linkedProductMenuName: { color: Colors.light.text, fontSize: 15, fontWeight: '700' as const },
+  linkedProductMenuUnit: { color: Colors.light.muted, fontSize: 12, marginTop: 2 },
+  linkedProductActions: { flexDirection: 'row', gap: 8 },
+  linkedActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.card },
+  linkedActionText: { color: Colors.light.tint, fontSize: 12, fontWeight: '700' as const },
+  linkedDeleteBtn: { borderColor: Colors.light.danger + '55', backgroundColor: Colors.light.danger + '10' },
+  linkedDeleteText: { color: Colors.light.danger, fontSize: 12, fontWeight: '700' as const },
+  linkedIngredients: { gap: 6 },
+  linkedIngredientRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  linkedIngredientName: { color: Colors.light.text, flex: 1, fontSize: 13 },
+  linkedIngredientQty: { color: Colors.light.accent, fontWeight: '700' as const, fontSize: 12 },
   card: { backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, padding: 12, marginBottom: 10 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  cardActions: { alignItems: 'flex-end', gap: 8 },
   nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   menuName: { fontSize: 16, fontWeight: '700', color: Colors.light.text, flex: 1 },
   costMarkupContainer: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -1303,6 +1594,8 @@ const styles = StyleSheet.create({
   markupText: { fontSize: 13, color: Colors.light.success, fontWeight: '700' as const, marginTop: 2 },
   primaryBtn: { backgroundColor: Colors.light.tint, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
   primaryBtnText: { color: '#fff', fontWeight: '700' },
+  secondaryBtn: { backgroundColor: Colors.light.background, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.border, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  secondaryBtnText: { color: Colors.light.tint, fontWeight: '700' as const, fontSize: 12 },
   componentsList: { marginTop: 8, gap: 8 },
   compRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
   compName: { color: Colors.light.text },
@@ -1314,7 +1607,11 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '700', color: Colors.light.text },
   searchSection: { marginBottom: 16 },
   searchLabel: { fontSize: 14, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 8 },
+  pickerWrap: { borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, overflow: 'hidden', backgroundColor: Colors.light.background },
   modalSearchInput: { backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 12, color: Colors.light.text, fontSize: 14 },
+  linkedDraftHeader: { marginTop: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  linkedDraftRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, padding: 8 },
+  linkedQtyInputWrap: { width: 120, alignItems: 'center' },
   dropdown: { maxHeight: 200, backgroundColor: Colors.light.card, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 8, marginTop: 4 },
   dropdownItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   dropdownItemDisabled: { backgroundColor: Colors.light.background, opacity: 0.5 },

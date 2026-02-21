@@ -19,6 +19,7 @@ const DATA_TYPES_TO_LOAD = [
   'customers',
   'orders',
   'recipes',
+  'linkedProducts',
 ];
 
 const STORAGE_KEY_MAP: Record<string, string> = {
@@ -40,6 +41,7 @@ const STORAGE_KEY_MAP: Record<string, string> = {
   customers: '@stock_app_customers',
   orders: '@stock_app_orders',
   recipes: '@stock_app_recipes',
+  linkedProducts: '@stock_app_linked_products',
 };
 
 async function hasLocalData(dataType: string): Promise<boolean> {

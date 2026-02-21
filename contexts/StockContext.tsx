@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
-import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory, LiveInventorySnapshot, LiveInventorySnapshotItem } from '@/types';
+import { Product, StockCheck, StockCount, ProductRequest, Outlet, ProductConversion, InventoryStock, SalesDeduction, SalesReconciliationHistory, LiveInventorySnapshot, LiveInventorySnapshotItem, LinkedProductMapping } from '@/types';
 import { syncData } from '@/utils/syncData';
 import { addToPendingQueue, processPendingQueue, hasPendingOperations, PendingOperation } from '@/utils/pendingSync';
 import { Alert } from 'react-native';
@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
   SYNC_PAUSED: '@stock_app_sync_paused',
   LIVE_INVENTORY_SNAPSHOTS: '@stock_app_live_inventory_snapshots',
 };
+const LINKED_PRODUCTS_STORAGE_KEY = '@stock_app_linked_products';
 
 type StockContextType = {
   products: Product[];
@@ -2334,6 +2335,191 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     await saveInventoryStocks(updated);
   }, [inventoryStocks, saveInventoryStocks]);
 
+  const deductLinkedKitchenProductsForMenuRequest = useCallback(async (
+    request: ProductRequest,
+    linkedProduct: LinkedProductMapping
+  ): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const sourceOutlet = outlets.find(o => o.name === request.fromOutlet);
+      if (!sourceOutlet || sourceOutlet.outletType !== 'production') {
+        return { success: false, message: 'Linked product approvals require a production source outlet.' };
+      }
+
+      const requiredByProductId = new Map<string, number>();
+      linkedProduct.components.forEach((component) => {
+        if (!component.kitchenProductId) return;
+        if (!Number.isFinite(component.quantityPerMenuUnit) || component.quantityPerMenuUnit <= 0) return;
+        const requiredQty = request.quantity * component.quantityPerMenuUnit;
+        if (!Number.isFinite(requiredQty) || requiredQty <= 0) return;
+        requiredByProductId.set(component.kitchenProductId, (requiredByProductId.get(component.kitchenProductId) || 0) + requiredQty);
+      });
+
+      if (requiredByProductId.size === 0) {
+        return { success: false, message: 'This linked product has no valid kitchen components.' };
+      }
+
+      const pairDeductions = new Map<string, number>();
+      const nonPairRequirements: { productId: string; requiredQty: number; name: string; unit: string }[] = [];
+
+      for (const [kitchenProductId, requiredQty] of requiredByProductId.entries()) {
+        const kitchenProduct = products.find(p => p.id === kitchenProductId);
+        if (!kitchenProduct) {
+          return { success: false, message: `Linked kitchen product not found: ${kitchenProductId}` };
+        }
+
+        const productPair = getProductPairForInventory(kitchenProductId);
+        if (productPair) {
+          const conversionFactor = getConversionFactor(productPair.wholeProductId, productPair.slicesProductId) || 10;
+          const inventoryEntry = inventoryStocks.find(inv => inv.productId === productPair.wholeProductId);
+          if (!inventoryEntry) {
+            return { success: false, message: `No inventory found for linked kitchen item "${kitchenProduct.name}".` };
+          }
+
+          const availableSlices = (inventoryEntry.productionWhole || 0) * conversionFactor + (inventoryEntry.productionSlices || 0);
+          const requiredSlices = kitchenProductId === productPair.wholeProductId
+            ? Math.round(requiredQty * conversionFactor)
+            : Math.round(requiredQty);
+          const alreadyReservedSlices = pairDeductions.get(productPair.wholeProductId) || 0;
+          const totalRequiredSlices = alreadyReservedSlices + requiredSlices;
+
+          if (availableSlices < totalRequiredSlices) {
+            const availableWhole = Math.floor(availableSlices / conversionFactor);
+            const availableRemainderSlices = Math.round(availableSlices % conversionFactor);
+            const requiredWhole = Math.floor(totalRequiredSlices / conversionFactor);
+            const requiredRemainderSlices = Math.round(totalRequiredSlices % conversionFactor);
+            return {
+              success: false,
+              message: `Insufficient linked kitchen stock for "${kitchenProduct.name}". Available: ${availableWhole} whole + ${availableRemainderSlices} slices, Required: ${requiredWhole} whole + ${requiredRemainderSlices} slices.`,
+            };
+          }
+
+          pairDeductions.set(productPair.wholeProductId, totalRequiredSlices);
+          continue;
+        }
+
+        nonPairRequirements.push({
+          productId: kitchenProductId,
+          requiredQty,
+          name: kitchenProduct.name,
+          unit: kitchenProduct.unit,
+        });
+      }
+
+      const mutableChecks = stockChecks
+        .filter(check => check.outlet === request.fromOutlet && check.completedBy !== 'AUTO' && !check.deleted)
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .map(check => ({ ...check, counts: check.counts.map(count => ({ ...count })) }));
+      const changedCheckIds = new Set<string>();
+
+      for (const requirement of nonPairRequirements) {
+        let totalAvailable = 0;
+        mutableChecks.forEach((check) => {
+          const count = check.counts.find(c => c.productId === requirement.productId);
+          if (!count) return;
+          const receivedStock = count.receivedStock || 0;
+          const wastage = count.wastage || 0;
+          const quantity = count.quantity || 0;
+          const netStock = Math.max(receivedStock - wastage, quantity);
+          if (netStock > 0) totalAvailable += netStock;
+        });
+
+        if (totalAvailable < requirement.requiredQty) {
+          return {
+            success: false,
+            message: `Insufficient linked kitchen stock for "${requirement.name}". Available: ${totalAvailable.toFixed(2)} ${requirement.unit}, Required: ${requirement.requiredQty.toFixed(2)} ${requirement.unit}.`,
+          };
+        }
+
+        let remainingToDeduct = requirement.requiredQty;
+        for (const check of mutableChecks) {
+          if (remainingToDeduct <= 0) break;
+          const countIndex = check.counts.findIndex(c => c.productId === requirement.productId);
+          if (countIndex === -1) continue;
+
+          const count = check.counts[countIndex];
+          const receivedStock = count.receivedStock || 0;
+          const wastage = count.wastage || 0;
+          const quantity = count.quantity || 0;
+          const netStock = Math.max(receivedStock - wastage, quantity);
+          if (netStock <= 0) continue;
+
+          const deductAmount = Math.min(netStock, remainingToDeduct);
+          if (receivedStock > 0) {
+            const newReceived = Math.max(0, receivedStock - deductAmount);
+            check.counts[countIndex] = {
+              ...count,
+              receivedStock: newReceived,
+              quantity: Math.max(0, newReceived - wastage),
+            };
+          } else {
+            check.counts[countIndex] = {
+              ...count,
+              quantity: Math.max(0, quantity - deductAmount),
+            };
+          }
+          remainingToDeduct -= deductAmount;
+          changedCheckIds.add(check.id);
+        }
+      }
+
+      for (const check of mutableChecks) {
+        if (!changedCheckIds.has(check.id)) continue;
+        await updateStockCheck(check.id, check.counts);
+      }
+
+      const latestInventoryRaw = await AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS);
+      let latestInventory: InventoryStock[] = latestInventoryRaw
+        ? JSON.parse(latestInventoryRaw).filter((item: InventoryStock) => !item?.deleted)
+        : [...inventoryStocks];
+
+      for (const [wholeProductId, requiredSlices] of pairDeductions.entries()) {
+        const idx = latestInventory.findIndex(inv => inv.productId === wholeProductId);
+        if (idx === -1) continue;
+
+        const inventoryEntry = latestInventory[idx];
+        const productPair = getProductPairForInventory(wholeProductId);
+        const conversionFactor = productPair
+          ? (getConversionFactor(productPair.wholeProductId, productPair.slicesProductId) || 10)
+          : 10;
+        const availableSlices = (inventoryEntry.productionWhole || 0) * conversionFactor + (inventoryEntry.productionSlices || 0);
+        const remainingSlices = Math.max(0, availableSlices - requiredSlices);
+
+        latestInventory[idx] = {
+          ...inventoryEntry,
+          productionWhole: Math.floor(remainingSlices / conversionFactor),
+          productionSlices: Math.round(remainingSlices % conversionFactor),
+          updatedAt: Date.now(),
+        };
+      }
+
+      for (const requirement of nonPairRequirements) {
+        const idx = latestInventory.findIndex(inv => inv.productId === requirement.productId);
+        if (idx === -1) continue;
+        const inventoryEntry = latestInventory[idx];
+        latestInventory[idx] = {
+          ...inventoryEntry,
+          productionWhole: Math.max(0, (inventoryEntry.productionWhole || 0) - requirement.requiredQty),
+          updatedAt: Date.now(),
+        };
+      }
+
+      await saveInventoryStocks(latestInventory);
+
+      if (createSnapshotRef.current) {
+        try {
+          await createSnapshotRef.current('transfer_approved', `Linked transfer ${request.id} approved for ${request.quantity} units`);
+        } catch (snapshotError) {
+          console.error('deductLinkedKitchenProductsForMenuRequest: Failed to create snapshot:', snapshotError);
+        }
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('deductLinkedKitchenProductsForMenuRequest: Error', error);
+      return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }, [outlets, products, getProductPairForInventory, getConversionFactor, inventoryStocks, stockChecks, updateStockCheck, saveInventoryStocks]);
+
   const deductInventoryFromApproval = useCallback(async (request: ProductRequest): Promise<{ success: boolean; message?: string }> => {
     try {
       console.log('deductInventoryFromApproval: Starting for request', request.id, 'product', request.productId, 'qty', request.quantity);
@@ -2360,6 +2546,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
 
       console.log('deductInventoryFromApproval: From outlet type:', fromOutlet.outletType, 'To outlet type:', toOutlet.outletType);
+
+      if (product.type === 'menu') {
+        try {
+          const linkedRaw = await AsyncStorage.getItem(LINKED_PRODUCTS_STORAGE_KEY);
+          const linkedMappings: LinkedProductMapping[] = linkedRaw ? JSON.parse(linkedRaw) : [];
+          const linkedProduct = linkedMappings.find(
+            (item) => item?.menuProductId === request.productId && !item?.deleted && Array.isArray(item?.components) && item.components.length > 0
+          );
+
+          if (linkedProduct) {
+            console.log('deductInventoryFromApproval: Linked menu mapping found. Using linked kitchen stock deduction path.');
+            return await deductLinkedKitchenProductsForMenuRequest(request, linkedProduct);
+          }
+        } catch (linkedError) {
+          console.error('deductInventoryFromApproval: Failed to read linked product mappings:', linkedError);
+        }
+      }
 
       const productPair = getProductPairForInventory(request.productId);
       
@@ -2753,7 +2956,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.error('Deduct inventory error:', error);
       return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }
-  }, [inventoryStocks, products, getConversionFactor, getProductPairForInventory, productConversions, updateInventoryStock, outlets, stockChecks, updateStockCheck]);
+  }, [inventoryStocks, products, getConversionFactor, getProductPairForInventory, productConversions, updateInventoryStock, outlets, stockChecks, updateStockCheck, deductLinkedKitchenProductsForMenuRequest]);
 
   const saveSalesDeductions = useCallback(async (deductions: SalesDeduction[]) => {
     try {

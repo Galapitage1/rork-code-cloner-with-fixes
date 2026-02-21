@@ -29,6 +29,20 @@ export interface Recipe {
   deviceId?: string;
 }
 
+export interface LinkedProductComponent {
+  kitchenProductId: string;
+  quantityPerMenuUnit: number;
+}
+
+export interface LinkedProductMapping {
+  id: string;
+  menuProductId: string;
+  components: LinkedProductComponent[];
+  updatedAt?: number;
+  deviceId?: string;
+  deleted?: boolean;
+}
+
 export interface StockCount {
   productId: string;
   quantity: number;

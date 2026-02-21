@@ -118,6 +118,7 @@ export async function cleanupOldData(): Promise<void> {
       '@stock_app_products',
       '@stock_app_product_conversions',
       '@stock_app_recipes',
+      '@stock_app_linked_products',
       '@stock_app_store_products',
       '@stock_app_suppliers',
       'customers',

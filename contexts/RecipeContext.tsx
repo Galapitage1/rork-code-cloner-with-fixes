@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, ReactNode, useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { Product, Recipe } from '@/types';
+import { LinkedProductMapping, Product, Recipe } from '@/types';
 import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
 
 const STORAGE_KEY = '@stock_app_recipes';
+const LINKED_PRODUCTS_STORAGE_KEY = '@stock_app_linked_products';
 const QUOTA_RECOVERY_KEYS = [
   '@reconciliation_sales_reports',
   '@reconciliation_kitchen_stock_reports',
@@ -19,6 +20,7 @@ function isQuotaExceededError(error: unknown): boolean {
 
 type RecipeContextType = {
   recipes: Recipe[];
+  linkedProducts: LinkedProductMapping[];
   isLoading: boolean;
   isSyncing: boolean;
   lastSyncTime: number;
@@ -26,6 +28,9 @@ type RecipeContextType = {
   batchAddOrUpdateRecipes: (recipes: Recipe[]) => Promise<void>;
   deleteRecipe: (menuProductId: string) => Promise<void>;
   getRecipeFor: (menuProductId: string) => Recipe | undefined;
+  addOrUpdateLinkedProduct: (mapping: LinkedProductMapping) => Promise<void>;
+  deleteLinkedProduct: (menuProductId: string) => Promise<void>;
+  getLinkedProductFor: (menuProductId: string) => LinkedProductMapping | undefined;
   computeConsumption: (sales: { productId: string; sold: number }[]) => Map<string, number>;
   syncRecipes: (silent?: boolean) => Promise<void>;
 };
@@ -40,6 +45,7 @@ export function useRecipes() {
 
 export function RecipeProvider({ children, currentUser, products }: { children: ReactNode; currentUser: { id: string } | null; products: Product[] }) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [linkedProducts, setLinkedProducts] = useState<LinkedProductMapping[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<number>(0);
@@ -48,16 +54,34 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
   useEffect(() => {
     const load = async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) {
+        const [rawRecipes, rawLinkedProducts] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(LINKED_PRODUCTS_STORAGE_KEY),
+        ]);
+
+        if (rawRecipes) {
           try {
-            const trimmed = raw.trim();
+            const trimmed = rawRecipes.trim();
             if (trimmed && (trimmed.startsWith('[') || trimmed.startsWith('{'))) {
               const parsed = JSON.parse(trimmed);
               if (Array.isArray(parsed)) setRecipes(parsed);
             }
           } catch {
             await AsyncStorage.removeItem(STORAGE_KEY);
+          }
+        }
+
+        if (rawLinkedProducts) {
+          try {
+            const trimmed = rawLinkedProducts.trim();
+            if (trimmed && (trimmed.startsWith('[') || trimmed.startsWith('{'))) {
+              const parsed = JSON.parse(trimmed);
+              if (Array.isArray(parsed)) {
+                setLinkedProducts(parsed.filter((item: LinkedProductMapping) => !item?.deleted));
+              }
+            }
+          } catch {
+            await AsyncStorage.removeItem(LINKED_PRODUCTS_STORAGE_KEY);
           }
         }
       } finally {
@@ -67,17 +91,15 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     load();
   }, []);
 
-  const save = useCallback(async (next: Recipe[]) => {
-    const serialized = JSON.stringify(next);
+  const persistWithQuotaRecovery = useCallback(async (key: string, serialized: string) => {
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, serialized);
-      setRecipes(next);
-      return;
+      await AsyncStorage.setItem(key, serialized);
+      return true;
     } catch (error) {
       if (!isQuotaExceededError(error)) {
         throw error;
       }
-      console.warn('[RECIPES] Local recipe save exceeded quota. Clearing temporary caches and retrying...');
+      console.warn(`[RECIPES] Local save exceeded quota for key ${key}. Clearing temporary caches and retrying...`);
     }
 
     for (const key of QUOTA_RECOVERY_KEYS) {
@@ -89,23 +111,36 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     }
 
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, serialized);
-      setRecipes(next);
+      await AsyncStorage.setItem(key, serialized);
+      return true;
     } catch (retryError) {
       if (isQuotaExceededError(retryError)) {
-        throw new Error('Unable to save recipes locally because device storage is full. Temporary caches were cleared, but more space is required. Run manual cleanup in Settings, then retry.');
+        throw new Error('Unable to save linked recipe data locally because device storage is full. Temporary caches were cleared, but more space is required. Run manual cleanup in Settings, then retry.');
       }
       throw retryError;
     }
   }, []);
+
+  const saveRecipes = useCallback(async (next: Recipe[]) => {
+    const serialized = JSON.stringify(next);
+    await persistWithQuotaRecovery(STORAGE_KEY, serialized);
+    setRecipes(next);
+  }, [persistWithQuotaRecovery]);
+
+  const saveLinkedProducts = useCallback(async (next: LinkedProductMapping[]) => {
+    const withTimestamp = next.map((item) => ({ ...item, updatedAt: item.updatedAt || Date.now() }));
+    const serialized = JSON.stringify(withTimestamp);
+    await persistWithQuotaRecovery(LINKED_PRODUCTS_STORAGE_KEY, serialized);
+    setLinkedProducts(withTimestamp.filter((item) => !item.deleted));
+  }, [persistWithQuotaRecovery]);
 
   const addOrUpdateRecipe = useCallback(async (recipe: Recipe) => {
     const idx = recipes.findIndex(r => r.menuProductId === recipe.menuProductId);
     const next = [...recipes];
     const withTs = { ...recipe, updatedAt: Date.now() };
     if (idx >= 0) next[idx] = withTs; else next.push(withTs);
-    await save(next);
-  }, [recipes, save]);
+    await saveRecipes(next);
+  }, [recipes, saveRecipes]);
 
   const batchAddOrUpdateRecipes = useCallback(async (newRecipes: Recipe[]) => {
     const next = [...recipes];
@@ -118,15 +153,47 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
         next.push(withTs);
       }
     });
-    await save(next);
-  }, [recipes, save]);
+    await saveRecipes(next);
+  }, [recipes, saveRecipes]);
 
   const deleteRecipe = useCallback(async (menuProductId: string) => {
     const next = recipes.filter(r => r.menuProductId !== menuProductId);
-    await save(next);
-  }, [recipes, save]);
+    await saveRecipes(next);
+  }, [recipes, saveRecipes]);
 
   const getRecipeFor = useCallback((menuProductId: string) => recipes.find(r => r.menuProductId === menuProductId), [recipes]);
+  
+  const addOrUpdateLinkedProduct = useCallback(async (mapping: LinkedProductMapping) => {
+    const withTs: LinkedProductMapping = {
+      ...mapping,
+      id: mapping.id || `lnk-${mapping.menuProductId}`,
+      updatedAt: Date.now(),
+      deleted: false,
+    };
+    const existing = linkedProducts.filter(item => item.menuProductId !== withTs.menuProductId);
+    const next = [...existing, withTs];
+    await saveLinkedProducts(next);
+  }, [linkedProducts, saveLinkedProducts]);
+
+  const deleteLinkedProduct = useCallback(async (menuProductId: string) => {
+    const existing = linkedProducts.find(item => item.menuProductId === menuProductId);
+    const tombstone: LinkedProductMapping = {
+      id: existing?.id || `lnk-${menuProductId}`,
+      menuProductId,
+      components: existing?.components || [],
+      deleted: true,
+      updatedAt: Date.now(),
+    };
+    const next = [
+      ...linkedProducts.filter(item => item.menuProductId !== menuProductId),
+      tombstone,
+    ];
+    await saveLinkedProducts(next);
+  }, [linkedProducts, saveLinkedProducts]);
+
+  const getLinkedProductFor = useCallback((menuProductId: string) => {
+    return linkedProducts.find(item => item.menuProductId === menuProductId && !item.deleted);
+  }, [linkedProducts]);
 
   const computeConsumption = useCallback((sales: { productId: string; sold: number }[]) => {
     const menuToRecipe = new Map<string, Recipe>();
@@ -154,12 +221,24 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
       
       const localRaw = await AsyncStorage.getItem(STORAGE_KEY);
       const localRecipes = localRaw ? JSON.parse(localRaw) : [];
+      const localLinkedRaw = await AsyncStorage.getItem(LINKED_PRODUCTS_STORAGE_KEY);
+      const localLinkedProducts = localLinkedRaw ? JSON.parse(localLinkedRaw) : [];
       
-      const remoteData = await getFromServer<Recipe>({ userId: currentUser.id, dataType: 'recipes' });
-      const merged = mergeData(localRecipes, remoteData);
-      const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'recipes' });
+      const [remoteRecipes, remoteLinkedProducts] = await Promise.all([
+        getFromServer<Recipe>({ userId: currentUser.id, dataType: 'recipes' }),
+        getFromServer<LinkedProductMapping>({ userId: currentUser.id, dataType: 'linkedProducts' }),
+      ]);
+      const mergedRecipes = mergeData(localRecipes, remoteRecipes);
+      const mergedLinkedProducts = mergeData(localLinkedProducts, remoteLinkedProducts);
+      const [syncedRecipes, syncedLinkedProducts] = await Promise.all([
+        saveToServer(mergedRecipes, { userId: currentUser.id, dataType: 'recipes' }),
+        saveToServer(mergedLinkedProducts, { userId: currentUser.id, dataType: 'linkedProducts' }),
+      ]);
       
-      await save(synced as Recipe[]);
+      await Promise.all([
+        saveRecipes(syncedRecipes as Recipe[]),
+        saveLinkedProducts(syncedLinkedProducts as LinkedProductMapping[]),
+      ]);
       setLastSyncTime(Date.now());
     } catch (e) {
       if (!silent) {
@@ -171,12 +250,13 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
         setIsSyncing(false);
       }
     }
-  }, [currentUser, save]);
+  }, [currentUser, saveLinkedProducts, saveRecipes]);
 
 
 
   const value = useMemo(() => ({
     recipes,
+    linkedProducts,
     isLoading,
     isSyncing,
     lastSyncTime,
@@ -184,9 +264,12 @@ export function RecipeProvider({ children, currentUser, products }: { children: 
     batchAddOrUpdateRecipes,
     deleteRecipe,
     getRecipeFor,
+    addOrUpdateLinkedProduct,
+    deleteLinkedProduct,
+    getLinkedProductFor,
     computeConsumption,
     syncRecipes,
-  }), [recipes, isLoading, isSyncing, lastSyncTime, addOrUpdateRecipe, batchAddOrUpdateRecipes, deleteRecipe, getRecipeFor, computeConsumption, syncRecipes]);
+  }), [recipes, linkedProducts, isLoading, isSyncing, lastSyncTime, addOrUpdateRecipe, batchAddOrUpdateRecipes, deleteRecipe, getRecipeFor, addOrUpdateLinkedProduct, deleteLinkedProduct, getLinkedProductFor, computeConsumption, syncRecipes]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
