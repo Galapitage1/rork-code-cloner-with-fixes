@@ -82,6 +82,19 @@ export default function ProductTrackerScreen() {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [search, setSearch] = useState<string>('');
 
+  const applyStartDate = useCallback((date: Date) => {
+    const next = new Date(date);
+    next.setHours(0, 0, 0, 0);
+    setStartDate(next);
+    setEndDate((prev) => (next > prev ? endOfDay(next) : prev));
+  }, []);
+
+  const applyEndDate = useCallback((date: Date) => {
+    const next = endOfDay(date);
+    setEndDate(next);
+    setStartDate((prev) => (next < prev ? startOfDay(next) : prev));
+  }, []);
+
   const salesOutlets = useMemo(() => {
     return outlets.filter((o) => !o.deleted && o.outletType === 'sales');
   }, [outlets]);
@@ -453,42 +466,78 @@ export default function ProductTrackerScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.dateRangeContainer}>
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)}>
-                <Calendar size={16} color={Colors.light.tint} />
-                <Text style={styles.dateText}>{formatDate(startDate)}</Text>
-              </TouchableOpacity>
+            {Platform.OS === 'web' ? (
+              <View style={styles.dateRangeContainer}>
+                <View style={styles.webDateInputWrap}>
+                  <Calendar size={16} color={Colors.light.tint} />
+                  <input
+                    type="date"
+                    value={toIsoDate(startDate)}
+                    max={toIsoDate(endDate)}
+                    onChange={(e: any) => {
+                      const parsed = parseIsoDateInput(e?.target?.value);
+                      if (parsed) applyStartDate(parsed);
+                    }}
+                    style={styles.webDateInput as any}
+                  />
+                </View>
 
-              <Text style={styles.dateSeparator}>to</Text>
+                <Text style={styles.dateSeparator}>to</Text>
 
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)}>
-                <Calendar size={16} color={Colors.light.tint} />
-                <Text style={styles.dateText}>{formatDate(endDate)}</Text>
-              </TouchableOpacity>
-            </View>
+                <View style={styles.webDateInputWrap}>
+                  <Calendar size={16} color={Colors.light.tint} />
+                  <input
+                    type="date"
+                    value={toIsoDate(endDate)}
+                    min={toIsoDate(startDate)}
+                    onChange={(e: any) => {
+                      const parsed = parseIsoDateInput(e?.target?.value);
+                      if (parsed) applyEndDate(parsed);
+                    }}
+                    style={styles.webDateInput as any}
+                  />
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={styles.dateRangeContainer}>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)}>
+                    <Calendar size={16} color={Colors.light.tint} />
+                    <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+                  </TouchableOpacity>
 
-            {showStartPicker && (
-              <DateTimePicker
-                value={startDate}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, date) => {
-                  setShowStartPicker(Platform.OS === 'ios');
-                  if (date) setStartDate(date);
-                }}
-              />
-            )}
+                  <Text style={styles.dateSeparator}>to</Text>
 
-            {showEndPicker && (
-              <DateTimePicker
-                value={endDate}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, date) => {
-                  setShowEndPicker(Platform.OS === 'ios');
-                  if (date) setEndDate(date);
-                }}
-              />
+                  <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)}>
+                    <Calendar size={16} color={Colors.light.tint} />
+                    <Text style={styles.dateText}>{formatDate(endDate)}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {showStartPicker && (
+                  <DateTimePicker
+                    value={startDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, date) => {
+                      setShowStartPicker(Platform.OS === 'ios');
+                      if (date) applyStartDate(date);
+                    }}
+                  />
+                )}
+
+                {showEndPicker && (
+                  <DateTimePicker
+                    value={endDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, date) => {
+                      setShowEndPicker(Platform.OS === 'ios');
+                      if (date) applyEndDate(date);
+                    }}
+                  />
+                )}
+              </>
             )}
 
             <View style={styles.searchRow}>
@@ -623,12 +672,16 @@ function normalize(value: string | undefined | null): string {
 }
 
 function toIsoDate(date: Date): string {
-  return date.toISOString().split('T')[0];
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function timestampToIso(timestamp: number): string {
   if (!timestamp || !Number.isFinite(timestamp)) return '';
-  return new Date(timestamp).toISOString().split('T')[0];
+  return toIsoDate(new Date(timestamp));
 }
 
 function isIsoDateInRange(dateIso: string, startIso: string, endIso: string): boolean {
@@ -645,6 +698,26 @@ function formatQty(value: number): string {
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString('en-GB');
+}
+
+function parseIsoDateInput(value: string): Date | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [y, m, d] = value.split('-').map(Number);
+  const parsed = new Date(y, (m || 1) - 1, d || 1);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed;
+}
+
+function startOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
 }
 
 function getWeekStart(date: Date): Date {
@@ -773,6 +846,27 @@ const styles = StyleSheet.create({
   dateSeparator: {
     fontSize: 12,
     color: Colors.light.muted,
+  },
+  webDateInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  webDateInput: {
+    flex: 1,
+    border: 'none',
+    outlineStyle: 'none',
+    backgroundColor: 'transparent',
+    color: Colors.light.text,
+    fontSize: 13,
+    minWidth: 0,
   },
   searchRow: {
     flexDirection: 'row',
