@@ -1,20 +1,78 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Platform,
+  TextInput,
+} from 'react-native';
 import { Stack } from 'expo-router';
-import { Calendar, RefreshCw } from 'lucide-react-native';
-import Colors from '@/constants/colors';
-import { useProductTracker } from '@/contexts/ProductTrackerContext';
-import { useStock } from '@/contexts/StockContext';
-import { useAuth } from '@/contexts/AuthContext';
+import { Calendar, RefreshCw, Search } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import Colors from '@/constants/colors';
+import { useStock } from '@/contexts/StockContext';
+import { useStores } from '@/contexts/StoresContext';
+import { useProduction } from '@/contexts/ProductionContext';
+import { useRecipes } from '@/contexts/RecipeContext';
+import { Product, ProductConversion, Recipe, SalesReconciliationHistory } from '@/types';
 
 type ViewType = 'weekly' | 'monthly';
 
+type RawTrackerRow = {
+  rawProductId: string;
+  rawProductName: string;
+  unit: string;
+  isConvertedUnitGroup: boolean;
+  estimatedOpeningStores: number;
+  grnReceived: number;
+  totalAvailable: number;
+  currentStores: number;
+  issuedToProduction: number;
+  soldByRecipes: number;
+  discrepancy: number; // production issued - sales implied
+};
+
+type ConversionMeta = {
+  baseProductId: string;
+  factorToBase: number;
+  displayUnit: string;
+  displayName: string;
+  isConvertedUnitGroup: boolean;
+};
+
 export default function ProductTrackerScreen() {
-  const { trackerData, isLoading, isSyncing, refreshTrackerData } = useProductTracker();
-  const { outlets, syncAll } = useStock();
-  const { currentUser } = useAuth();
-  
+  const {
+    products,
+    productConversions,
+    reconcileHistory,
+    outlets,
+    syncAll: syncStock,
+    isLoading: isStockLoading,
+    isSyncing: isStockSyncing,
+  } = useStock();
+  const {
+    storeProducts,
+    grns,
+    syncAll: syncStores,
+    isLoading: isStoresLoading,
+    isSyncing: isStoresSyncing,
+  } = useStores();
+  const {
+    approvedProductions,
+    syncAll: syncProduction,
+    isLoading: isProductionLoading,
+    isSyncing: isProductionSyncing,
+  } = useProduction();
+  const {
+    recipes,
+    syncRecipes,
+    isLoading: isRecipesLoading,
+    isSyncing: isRecipesSyncing,
+  } = useRecipes();
   const [selectedOutlet, setSelectedOutlet] = useState<string>('ALL');
   const [viewType, setViewType] = useState<ViewType>('weekly');
   const [startDate, setStartDate] = useState<Date>(getWeekStart(new Date()));
@@ -22,294 +80,571 @@ export default function ProductTrackerScreen() {
   const [showStartPicker, setShowStartPicker] = useState<boolean>(false);
   const [showEndPicker, setShowEndPicker] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [search, setSearch] = useState<string>('');
 
-  const activeOutlets = useMemo(() => {
-    return outlets.filter(o => !o.deleted);
+  const salesOutlets = useMemo(() => {
+    return outlets.filter((o) => !o.deleted && o.outletType === 'sales');
   }, [outlets]);
 
   useEffect(() => {
     if (viewType === 'weekly') {
-      const weekStart = getWeekStart(new Date());
-      const weekEnd = getWeekEnd(new Date());
-      setStartDate(weekStart);
-      setEndDate(weekEnd);
-    } else {
-      const monthStart = getMonthStart(new Date());
-      const monthEnd = getMonthEnd(new Date());
-      setStartDate(monthStart);
-      setEndDate(monthEnd);
+      setStartDate(getWeekStart(new Date()));
+      setEndDate(getWeekEnd(new Date()));
+      return;
     }
+    setStartDate(getMonthStart(new Date()));
+    setEndDate(getMonthEnd(new Date()));
   }, [viewType]);
 
-  const loadData = useCallback(async () => {
-    const start = startDate.toISOString().split('T')[0];
-    const end = endDate.toISOString().split('T')[0];
-    console.log('ProductTracker: Loading data with userId:', currentUser?.id);
-    await refreshTrackerData(selectedOutlet, start, end, currentUser?.id);
-  }, [selectedOutlet, startDate, endDate, refreshTrackerData, currentUser]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await syncAll(true);
-      await loadData();
+      await Promise.all([
+        syncStock(true),
+        syncStores(true),
+        syncProduction(true),
+        syncRecipes(true),
+      ]);
     } catch (error) {
-      console.error('Error refreshing:', error);
+      console.error('ProductTracker(raw): refresh failed', error);
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [syncStock, syncStores, syncProduction, syncRecipes]);
 
-  const filteredData = useMemo(() => {
-    return trackerData.filter(d => {
-      const dataDate = new Date(d.date);
-      return dataDate >= startDate && dataDate <= endDate;
+  const isLoading = isStockLoading || isStoresLoading || isProductionLoading || isRecipesLoading;
+  const isSyncing = isStockSyncing || isStoresSyncing || isProductionSyncing || isRecipesSyncing || isRefreshing;
+
+  const trackerState = useMemo(() => {
+    const startIso = toIsoDate(startDate);
+    const endIso = toIsoDate(endDate);
+
+    const activeProducts = products.filter((p) => !p.deleted);
+    const rawProducts = activeProducts.filter((p) => p.type === 'raw');
+    const productsById = new Map(activeProducts.map((p) => [p.id, p] as const));
+
+    const conversionByFrom = new Map<string, ProductConversion>();
+    const conversionByTo = new Map<string, ProductConversion>();
+    productConversions
+      .filter((c) => !c.deleted)
+      .forEach((c) => {
+        conversionByFrom.set(c.fromProductId, c);
+        conversionByTo.set(c.toProductId, c);
+      });
+
+    const getConversionMeta = (productId: string): ConversionMeta | null => {
+      const product = productsById.get(productId);
+      if (!product) return null;
+
+      const asSlice = conversionByTo.get(productId);
+      if (asSlice && asSlice.conversionFactor > 0) {
+        const baseProduct = productsById.get(asSlice.fromProductId);
+        return {
+          baseProductId: asSlice.fromProductId,
+          factorToBase: 1 / asSlice.conversionFactor,
+          displayUnit: baseProduct?.unit || product.unit,
+          displayName: baseProduct?.name || product.name,
+          isConvertedUnitGroup: true,
+        };
+      }
+
+      const asWhole = conversionByFrom.get(productId);
+      if (asWhole) {
+        return {
+          baseProductId: productId,
+          factorToBase: 1,
+          displayUnit: product.unit,
+          displayName: product.name,
+          isConvertedUnitGroup: true,
+        };
+      }
+
+      return {
+        baseProductId: productId,
+        factorToBase: 1,
+        displayUnit: product.unit,
+        displayName: product.name,
+        isConvertedUnitGroup: false,
+      };
+    };
+
+    const toBaseQuantity = (productId: string, qty: number): { baseProductId: string; qty: number; meta: ConversionMeta } | null => {
+      if (!Number.isFinite(qty) || qty === 0) return null;
+      const meta = getConversionMeta(productId);
+      if (!meta) return null;
+      return {
+        baseProductId: meta.baseProductId,
+        qty: qty * meta.factorToBase,
+        meta,
+      };
+    };
+
+    const rawByExactNameUnit = new Map<string, Product>();
+    const rawByName = new Map<string, Product[]>();
+    rawProducts.forEach((p) => {
+      rawByExactNameUnit.set(`${normalize(p.name)}__${normalize(p.unit)}`, p);
+      const list = rawByName.get(normalize(p.name)) || [];
+      list.push(p);
+      rawByName.set(normalize(p.name), list);
     });
-  }, [trackerData, startDate, endDate]);
 
-  const aggregatedProducts = useMemo(() => {
-    const productMap = new Map<string, {
-      productId: string;
-      productName: string;
-      unit: string;
-      hasConversion: boolean;
-      openingWhole: number;
-      openingSlices: number;
-      receivedWhole: number;
-      receivedSlices: number;
-      wastageWhole: number;
-      wastageSlices: number;
-      soldWhole: number;
-      soldSlices: number;
-      currentWhole: number;
-      currentSlices: number;
-      discrepancyWhole: number;
-      discrepancySlices: number;
-    }>();
+    const storeProductsById = new Map(storeProducts.map((sp) => [sp.id, sp] as const));
 
-    filteredData.forEach(dayData => {
-      dayData.movements.forEach(movement => {
-        const existing = productMap.get(movement.productId);
-        if (existing) {
-          existing.receivedWhole += movement.receivedWhole;
-          existing.receivedSlices += movement.receivedSlices;
-          existing.wastageWhole += movement.wastageWhole;
-          existing.wastageSlices += movement.wastageSlices;
-          existing.soldWhole += movement.soldWhole;
-          existing.soldSlices += movement.soldSlices;
-          existing.discrepancyWhole += movement.discrepancyWhole;
-          existing.discrepancySlices += movement.discrepancySlices;
-          existing.currentWhole = movement.currentWhole;
-          existing.currentSlices = movement.currentSlices;
-        } else {
-          productMap.set(movement.productId, { ...movement });
-        }
+    const resolveRawProductForStoreProduct = (storeProductId: string): Product | null => {
+      const sp = storeProductsById.get(storeProductId);
+      if (!sp || sp.deleted) return null;
+
+      const exact = rawByExactNameUnit.get(`${normalize(sp.name)}__${normalize(sp.unit)}`);
+      if (exact) return exact;
+
+      const sameName = rawByName.get(normalize(sp.name)) || [];
+      if (sameName.length === 1) return sameName[0];
+
+      return null;
+    };
+
+    const addToMetric = (
+      map: Map<string, number>,
+      productId: string,
+      qty: number,
+      rowMeta: Map<string, ConversionMeta>
+    ) => {
+      const normalized = toBaseQuantity(productId, qty);
+      if (!normalized) return;
+      map.set(normalized.baseProductId, (map.get(normalized.baseProductId) || 0) + normalized.qty);
+      if (!rowMeta.has(normalized.baseProductId)) {
+        rowMeta.set(normalized.baseProductId, normalized.meta);
+      }
+    };
+
+    const rowMeta = new Map<string, ConversionMeta>();
+    const currentStoresByRaw = new Map<string, number>();
+    const grnReceivedByRaw = new Map<string, number>();
+    const issuedToProductionByRaw = new Map<string, number>();
+    const soldByRecipesByRaw = new Map<string, number>();
+
+    let unmatchedStoreMappings = 0;
+    let salesFallbackCount = 0;
+
+    // Current store totals (live quantity in stores)
+    storeProducts.forEach((sp) => {
+      if (sp.deleted) return;
+      const raw = resolveRawProductForStoreProduct(sp.id);
+      if (!raw) {
+        unmatchedStoreMappings++;
+        return;
+      }
+      addToMetric(currentStoresByRaw, raw.id, sp.quantity || 0, rowMeta);
+    });
+
+    // GRN received within selected range (by GRN entry date)
+    grns.forEach((grn) => {
+      if (grn.deleted) return;
+      const grnDate = timestampToIso(grn.createdAt || grn.updatedAt || 0);
+      if (!isIsoDateInRange(grnDate, startIso, endIso)) return;
+
+      (grn.items || []).forEach((item) => {
+        const raw = resolveRawProductForStoreProduct(item.storeProductId);
+        if (!raw) return;
+        addToMetric(grnReceivedByRaw, raw.id, item.quantity || 0, rowMeta);
       });
     });
 
-    return Array.from(productMap.values()).sort((a, b) => 
-      a.productName.localeCompare(b.productName)
+    // Raw issued to production (approved productions in selected range)
+    approvedProductions.forEach((approval) => {
+      if ((approval as any).deleted) return;
+      const approvalDate = approval.approvalDate || approval.date;
+      if (!isIsoDateInRange(approvalDate, startIso, endIso)) return;
+
+      (approval.items || []).forEach((approvedItem) => {
+        (approvedItem.ingredients || []).forEach((ingredient) => {
+          addToMetric(issuedToProductionByRaw, ingredient.rawProductId, ingredient.quantity || 0, rowMeta);
+        });
+      });
+    });
+
+    // Sales-implied raw usage from reconciliation history (prefer stored rawConsumption)
+    const recipeByMenuId = new Map<string, Recipe>();
+    recipes.forEach((r) => recipeByMenuId.set(r.menuProductId, r));
+
+    const addFallbackSalesConsumption = (history: SalesReconciliationHistory) => {
+      salesFallbackCount++;
+      (history.salesData || []).forEach((sale) => {
+        if (!sale.productId || !Number.isFinite(sale.sold) || sale.sold <= 0) return;
+        const soldProduct = productsById.get(sale.productId);
+        if (!soldProduct || soldProduct.deleted || soldProduct.type !== 'menu') return;
+        const recipe = recipeByMenuId.get(sale.productId);
+        if (!recipe) return;
+        recipe.components.forEach((component) => {
+          addToMetric(soldByRecipesByRaw, component.rawProductId, (sale.sold || 0) * (component.quantityPerUnit || 0), rowMeta);
+        });
+      });
+    };
+
+    reconcileHistory.forEach((history) => {
+      if (history.deleted) return;
+      if (!isIsoDateInRange(history.date, startIso, endIso)) return;
+      if (selectedOutlet !== 'ALL' && (history.outlet || '').toLowerCase() !== selectedOutlet.toLowerCase()) return;
+
+      if (history.rawConsumption && history.rawConsumption.length > 0) {
+        history.rawConsumption.forEach((raw) => {
+          addToMetric(soldByRecipesByRaw, raw.rawProductId, raw.consumed || 0, rowMeta);
+        });
+      } else {
+        addFallbackSalesConsumption(history);
+      }
+    });
+
+    // Seed rows with known raw products so names/units remain stable.
+    rawProducts.forEach((raw) => {
+      const meta = getConversionMeta(raw.id);
+      if (meta && !rowMeta.has(meta.baseProductId)) {
+        rowMeta.set(meta.baseProductId, meta);
+      }
+    });
+
+    const allBaseIds = new Set<string>([
+      ...Array.from(rowMeta.keys()),
+      ...Array.from(currentStoresByRaw.keys()),
+      ...Array.from(grnReceivedByRaw.keys()),
+      ...Array.from(issuedToProductionByRaw.keys()),
+      ...Array.from(soldByRecipesByRaw.keys()),
+    ]);
+
+    const rows: RawTrackerRow[] = Array.from(allBaseIds).map((baseId) => {
+      const meta = rowMeta.get(baseId);
+      const baseProduct = productsById.get(baseId);
+
+      const currentStores = round3(currentStoresByRaw.get(baseId) || 0);
+      const grnReceived = round3(grnReceivedByRaw.get(baseId) || 0);
+      const issuedToProduction = round3(issuedToProductionByRaw.get(baseId) || 0);
+      const soldByRecipes = round3(soldByRecipesByRaw.get(baseId) || 0);
+      const estimatedOpeningStores = round3(currentStores + issuedToProduction - grnReceived);
+      const totalAvailable = round3(estimatedOpeningStores + grnReceived);
+      const discrepancy = round3(issuedToProduction - soldByRecipes);
+
+      return {
+        rawProductId: baseId,
+        rawProductName: meta?.displayName || baseProduct?.name || 'Unknown Raw Material',
+        unit: meta?.displayUnit || baseProduct?.unit || '',
+        isConvertedUnitGroup: !!meta?.isConvertedUnitGroup,
+        estimatedOpeningStores,
+        grnReceived,
+        totalAvailable,
+        currentStores,
+        issuedToProduction,
+        soldByRecipes,
+        discrepancy,
+      };
+    });
+
+    const filteredRows = rows
+      .filter((row) => {
+        const hasAnyData =
+          row.estimatedOpeningStores !== 0 ||
+          row.grnReceived !== 0 ||
+          row.currentStores !== 0 ||
+          row.issuedToProduction !== 0 ||
+          row.soldByRecipes !== 0;
+        if (!hasAnyData) return false;
+        if (!search.trim()) return true;
+        return row.rawProductName.toLowerCase().includes(search.trim().toLowerCase());
+      })
+      .sort((a, b) => {
+        const absDiff = Math.abs(b.discrepancy) - Math.abs(a.discrepancy);
+        if (absDiff !== 0) return absDiff;
+        return a.rawProductName.localeCompare(b.rawProductName);
+      });
+
+    const totals = filteredRows.reduce(
+      (acc, row) => {
+        acc.opening += row.estimatedOpeningStores;
+        acc.received += row.grnReceived;
+        acc.totalAvailable += row.totalAvailable;
+        acc.current += row.currentStores;
+        acc.issued += row.issuedToProduction;
+        acc.sold += row.soldByRecipes;
+        acc.discrepancy += row.discrepancy;
+        return acc;
+      },
+      { opening: 0, received: 0, totalAvailable: 0, current: 0, issued: 0, sold: 0, discrepancy: 0 }
     );
-  }, [filteredData]);
+
+    return {
+      rows: filteredRows,
+      totals: {
+        opening: round3(totals.opening),
+        received: round3(totals.received),
+        totalAvailable: round3(totals.totalAvailable),
+        current: round3(totals.current),
+        issued: round3(totals.issued),
+        sold: round3(totals.sold),
+        discrepancy: round3(totals.discrepancy),
+      },
+      meta: {
+        unmatchedStoreMappings,
+        salesFallbackCount,
+        startIso,
+        endIso,
+      },
+    };
+  }, [
+    startDate,
+    endDate,
+    products,
+    productConversions,
+    storeProducts,
+    grns,
+    approvedProductions,
+    reconcileHistory,
+    recipes,
+    selectedOutlet,
+    search,
+  ]);
 
   return (
     <>
-      <Stack.Screen options={{ 
-        headerShown: true,
-        title: 'Product Tracker'
-      }} />
+      <Stack.Screen options={{ headerShown: true, title: 'Product Tracker' }} />
       <View style={styles.container}>
-        <View style={styles.filtersContainer}>
-          <View style={styles.outletSwitcher}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <TouchableOpacity
-                style={[styles.outletButton, selectedOutlet === 'ALL' && styles.outletButtonActive]}
-                onPress={() => setSelectedOutlet('ALL')}
-              >
-                <Text style={[styles.outletButtonText, selectedOutlet === 'ALL' && styles.outletButtonTextActive]}>
-                  ALL
-                </Text>
-              </TouchableOpacity>
-              {activeOutlets.map(outlet => (
-                <TouchableOpacity
-                  key={outlet.id}
-                  style={[styles.outletButton, selectedOutlet === outlet.name && styles.outletButtonActive]}
-                  onPress={() => setSelectedOutlet(outlet.name)}
-                >
-                  <Text style={[styles.outletButtonText, selectedOutlet === outlet.name && styles.outletButtonTextActive]}>
-                    {outlet.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          <View style={styles.viewTypeContainer}>
-            <TouchableOpacity
-              style={[styles.viewTypeButton, viewType === 'weekly' && styles.viewTypeButtonActive]}
-              onPress={() => setViewType('weekly')}
-            >
-              <Text style={[styles.viewTypeText, viewType === 'weekly' && styles.viewTypeTextActive]}>Weekly</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.viewTypeButton, viewType === 'monthly' && styles.viewTypeButtonActive]}
-              onPress={() => setViewType('monthly')}
-            >
-              <Text style={[styles.viewTypeText, viewType === 'monthly' && styles.viewTypeTextActive]}>Monthly</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.dateRangeContainer}>
-            <TouchableOpacity 
-              style={styles.dateButton}
-              onPress={() => setShowStartPicker(true)}
-            >
-              <Calendar size={16} color={Colors.light.tint} />
-              <Text style={styles.dateText}>{formatDate(startDate)}</Text>
-            </TouchableOpacity>
-            
-            <Text style={styles.dateSeparator}>to</Text>
-            
-            <TouchableOpacity 
-              style={styles.dateButton}
-              onPress={() => setShowEndPicker(true)}
-            >
-              <Calendar size={16} color={Colors.light.tint} />
-              <Text style={styles.dateText}>{formatDate(endDate)}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {showStartPicker && (
-            <DateTimePicker
-              value={startDate}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(event, date) => {
-                setShowStartPicker(Platform.OS === 'ios');
-                if (date) setStartDate(date);
-              }}
-            />
-          )}
-
-          {showEndPicker && (
-            <DateTimePicker
-              value={endDate}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(event, date) => {
-                setShowEndPicker(Platform.OS === 'ios');
-                if (date) setEndDate(date);
-              }}
-            />
-          )}
-
-          <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={handleRefresh}
-            disabled={isSyncing || isRefreshing}
-          >
-            <RefreshCw size={20} color="#fff" />
-            <Text style={styles.refreshButtonText}>
-              {isSyncing || isRefreshing ? 'Syncing...' : 'Refresh Data'}
+        <ScrollView
+          style={styles.content}
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
+        >
+          <View style={styles.filtersContainer}>
+            <Text style={styles.sectionTitle}>Raw Material Tracker</Text>
+            <Text style={styles.sectionSubtitle}>
+              GRN received + store totals + approved production usage vs sales-based recipe consumption.
             </Text>
-          </TouchableOpacity>
-        </View>
 
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={Colors.light.tint} />
-            <Text style={styles.loadingText}>Loading tracker data...</Text>
-          </View>
-        ) : (
-          <ScrollView 
-            style={styles.tableContainer}
-            horizontal
-            refreshControl={
-              <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
-            }
-          >
-            <View>
-              <View style={styles.tableHeader}>
-                <Text style={[styles.headerCell, styles.productNameCell]}>Product</Text>
-                <Text style={styles.headerCell}>Opening{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Opening{'\n'}Slices</Text>
-                <Text style={styles.headerCell}>Received{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Received{'\n'}Slices</Text>
-                <Text style={styles.headerCell}>Wastage{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Wastage{'\n'}Slices</Text>
-                <Text style={styles.headerCell}>Sold{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Sold{'\n'}Slices</Text>
-                <Text style={styles.headerCell}>Current{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Current{'\n'}Slices</Text>
-                <Text style={styles.headerCell}>Discrepancy{'\n'}Whole</Text>
-                <Text style={styles.headerCell}>Discrepancy{'\n'}Slices</Text>
-              </View>
-
-              <ScrollView style={styles.tableBody}>
-                {aggregatedProducts.length === 0 ? (
-                  <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No data available for selected date range</Text>
-                  </View>
-                ) : (
-                  aggregatedProducts.map((product, index) => (
-                    <View 
-                      key={product.productId} 
-                      style={[
-                        styles.tableRow,
-                        index % 2 === 0 && styles.tableRowEven
-                      ]}
-                    >
-                      <View style={[styles.cell, styles.productNameCell]}>
-                        <Text style={styles.productName}>{product.productName}</Text>
-                        <Text style={styles.productUnit}>{product.unit}</Text>
-                      </View>
-                      <Text style={styles.cell}>{product.openingWhole}</Text>
-                      <Text style={[styles.cell, !product.hasConversion && styles.cellDisabled]}>
-                        {product.hasConversion ? product.openingSlices : '-'}
-                      </Text>
-                      <Text style={styles.cell}>{product.receivedWhole}</Text>
-                      <Text style={[styles.cell, !product.hasConversion && styles.cellDisabled]}>
-                        {product.hasConversion ? product.receivedSlices : '-'}
-                      </Text>
-                      <Text style={styles.cell}>{product.wastageWhole}</Text>
-                      <Text style={[styles.cell, !product.hasConversion && styles.cellDisabled]}>
-                        {product.hasConversion ? product.wastageSlices : '-'}
-                      </Text>
-                      <Text style={styles.cell}>{product.soldWhole}</Text>
-                      <Text style={[styles.cell, !product.hasConversion && styles.cellDisabled]}>
-                        {product.hasConversion ? product.soldSlices : '-'}
-                      </Text>
-                      <Text style={styles.cell}>{product.currentWhole}</Text>
-                      <Text style={[styles.cell, !product.hasConversion && styles.cellDisabled]}>
-                        {product.hasConversion ? product.currentSlices : '-'}
-                      </Text>
-                      <Text style={[
-                        styles.cell,
-                        product.discrepancyWhole !== 0 && styles.discrepancyCell
-                      ]}>
-                        {product.discrepancyWhole}
-                      </Text>
-                      <Text style={[
-                        styles.cell,
-                        !product.hasConversion && styles.cellDisabled,
-                        product.hasConversion && product.discrepancySlices !== 0 && styles.discrepancyCell
-                      ]}>
-                        {product.hasConversion ? product.discrepancySlices : '-'}
-                      </Text>
-                    </View>
-                  ))
-                )}
+            <View style={styles.outletSwitcher}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <TouchableOpacity
+                  style={[styles.outletButton, selectedOutlet === 'ALL' && styles.outletButtonActive]}
+                  onPress={() => setSelectedOutlet('ALL')}
+                >
+                  <Text style={[styles.outletButtonText, selectedOutlet === 'ALL' && styles.outletButtonTextActive]}>ALL SALES</Text>
+                </TouchableOpacity>
+                {salesOutlets.map((outlet) => (
+                  <TouchableOpacity
+                    key={outlet.id}
+                    style={[styles.outletButton, selectedOutlet === outlet.name && styles.outletButtonActive]}
+                    onPress={() => setSelectedOutlet(outlet.name)}
+                  >
+                    <Text style={[styles.outletButtonText, selectedOutlet === outlet.name && styles.outletButtonTextActive]}>
+                      {outlet.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </ScrollView>
             </View>
-          </ScrollView>
-        )}
+
+            <View style={styles.viewTypeContainer}>
+              <TouchableOpacity
+                style={[styles.viewTypeButton, viewType === 'weekly' && styles.viewTypeButtonActive]}
+                onPress={() => setViewType('weekly')}
+              >
+                <Text style={[styles.viewTypeText, viewType === 'weekly' && styles.viewTypeTextActive]}>Weekly</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.viewTypeButton, viewType === 'monthly' && styles.viewTypeButtonActive]}
+                onPress={() => setViewType('monthly')}
+              >
+                <Text style={[styles.viewTypeText, viewType === 'monthly' && styles.viewTypeTextActive]}>Monthly</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.dateRangeContainer}>
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)}>
+                <Calendar size={16} color={Colors.light.tint} />
+                <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.dateSeparator}>to</Text>
+
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)}>
+                <Calendar size={16} color={Colors.light.tint} />
+                <Text style={styles.dateText}>{formatDate(endDate)}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {showStartPicker && (
+              <DateTimePicker
+                value={startDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_, date) => {
+                  setShowStartPicker(Platform.OS === 'ios');
+                  if (date) setStartDate(date);
+                }}
+              />
+            )}
+
+            {showEndPicker && (
+              <DateTimePicker
+                value={endDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_, date) => {
+                  setShowEndPicker(Platform.OS === 'ios');
+                  if (date) setEndDate(date);
+                }}
+              />
+            )}
+
+            <View style={styles.searchRow}>
+              <Search size={16} color={Colors.light.muted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search raw material..."
+                placeholderTextColor={Colors.light.muted}
+                value={search}
+                onChangeText={setSearch}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[styles.refreshButton, isSyncing && styles.refreshButtonDisabled]}
+              onPress={handleRefresh}
+              disabled={isSyncing}
+            >
+              <RefreshCw size={18} color="#fff" />
+              <Text style={styles.refreshButtonText}>{isSyncing ? 'Syncing...' : 'Refresh Data'}</Text>
+            </TouchableOpacity>
+
+            <View style={styles.infoCard}>
+              <Text style={styles.infoText}>
+                Date range: {trackerState.meta.startIso} to {trackerState.meta.endIso}
+              </Text>
+              {selectedOutlet !== 'ALL' && (
+                <Text style={styles.infoText}>
+                  Note: Sales is filtered by outlet, but GRN / Stores / Production are global (no outlet is stored for those records).
+                </Text>
+              )}
+              {trackerState.meta.salesFallbackCount > 0 && (
+                <Text style={styles.infoText}>
+                  {trackerState.meta.salesFallbackCount} reconciliation record(s) had no saved raw consumption, so sales usage was recalculated from recipe + sales data.
+                </Text>
+              )}
+              {trackerState.meta.unmatchedStoreMappings > 0 && (
+                <Text style={styles.warningText}>
+                  {trackerState.meta.unmatchedStoreMappings} store item(s) could not be matched to a raw product (name/unit mismatch), so they were excluded.
+                </Text>
+              )}
+            </View>
+
+            <View style={styles.summaryGrid}>
+              <SummaryCard label="GRN Received" value={trackerState.totals.received} />
+              <SummaryCard label="Current Stores" value={trackerState.totals.current} />
+              <SummaryCard label="Issued Prod." value={trackerState.totals.issued} />
+              <SummaryCard label="Sold (Recipes)" value={trackerState.totals.sold} />
+              <SummaryCard
+                label="Variance"
+                value={trackerState.totals.discrepancy}
+                highlight={trackerState.totals.discrepancy !== 0}
+              />
+            </View>
+          </View>
+
+          {isLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={Colors.light.tint} />
+              <Text style={styles.loadingText}>Loading raw material tracker...</Text>
+            </View>
+          ) : (
+            <ScrollView horizontal style={styles.tableContainer}>
+              <View>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.headerCell, styles.nameCell]}>Raw Material</Text>
+                  <Text style={styles.headerCell}>Unit</Text>
+                  <Text style={styles.headerCell}>Opening{'\n'}Stores (Est)</Text>
+                  <Text style={styles.headerCell}>GRN{'\n'}Received</Text>
+                  <Text style={styles.headerCell}>Total{'\n'}Available</Text>
+                  <Text style={styles.headerCell}>Current{'\n'}Stores</Text>
+                  <Text style={styles.headerCell}>Issued to{'\n'}Production</Text>
+                  <Text style={styles.headerCell}>Sold by{'\n'}Recipes</Text>
+                  <Text style={styles.headerCell}>Discrepancy{'\n'}(Prod-Sales)</Text>
+                </View>
+
+                {trackerState.rows.length === 0 ? (
+                  <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>No raw material data found for the selected range.</Text>
+                  </View>
+                ) : (
+                  <ScrollView style={styles.tableBody}>
+                    {trackerState.rows.map((row, index) => (
+                      <View key={row.rawProductId} style={[styles.tableRow, index % 2 === 0 && styles.tableRowEven]}>
+                        <View style={[styles.cell, styles.nameCell]}>
+                          <Text style={styles.productName}>{row.rawProductName}</Text>
+                          {row.isConvertedUnitGroup && <Text style={styles.metaText}>Unit-converted group</Text>}
+                        </View>
+                        <Text style={styles.cell}>{row.unit || '-'}</Text>
+                        <Text style={styles.cell}>{formatQty(row.estimatedOpeningStores)}</Text>
+                        <Text style={styles.cell}>{formatQty(row.grnReceived)}</Text>
+                        <Text style={styles.cell}>{formatQty(row.totalAvailable)}</Text>
+                        <Text style={styles.cell}>{formatQty(row.currentStores)}</Text>
+                        <Text style={styles.cell}>{formatQty(row.issuedToProduction)}</Text>
+                        <Text style={styles.cell}>{formatQty(row.soldByRecipes)}</Text>
+                        <Text
+                          style={[
+                            styles.cell,
+                            row.discrepancy !== 0 && (row.discrepancy > 0 ? styles.positiveCell : styles.negativeCell),
+                          ]}
+                        >
+                          {formatQty(row.discrepancy)}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                )}
+              </View>
+            </ScrollView>
+          )}
+        </ScrollView>
       </View>
     </>
   );
+}
+
+function SummaryCard({ label, value, highlight = false }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <View style={[styles.summaryCard, highlight && styles.summaryCardHighlight]}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={[styles.summaryValue, highlight && styles.summaryValueHighlight]}>{formatQty(value)}</Text>
+    </View>
+  );
+}
+
+function round3(value: number): number {
+  return Number((value || 0).toFixed(3));
+}
+
+function normalize(value: string | undefined | null): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function toIsoDate(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
+
+function timestampToIso(timestamp: number): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return '';
+  return new Date(timestamp).toISOString().split('T')[0];
+}
+
+function isIsoDateInRange(dateIso: string, startIso: string, endIso: string): boolean {
+  if (!dateIso) return false;
+  return dateIso >= startIso && dateIso <= endIso;
+}
+
+function formatQty(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  if (Math.abs(value) < 0.0005) return '0';
+  const rounded = round3(value);
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-GB');
 }
 
 function getWeekStart(date: Date): Date {
@@ -322,204 +657,294 @@ function getWeekStart(date: Date): Date {
 }
 
 function getWeekEnd(date: Date): Date {
-  const start = getWeekStart(date);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
-  return end;
+  const d = getWeekStart(date);
+  d.setDate(d.getDate() + 6);
+  d.setHours(23, 59, 59, 999);
+  return d;
 }
 
 function getMonthStart(date: Date): Date {
-  const d = new Date(date);
-  d.setDate(1);
+  const d = new Date(date.getFullYear(), date.getMonth(), 1);
   d.setHours(0, 0, 0, 0);
   return d;
 }
 
 function getMonthEnd(date: Date): Date {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + 1);
-  d.setDate(0);
+  const d = new Date(date.getFullYear(), date.getMonth() + 1, 0);
   d.setHours(23, 59, 59, 999);
   return d;
-}
-
-function formatDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Colors.light.background,
+  },
+  content: {
+    flex: 1,
   },
   filtersContainer: {
-    backgroundColor: '#fff',
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
+    gap: 12,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: Colors.light.muted,
+    lineHeight: 18,
   },
   outletSwitcher: {
-    marginBottom: 12,
+    marginTop: 4,
   },
   outletButton: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.card,
     marginRight: 8,
   },
   outletButtonActive: {
     backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
   },
   outletButtonText: {
-    fontSize: 14,
-    fontWeight: '600' as const,
-    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.light.text,
   },
   outletButtonTextActive: {
     color: '#fff',
   },
   viewTypeContainer: {
-    flexDirection: 'row' as const,
-    marginBottom: 12,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
+    flexDirection: 'row',
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
     padding: 4,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
   viewTypeButton: {
     flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center' as const,
-    borderRadius: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
   },
   viewTypeButtonActive: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.tint,
   },
   viewTypeText: {
     fontSize: 14,
-    fontWeight: '600' as const,
-    color: '#666',
+    fontWeight: '600',
+    color: Colors.light.text,
   },
   viewTypeTextActive: {
-    color: Colors.light.tint,
+    color: '#fff',
   },
   dateRangeContainer: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
   },
   dateButton: {
     flex: 1,
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
   dateText: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500' as const,
+    fontSize: 13,
+    color: Colors.light.text,
+    fontWeight: '500',
   },
   dateSeparator: {
+    fontSize: 12,
+    color: Colors.light.muted,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+  },
+  searchInput: {
+    flex: 1,
+    color: Colors.light.text,
     fontSize: 14,
-    color: '#666',
+    paddingVertical: 10,
   },
   refreshButton: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-    padding: 12,
     backgroundColor: Colors.light.tint,
-    borderRadius: 8,
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  refreshButtonDisabled: {
+    opacity: 0.7,
   },
   refreshButtonText: {
     color: '#fff',
+    fontWeight: '700',
     fontSize: 14,
-    fontWeight: '600' as const,
+  },
+  infoCard: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 12,
+    gap: 6,
+  },
+  infoText: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    lineHeight: 16,
+  },
+  warningText: {
+    fontSize: 12,
+    color: Colors.light.warning || '#B45309',
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  summaryCard: {
+    minWidth: 130,
+    flexGrow: 1,
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 10,
+  },
+  summaryCardHighlight: {
+    borderColor: Colors.light.tint,
+  },
+  summaryLabel: {
+    fontSize: 11,
+    color: Colors.light.muted,
+    marginBottom: 4,
+  },
+  summaryValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  summaryValueHighlight: {
+    color: Colors.light.tint,
   },
   loadingContainer: {
-    flex: 1,
-    justifyContent: 'center' as const,
-    alignItems: 'center' as const,
-    gap: 16,
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
   },
   loadingText: {
-    fontSize: 16,
-    color: '#666',
+    color: Colors.light.muted,
+    fontSize: 14,
   },
   tableContainer: {
-    flex: 1,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: Colors.light.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
   },
   tableHeader: {
-    flexDirection: 'row' as const,
+    flexDirection: 'row',
     backgroundColor: Colors.light.tint,
-    paddingVertical: 12,
-    borderBottomWidth: 2,
-    borderBottomColor: '#ddd',
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
   },
   headerCell: {
-    width: 100,
+    width: 110,
+    paddingVertical: 12,
     paddingHorizontal: 8,
-    fontSize: 12,
-    fontWeight: '700' as const,
     color: '#fff',
-    textAlign: 'center' as const,
-  },
-  productNameCell: {
-    width: 180,
-    textAlign: 'left' as const,
+    fontWeight: '700',
+    fontSize: 12,
+    textAlign: 'center',
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(255,255,255,0.2)',
   },
   tableBody: {
-    flex: 1,
+    maxHeight: 520,
   },
   tableRow: {
-    flexDirection: 'row' as const,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    paddingVertical: 12,
-    backgroundColor: '#fff',
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
   },
   tableRowEven: {
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#FAFBFC',
   },
   cell: {
-    width: 100,
+    width: 110,
+    paddingVertical: 10,
     paddingHorizontal: 8,
-    fontSize: 14,
-    color: '#333',
-    textAlign: 'center' as const,
+    fontSize: 12,
+    color: Colors.light.text,
+    textAlign: 'center',
+    borderRightWidth: 1,
+    borderRightColor: Colors.light.border,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  cellDisabled: {
-    color: '#ccc',
-  },
-  discrepancyCell: {
-    color: '#ff3b30',
-    fontWeight: '700' as const,
+  nameCell: {
+    width: 220,
+    alignItems: 'flex-start',
+    textAlign: 'left',
   },
   productName: {
-    fontSize: 14,
-    fontWeight: '600' as const,
-    color: '#333',
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.text,
   },
-  productUnit: {
-    fontSize: 12,
-    color: '#666',
+  metaText: {
+    fontSize: 10,
+    color: Colors.light.muted,
     marginTop: 2,
   },
+  positiveCell: {
+    color: '#B91C1C',
+    fontWeight: '700',
+  },
+  negativeCell: {
+    color: '#047857',
+    fontWeight: '700',
+  },
   emptyContainer: {
-    padding: 32,
-    alignItems: 'center' as const,
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyText: {
-    fontSize: 16,
-    color: '#999',
+    color: Colors.light.muted,
+    fontSize: 14,
   },
 });
