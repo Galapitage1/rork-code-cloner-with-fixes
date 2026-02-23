@@ -139,55 +139,39 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
       return { suppliers, errors };
     }
 
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-    
-    if (jsonData.length < 2) {
-      errors.push('No data rows found in Excel file');
-      return { suppliers, errors };
-    }
+    const seenKeys = new Set<string>();
+    const sheetErrors: string[] = [];
 
-    const headers = jsonData[0].map((h: any) => String(h ?? '').toLowerCase().trim());
-    const nameIndex = headers.findIndex((h: string) => h.includes('supplier') && h.includes('name') || h === 'name');
-    const addressIndex = headers.findIndex((h: string) => h.includes('address'));
-    const phoneIndex = headers.findIndex((h: string) => h.includes('phone') && !h.includes('contact') && !h.includes('person'));
-    const emailIndex = headers.findIndex((h: string) => h.includes('email') && !h.includes('contact') && !h.includes('person'));
-    const contactPersonIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person'));
-    const contactPersonPhoneIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person') && h.includes('phone'));
-    const contactPersonEmailIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person') && h.includes('email'));
-    const vatNumberIndex = headers.findIndex((h: string) => h.includes('vat'));
-    const notesIndex = headers.findIndex((h: string) => h.includes('notes'));
+    for (const sheetName of workbook.SheetNames) {
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+      if (!jsonData || jsonData.length === 0) {
+        sheetErrors.push(`Sheet "${sheetName}" has no rows`);
+        continue;
+      }
 
-    if (nameIndex !== -1) {
-      for (let i = 1; i < jsonData.length; i++) {
-        const row = jsonData[i];
-        const name = row[nameIndex];
-        
-        if (!name || String(name).trim() === '') continue;
+      const parsed = parseSuppliersFromRows(jsonData);
+      if (parsed.suppliers.length === 0) {
+        if (parsed.errors.length > 0) {
+          sheetErrors.push(`Sheet "${sheetName}": ${parsed.errors.join(' | ')}`);
+        }
+        continue;
+      }
 
-        const supplier = {
-          name: String(name).trim(),
-          address: addressIndex !== -1 && row[addressIndex] ? String(row[addressIndex]).trim() : undefined,
-          phone: phoneIndex !== -1 && row[phoneIndex] ? String(row[phoneIndex]).trim() : undefined,
-          email: emailIndex !== -1 && row[emailIndex] ? String(row[emailIndex]).trim() : undefined,
-          contactPerson: contactPersonIndex !== -1 && row[contactPersonIndex] ? String(row[contactPersonIndex]).trim() : undefined,
-          contactPersonPhone: contactPersonPhoneIndex !== -1 && row[contactPersonPhoneIndex] ? String(row[contactPersonPhoneIndex]).trim() : undefined,
-          contactPersonEmail: contactPersonEmailIndex !== -1 && row[contactPersonEmailIndex] ? String(row[contactPersonEmailIndex]).trim() : undefined,
-          vatNumber: vatNumberIndex !== -1 && row[vatNumberIndex] ? String(row[vatNumberIndex]).trim() : undefined,
-          notes: notesIndex !== -1 && row[notesIndex] ? String(row[notesIndex]).trim() : undefined,
-        };
-
+      for (const supplier of parsed.suppliers) {
+        const key = `${String(supplier.name || '').trim().toLowerCase()}__${String(supplier.address || '').trim().toLowerCase()}`;
+        if (!supplier.name || seenKeys.has(key)) continue;
+        seenKeys.add(key);
         suppliers.push(supplier);
       }
-    } else {
-      const kvParsed = parseSuppliersLabelRowsFormat(jsonData);
-      suppliers.push(...kvParsed.suppliers);
-      errors.push(...kvParsed.errors);
     }
 
     if (suppliers.length === 0) {
-      errors.push('No valid suppliers found in Excel file');
+      errors.push(
+        sheetErrors.length > 0
+          ? `${sheetErrors.join('\n')}\nNo valid suppliers found in Excel file`
+          : 'No valid suppliers found in Excel file'
+      );
     }
 
   } catch (error) {
@@ -195,6 +179,54 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
   }
 
   return { suppliers, errors };
+}
+
+function parseSuppliersFromRows(rows: any[][]): ParsedSuppliersData {
+  const errors: string[] = [];
+  const suppliers: Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
+
+  if (rows.length < 1) {
+    errors.push('No data rows found in Excel file');
+    return { suppliers, errors };
+  }
+
+  const headerRow = rows[0] || [];
+  const headers = headerRow.map((h: any) => String(h ?? '').toLowerCase().trim());
+  const nameIndex = headers.findIndex((h: string) => (h.includes('supplier') && h.includes('name')) || h === 'name');
+  const addressIndex = headers.findIndex((h: string) => h.includes('address'));
+  const phoneIndex = headers.findIndex((h: string) => h.includes('phone') && !h.includes('contact') && !h.includes('person'));
+  const emailIndex = headers.findIndex((h: string) => h.includes('email') && !h.includes('contact') && !h.includes('person'));
+  const contactPersonIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person') && !h.includes('phone') && !h.includes('email'));
+  const contactPersonPhoneIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person') && h.includes('phone'));
+  const contactPersonEmailIndex = headers.findIndex((h: string) => h.includes('contact') && h.includes('person') && h.includes('email'));
+  const vatNumberIndex = headers.findIndex((h: string) => h.includes('vat'));
+  const notesIndex = headers.findIndex((h: string) => h.includes('notes'));
+
+  if (nameIndex !== -1) {
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const name = row[nameIndex];
+      if (!name || String(name).trim() === '') continue;
+
+      suppliers.push({
+        name: String(name).trim(),
+        address: addressIndex !== -1 && row[addressIndex] ? String(row[addressIndex]).trim() : undefined,
+        phone: phoneIndex !== -1 && row[phoneIndex] ? String(row[phoneIndex]).trim() : undefined,
+        email: emailIndex !== -1 && row[emailIndex] ? String(row[emailIndex]).trim() : undefined,
+        contactPerson: contactPersonIndex !== -1 && row[contactPersonIndex] ? String(row[contactPersonIndex]).trim() : undefined,
+        contactPersonPhone: contactPersonPhoneIndex !== -1 && row[contactPersonPhoneIndex] ? String(row[contactPersonPhoneIndex]).trim() : undefined,
+        contactPersonEmail: contactPersonEmailIndex !== -1 && row[contactPersonEmailIndex] ? String(row[contactPersonEmailIndex]).trim() : undefined,
+        vatNumber: vatNumberIndex !== -1 && row[vatNumberIndex] ? String(row[vatNumberIndex]).trim() : undefined,
+        notes: notesIndex !== -1 && row[notesIndex] ? String(row[notesIndex]).trim() : undefined,
+      });
+    }
+    if (suppliers.length === 0) {
+      errors.push('Supplier name column found, but no valid supplier rows were parsed');
+    }
+    return { suppliers, errors };
+  }
+
+  return parseSuppliersLabelRowsFormat(rows);
 }
 
 function parseSuppliersLabelRowsFormat(
@@ -222,7 +254,19 @@ function parseSuppliersLabelRowsFormat(
     String(value ?? '')
       .trim()
       .toLowerCase()
+      .replace(/[:*.\-_/\\]+/g, ' ')
       .replace(/\s+/g, ' ');
+
+  const findLabelInRow = (row: any[]): string => {
+    // Prefer column C as requested, but fall back to scanning first few columns in case the sheet is shifted.
+    const preferred = normalizeLabel(row?.[LABEL_COL]);
+    if (preferred) return preferred;
+    for (let col = 0; col <= 6; col++) {
+      const value = normalizeLabel(row?.[col]);
+      if (value) return value;
+    }
+    return '';
+  };
 
   const read = (row: any[], index: number): string | undefined => {
     const value = row?.[index];
@@ -240,13 +284,13 @@ function parseSuppliersLabelRowsFormat(
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i] || [];
-    const label = normalizeLabel(row[LABEL_COL]);
+    const label = findLabelInRow(row);
     if (!label) continue;
 
-    const isAccountName = label === 'account name';
-    const isAccountCode = label === 'account code';
-    const isContactPerson = label === 'contact person';
-    const isBankDraft = label === 'bankdraft' || label === 'bank draft';
+    const isAccountName = label.includes('account name');
+    const isAccountCode = label.includes('account code');
+    const isContactPerson = label.includes('contact person');
+    const isBankDraft = label.includes('bankdraft') || label.includes('bank draft');
 
     if (!isAccountName && !isAccountCode && !isContactPerson && !isBankDraft) {
       continue;
@@ -304,7 +348,7 @@ function parseSuppliersLabelRowsFormat(
   pushCurrent();
 
   if (!foundAnyKnownLabel) {
-    errors.push('Missing required "Supplier Name" column and no supported label-row supplier format found (expected labels in column C like Account Name / Account code / Contact Person / BankDraft).');
+    errors.push('Missing required "Supplier Name" column and no supported label-row supplier format found (expected labels like Account Name / Account code / Contact Person / BankDraft).');
   }
 
   return { suppliers, errors };
