@@ -148,7 +148,7 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
       return { suppliers, errors };
     }
 
-    const headers = jsonData[0].map((h: any) => String(h).toLowerCase().trim());
+    const headers = jsonData[0].map((h: any) => String(h ?? '').toLowerCase().trim());
     const nameIndex = headers.findIndex((h: string) => h.includes('supplier') && h.includes('name') || h === 'name');
     const addressIndex = headers.findIndex((h: string) => h.includes('address'));
     const phoneIndex = headers.findIndex((h: string) => h.includes('phone') && !h.includes('contact') && !h.includes('person'));
@@ -159,30 +159,31 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
     const vatNumberIndex = headers.findIndex((h: string) => h.includes('vat'));
     const notesIndex = headers.findIndex((h: string) => h.includes('notes'));
 
-    if (nameIndex === -1) {
-      errors.push('Missing required "Supplier Name" column');
-      return { suppliers, errors };
-    }
+    if (nameIndex !== -1) {
+      for (let i = 1; i < jsonData.length; i++) {
+        const row = jsonData[i];
+        const name = row[nameIndex];
+        
+        if (!name || String(name).trim() === '') continue;
 
-    for (let i = 1; i < jsonData.length; i++) {
-      const row = jsonData[i];
-      const name = row[nameIndex];
-      
-      if (!name || String(name).trim() === '') continue;
+        const supplier = {
+          name: String(name).trim(),
+          address: addressIndex !== -1 && row[addressIndex] ? String(row[addressIndex]).trim() : undefined,
+          phone: phoneIndex !== -1 && row[phoneIndex] ? String(row[phoneIndex]).trim() : undefined,
+          email: emailIndex !== -1 && row[emailIndex] ? String(row[emailIndex]).trim() : undefined,
+          contactPerson: contactPersonIndex !== -1 && row[contactPersonIndex] ? String(row[contactPersonIndex]).trim() : undefined,
+          contactPersonPhone: contactPersonPhoneIndex !== -1 && row[contactPersonPhoneIndex] ? String(row[contactPersonPhoneIndex]).trim() : undefined,
+          contactPersonEmail: contactPersonEmailIndex !== -1 && row[contactPersonEmailIndex] ? String(row[contactPersonEmailIndex]).trim() : undefined,
+          vatNumber: vatNumberIndex !== -1 && row[vatNumberIndex] ? String(row[vatNumberIndex]).trim() : undefined,
+          notes: notesIndex !== -1 && row[notesIndex] ? String(row[notesIndex]).trim() : undefined,
+        };
 
-      const supplier = {
-        name: String(name).trim(),
-        address: addressIndex !== -1 && row[addressIndex] ? String(row[addressIndex]).trim() : undefined,
-        phone: phoneIndex !== -1 && row[phoneIndex] ? String(row[phoneIndex]).trim() : undefined,
-        email: emailIndex !== -1 && row[emailIndex] ? String(row[emailIndex]).trim() : undefined,
-        contactPerson: contactPersonIndex !== -1 && row[contactPersonIndex] ? String(row[contactPersonIndex]).trim() : undefined,
-        contactPersonPhone: contactPersonPhoneIndex !== -1 && row[contactPersonPhoneIndex] ? String(row[contactPersonPhoneIndex]).trim() : undefined,
-        contactPersonEmail: contactPersonEmailIndex !== -1 && row[contactPersonEmailIndex] ? String(row[contactPersonEmailIndex]).trim() : undefined,
-        vatNumber: vatNumberIndex !== -1 && row[vatNumberIndex] ? String(row[vatNumberIndex]).trim() : undefined,
-        notes: notesIndex !== -1 && row[notesIndex] ? String(row[notesIndex]).trim() : undefined,
-      };
-
-      suppliers.push(supplier);
+        suppliers.push(supplier);
+      }
+    } else {
+      const kvParsed = parseSuppliersLabelRowsFormat(jsonData);
+      suppliers.push(...kvParsed.suppliers);
+      errors.push(...kvParsed.errors);
     }
 
     if (suppliers.length === 0) {
@@ -191,6 +192,119 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
 
   } catch (error) {
     errors.push(`Failed to parse Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  return { suppliers, errors };
+}
+
+function parseSuppliersLabelRowsFormat(
+  rows: any[][]
+): ParsedSuppliersData {
+  const errors: string[] = [];
+  const suppliers: Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
+
+  // User-provided format:
+  // - Column C (index 2) contains labels like "Account Name", "Account code", "Contact Person", "BankDraft"
+  // - Values are read from specific columns in the same row:
+  //   Account Name -> H (index 7)
+  //   Account code -> X (index 23) [used as Address]
+  //   Contact Person -> H (index 7)
+  //   BankDraft -> R (index 17) [used as Contact Number]
+  const LABEL_COL = 2;
+  const COL_H = 7;
+  const COL_R = 17;
+  const COL_X = 23;
+
+  type DraftSupplier = Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>;
+  let current: DraftSupplier | null = null;
+
+  const normalizeLabel = (value: unknown) =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+
+  const read = (row: any[], index: number): string | undefined => {
+    const value = row?.[index];
+    if (value === undefined || value === null) return undefined;
+    const text = String(value).trim();
+    return text ? text : undefined;
+  };
+
+  const pushCurrent = () => {
+    if (!current?.name) return;
+    suppliers.push(current);
+  };
+
+  let foundAnyKnownLabel = false;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const label = normalizeLabel(row[LABEL_COL]);
+    if (!label) continue;
+
+    const isAccountName = label === 'account name';
+    const isAccountCode = label === 'account code';
+    const isContactPerson = label === 'contact person';
+    const isBankDraft = label === 'bankdraft' || label === 'bank draft';
+
+    if (!isAccountName && !isAccountCode && !isContactPerson && !isBankDraft) {
+      continue;
+    }
+
+    foundAnyKnownLabel = true;
+
+    if (isAccountName) {
+      pushCurrent();
+      current = {
+        name: read(row, COL_H) || '',
+        address: undefined,
+        phone: undefined,
+        email: undefined,
+        contactPerson: undefined,
+        contactPersonPhone: undefined,
+        contactPersonEmail: undefined,
+        vatNumber: undefined,
+        notes: undefined,
+      };
+      continue;
+    }
+
+    // If the file starts mid-block (no Account Name row before details), create a draft so we can still capture data.
+    if (!current) {
+      current = {
+        name: '',
+        address: undefined,
+        phone: undefined,
+        email: undefined,
+        contactPerson: undefined,
+        contactPersonPhone: undefined,
+        contactPersonEmail: undefined,
+        vatNumber: undefined,
+        notes: undefined,
+      };
+    }
+
+    if (isAccountCode) {
+      current.address = read(row, COL_X) || current.address;
+    } else if (isContactPerson) {
+      current.contactPerson = read(row, COL_H) || current.contactPerson;
+    } else if (isBankDraft) {
+      const contactNumber = read(row, COL_R);
+      if (contactNumber) {
+        current.contactPersonPhone = contactNumber;
+        if (!current.phone) {
+          // Also populate supplier phone when no dedicated phone is available.
+          current.phone = contactNumber;
+        }
+      }
+    }
+  }
+
+  pushCurrent();
+
+  if (!foundAnyKnownLabel) {
+    errors.push('Missing required "Supplier Name" column and no supported label-row supplier format found (expected labels in column C like Account Name / Account code / Contact Person / BankDraft).');
   }
 
   return { suppliers, errors };
