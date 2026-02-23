@@ -190,8 +190,12 @@ function parseSuppliersFromRows(rows: any[][]): ParsedSuppliersData {
     return { suppliers, errors };
   }
 
-  const headerRow = rows[0] || [];
-  const headers = headerRow.map((h: any) => String(h ?? '').toLowerCase().trim());
+  const headerRow = Array.isArray(rows[0]) ? rows[0] : [];
+  // `sheet_to_json(..., { header: 1 })` can return sparse arrays for blank cells.
+  // `Array.from` normalizes holes to `undefined` so the mapping below is always safe.
+  const headers = Array.from({ length: headerRow.length }, (_, i) =>
+    String(headerRow[i] ?? '').toLowerCase().trim()
+  );
   const nameIndex = headers.findIndex((h: string) => (h.includes('supplier') && h.includes('name')) || h === 'name');
   const addressIndex = headers.findIndex((h: string) => h.includes('address'));
   const phoneIndex = headers.findIndex((h: string) => h.includes('phone') && !h.includes('contact') && !h.includes('person'));
