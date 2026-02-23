@@ -150,7 +150,9 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
         continue;
       }
 
-      const parsed = parseSuppliersFromRows(jsonData);
+      const range = worksheet['!ref'] ? XLSX.utils.decode_range(worksheet['!ref']) : null;
+      const startColumnIndex = range?.s?.c ?? 0;
+      const parsed = parseSuppliersFromRows(jsonData, startColumnIndex);
       if (parsed.suppliers.length === 0) {
         if (parsed.errors.length > 0) {
           sheetErrors.push(`Sheet "${sheetName}": ${parsed.errors.join(' | ')}`);
@@ -181,7 +183,7 @@ export function parseSuppliersExcel(base64Data: string): ParsedSuppliersData {
   return { suppliers, errors };
 }
 
-function parseSuppliersFromRows(rows: any[][]): ParsedSuppliersData {
+function parseSuppliersFromRows(rows: any[][], startColumnIndex: number = 0): ParsedSuppliersData {
   const errors: string[] = [];
   const suppliers: Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
 
@@ -230,26 +232,37 @@ function parseSuppliersFromRows(rows: any[][]): ParsedSuppliersData {
     return { suppliers, errors };
   }
 
-  return parseSuppliersLabelRowsFormat(rows);
+  return parseSuppliersLabelRowsFormat(rows, startColumnIndex);
 }
 
 function parseSuppliersLabelRowsFormat(
-  rows: any[][]
+  rows: any[][],
+  startColumnIndex: number = 0
 ): ParsedSuppliersData {
   const errors: string[] = [];
   const suppliers: Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[] = [];
 
-  // User-provided format:
+  // User-provided format (Excel letters):
   // - Column C (index 2) contains labels like "Account Name", "Account code", "Contact Person", "BankDraft"
   // - Values are read from specific columns in the same row:
   //   Account Name -> H (index 7)
   //   Account code -> X (index 23) [used as Address]
   //   Contact Person -> H (index 7)
   //   BankDraft -> R (index 17) [used as Contact Number]
-  const LABEL_COL = 2;
-  const COL_H = 7;
-  const COL_R = 17;
-  const COL_X = 23;
+  const excelColToZeroBased = (col: string): number => {
+    let n = 0;
+    for (const ch of col.toUpperCase()) {
+      n = (n * 26) + (ch.charCodeAt(0) - 64);
+    }
+    return n - 1;
+  };
+
+  const relCol = (excelCol: string): number => excelColToZeroBased(excelCol) - startColumnIndex;
+
+  const LABEL_COL = relCol('C');
+  const COL_H = relCol('H');
+  const COL_R = relCol('R');
+  const COL_X = relCol('X');
 
   type DraftSupplier = Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>;
   let current: DraftSupplier | null = null;
@@ -263,7 +276,7 @@ function parseSuppliersLabelRowsFormat(
 
   const findLabelInRow = (row: any[]): string => {
     // Prefer column C as requested, but fall back to scanning first few columns in case the sheet is shifted.
-    const preferred = normalizeLabel(row?.[LABEL_COL]);
+    const preferred = LABEL_COL >= 0 ? normalizeLabel(row?.[LABEL_COL]) : '';
     if (preferred) return preferred;
     for (let col = 0; col <= 6; col++) {
       const value = normalizeLabel(row?.[col]);
