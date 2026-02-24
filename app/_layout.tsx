@@ -16,6 +16,7 @@ import { StoresProvider, useStores } from '@/contexts/StoresContext';
 import { ProductionProvider, useProduction } from '@/contexts/ProductionContext';
 import { ActivityLogProvider, useActivityLog } from '@/contexts/ActivityLogContext';
 import { LeaveProvider } from '@/contexts/LeaveContext';
+import { HRProvider } from '@/contexts/HRContext';
 import { SMSCampaignContext } from '@/contexts/SMSCampaignContext';
 import { ProductTrackerProvider } from '@/contexts/ProductTrackerContext';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
@@ -45,6 +46,7 @@ function RootLayoutNav() {
       <Stack.Screen name="production-requests" options={{ title: 'Production Requests' }} />
       <Stack.Screen name="logs" options={{ title: 'Activity Logs' }} />
       <Stack.Screen name="campaigns" options={{ title: 'Campaign Manager' }} />
+      <Stack.Screen name="hr" options={{ headerShown: false }} />
       <Stack.Screen name="products" options={{ title: 'Products Management' }} />
       <Stack.Screen name="leave" options={{ headerShown: false }} />
     </Stack>
@@ -163,19 +165,21 @@ function AppProviders({ children }: { children: React.ReactNode }) {
   const { currentUser, enableReceivedAutoLoad } = useAuth();
   
   return (
-    <StockProvider currentUser={currentUser} enableReceivedAutoLoad={enableReceivedAutoLoad}>
-      <CustomerProvider currentUser={currentUser}>
-        <OrderProvider currentUser={currentUser}>
-          <ProductUsageProvider>
-            <RecipesProviderLayer>
-              <ProductTrackerProvider>
-                {children}
-              </ProductTrackerProvider>
-            </RecipesProviderLayer>
-          </ProductUsageProvider>
-        </OrderProvider>
-      </CustomerProvider>
-    </StockProvider>
+    <HRProvider currentUser={currentUser}>
+      <StockProvider currentUser={currentUser} enableReceivedAutoLoad={enableReceivedAutoLoad}>
+        <CustomerProvider currentUser={currentUser}>
+          <OrderProvider currentUser={currentUser}>
+            <ProductUsageProvider>
+              <RecipesProviderLayer>
+                <ProductTrackerProvider>
+                  {children}
+                </ProductTrackerProvider>
+              </RecipesProviderLayer>
+            </ProductUsageProvider>
+          </OrderProvider>
+        </CustomerProvider>
+      </StockProvider>
+    </HRProvider>
   );
 }
 

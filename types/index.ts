@@ -570,3 +570,55 @@ export interface LeaveRequest {
   deleted?: boolean;
   deviceId?: string;
 }
+
+export interface HRStaffMember {
+  id: string;
+  fullName: string;
+  userName?: string;
+  employeeCode?: string;
+  position?: string;
+  epfNumber?: string;
+  active?: boolean;
+  payrollDefaults?: Record<string, string | number | null>;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRAttendanceSummaryRow {
+  id: string;
+  employeeCode: string;
+  employeeName: string;
+  presentDays: number;
+  halfLeaveDays: number;
+  weeklyOffDays: number;
+  absentDays: number;
+  leaveDays: number;
+  paidDays: number;
+  lateHoursText: string;
+  lateMinutes: number;
+  workHoursText: string;
+  workMinutes: number;
+  overtimeText: string;
+  overtimeMinutes: number;
+  sourceSheet?: string;
+}
+
+export interface HRAttendanceImport {
+  id: string;
+  monthKey: string;
+  monthLabel: string;
+  sourceFileName?: string;
+  sourceSheetName?: string;
+  reportStartDate?: string;
+  reportEndDate?: string;
+  rows: HRAttendanceSummaryRow[];
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}

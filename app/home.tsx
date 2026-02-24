@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays, BadgeDollarSign } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRef, useEffect, useState } from 'react';
 import { useStores } from '@/contexts/StoresContext';
@@ -298,6 +298,23 @@ export default function HomeScreen() {
         ...visibleCards.slice(settingsIndex)
       ]
     : visibleCards;
+
+  if (currentUser?.role === 'admin' || isSuperAdmin) {
+    const settingsInsertIndex = allCards.findIndex(card => card.route === '/(tabs)/settings');
+    const hrCard: NavCard = {
+      title: 'Staff HR',
+      icon: BadgeDollarSign,
+      route: '/hr',
+      color: '#0F766E',
+    };
+    if (!allCards.some(card => card.route === '/hr')) {
+      if (settingsInsertIndex >= 0) {
+        allCards = [...allCards.slice(0, settingsInsertIndex), hrCard, ...allCards.slice(settingsInsertIndex)];
+      } else {
+        allCards = [...allCards, hrCard];
+      }
+    }
+  }
 
   allCards = [leaveCard, ...allCards];
 
