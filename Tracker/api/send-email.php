@@ -118,6 +118,136 @@ function build_email_message($emailData) {
   return [$headers, $body];
 }
 
+function smtp_write_line($socket, $line) {
+  $written = @fwrite($socket, $line . "\r\n");
+  if ($written === false) {
+    throw new Exception('SMTP write failed');
+  }
+}
+
+function smtp_read_response($socket) {
+  $response = '';
+  while (!feof($socket)) {
+    $line = fgets($socket, 515);
+    if ($line === false) {
+      break;
+    }
+    $response .= $line;
+    if (preg_match('/^\d{3}\s/', $line)) {
+      break;
+    }
+    if (!preg_match('/^\d{3}\-/', $line)) {
+      break;
+    }
+  }
+  return $response;
+}
+
+function smtp_expect($socket, $expectedCodes, $step) {
+  $response = smtp_read_response($socket);
+  $code = intval(substr(trim($response), 0, 3));
+  $expected = is_array($expectedCodes) ? $expectedCodes : [$expectedCodes];
+  if (!in_array($code, $expected, true)) {
+    throw new Exception($step . ' failed: ' . trim($response));
+  }
+  return $response;
+}
+
+function smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $senderEmail, $senderName, $subject) {
+  $host = trim((string)($smtpConfig['host'] ?? ''));
+  $port = intval($smtpConfig['port'] ?? 587);
+  $username = trim((string)($smtpConfig['username'] ?? ''));
+  $password = (string)($smtpConfig['password'] ?? '');
+
+  if ($host === '' || $username === '' || $password === '') {
+    throw new Exception('SMTP settings incomplete');
+  }
+
+  $transport = ($port === 465) ? 'ssl' : 'tcp';
+  $remote = $transport . '://' . $host . ':' . $port;
+  $context = stream_context_create([
+    'ssl' => [
+      'verify_peer' => false,
+      'verify_peer_name' => false,
+      'allow_self_signed' => true,
+    ],
+  ]);
+
+  $errno = 0;
+  $errstr = '';
+  $socket = @stream_socket_client($remote, $errno, $errstr, 20, STREAM_CLIENT_CONNECT, $context);
+  if (!$socket) {
+    throw new Exception("Cannot connect to SMTP server: {$errstr} ({$errno})");
+  }
+
+  stream_set_timeout($socket, 20);
+
+  try {
+    smtp_expect($socket, [220], 'SMTP greeting');
+
+    $ehloHost = isset($_SERVER['SERVER_NAME']) && $_SERVER['SERVER_NAME'] ? $_SERVER['SERVER_NAME'] : 'tracker.tecclk.com';
+    smtp_write_line($socket, 'EHLO ' . $ehloHost);
+    $ehloResponse = smtp_expect($socket, [250], 'EHLO');
+
+    if ($port !== 465 && stripos($ehloResponse, 'STARTTLS') !== false) {
+      smtp_write_line($socket, 'STARTTLS');
+      smtp_expect($socket, [220], 'STARTTLS');
+      $cryptoOk = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+      if (!$cryptoOk) {
+        throw new Exception('STARTTLS negotiation failed');
+      }
+      smtp_write_line($socket, 'EHLO ' . $ehloHost);
+      smtp_expect($socket, [250], 'EHLO after STARTTLS');
+    }
+
+    smtp_write_line($socket, 'AUTH LOGIN');
+    smtp_expect($socket, [334], 'AUTH LOGIN');
+    smtp_write_line($socket, base64_encode($username));
+    smtp_expect($socket, [334], 'SMTP username');
+    smtp_write_line($socket, base64_encode($password));
+    smtp_expect($socket, [235], 'SMTP password');
+
+    smtp_write_line($socket, 'MAIL FROM:<' . $senderEmail . '>');
+    smtp_expect($socket, [250], 'MAIL FROM');
+    smtp_write_line($socket, 'RCPT TO:<' . $toEmail . '>');
+    smtp_expect($socket, [250, 251], 'RCPT TO');
+    smtp_write_line($socket, 'DATA');
+    smtp_expect($socket, [354], 'DATA');
+
+    list($mimeHeaders, $mimeBody) = build_email_message($emailData);
+
+    $fromDisplay = $senderName !== '' ? encode_header_utf8($senderName) . " <{$senderEmail}>" : $senderEmail;
+    $toDisplay = $toName !== '' ? encode_header_utf8($toName) . " <{$toEmail}>" : $toEmail;
+
+    $dataHeaders = array_merge([
+      'Date: ' . date(DATE_RFC2822),
+      'From: ' . $fromDisplay,
+      'To: ' . $toDisplay,
+      'Reply-To: ' . $senderEmail,
+      'Subject: ' . encode_header_utf8($subject),
+      'Message-ID: <' . uniqid('tracker_', true) . '@' . preg_replace('/[^a-zA-Z0-9\.\-]/', '', $host) . '>',
+      'X-Mailer: Tracker SMTP',
+    ], $mimeHeaders);
+
+    $messageData = implode("\r\n", $dataHeaders) . "\r\n\r\n" . $mimeBody;
+    $messageData = str_replace(["\r\n", "\r"], "\n", $messageData);
+    $messageData = str_replace("\n", "\r\n", $messageData);
+    $messageData = preg_replace('/(^|\r\n)\./', '$1..', $messageData);
+
+    $written = @fwrite($socket, $messageData . "\r\n.\r\n");
+    if ($written === false) {
+      throw new Exception('SMTP DATA write failed');
+    }
+    smtp_expect($socket, [250], 'SMTP send');
+
+    smtp_write_line($socket, 'QUIT');
+    // Some servers close immediately; ignore QUIT response failures.
+    @smtp_read_response($socket);
+  } finally {
+    fclose($socket);
+  }
+}
+
 $canUsePHPMailer = file_exists(__DIR__ . '/phpmailer/PHPMailerAutoload.php');
 if ($canUsePHPMailer) {
   require_once __DIR__ . '/phpmailer/PHPMailerAutoload.php';
@@ -130,6 +260,7 @@ $results = [
   'errors' => [],
 ];
 
+$usedSmtpSocket = false;
 $usedNativeMailFallback = false;
 
 foreach ($recipients as $recipient) {
@@ -185,6 +316,9 @@ foreach ($recipients as $recipient) {
       }
 
       $mail->send();
+    } elseif (!empty($smtpConfig['host']) && !empty($smtpConfig['username']) && isset($smtpConfig['password'])) {
+      $usedSmtpSocket = true;
+      smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $senderEmail, $senderName, $subject);
     } else {
       $usedNativeMailFallback = true;
       list($mimeHeaders, $body) = build_email_message($emailData);
@@ -226,6 +360,6 @@ foreach ($recipients as $recipient) {
 respond([
   'success' => true,
   'results' => $results,
-  'mailer' => $canUsePHPMailer ? 'phpmailer' : 'php_mail_fallback',
-  'note' => $usedNativeMailFallback ? 'PHPMailer not installed. Sent using server mail() fallback.' : null,
+  'mailer' => $canUsePHPMailer ? 'phpmailer' : ($usedSmtpSocket ? 'smtp_socket' : 'php_mail_fallback'),
+  'note' => $usedNativeMailFallback ? 'PHPMailer not installed and SMTP config missing. Sent using server mail() fallback.' : null,
 ]);
