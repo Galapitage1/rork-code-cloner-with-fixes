@@ -40,7 +40,11 @@ const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 export default function CampaignsScreen() {
   const { customers } = useCustomers();
   const { currentUser } = useAuth();
-  const { settings: dialogSMSSettings, sendCampaign: sendDialogSMSCampaign } = useSMSCampaign();
+  const {
+    settings: dialogSMSSettings,
+    sendCampaign: sendDialogSMSCampaign,
+    testLogin: testDialogSMSLogin,
+  } = useSMSCampaign();
   const [isPageLoading, setIsPageLoading] = React.useState(true);
   
   const [campaignType, setCampaignType] = useState<CampaignType>('email');
@@ -333,14 +337,33 @@ export default function CampaignsScreen() {
   };
 
   const testSMSConnection = async () => {
-    if (!smsApiUrl || !smsApiKey) {
-      Alert.alert('Configuration Missing', 'Please configure SMS API URL and API Key before testing.');
+    const hasDialogSMSConfig = !!(
+      dialogSMSSettings?.esms_username &&
+      dialogSMSSettings?.esms_password_encrypted
+    );
+
+    if (!hasDialogSMSConfig && (!smsApiUrl || !smsApiKey)) {
+      Alert.alert('Configuration Missing', 'Please configure Dialog eSMS settings (preferred) or legacy SMS API settings before testing.');
       return;
     }
 
     try {
       setTestingSMS(true);
       console.log('[SMS Test] Starting connection test...');
+
+      if (hasDialogSMSConfig) {
+        const result = await testDialogSMSLogin(
+          dialogSMSSettings!.esms_username,
+          dialogSMSSettings!.esms_password_encrypted
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || result.message || 'Dialog eSMS login test failed');
+        }
+
+        Alert.alert('Connection Test Successful', 'Dialog eSMS login is configured correctly');
+        return;
+      }
 
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/test-sms-connection.php` : `${apiUrl}/api/test-sms-connection`;
@@ -1364,27 +1387,49 @@ export default function CampaignsScreen() {
 
             {showSMSSettings && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>SMS Service Configuration</Text>
-                
-                <Text style={styles.label}>SMS API URL *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={smsApiUrl}
-                  onChangeText={setSmsApiUrl}
-                  placeholder="https://app.notify.lk/api/v1/send"
-                  autoCapitalize="none"
-                  keyboardType="url"
-                />
+                <Text style={styles.sectionTitle}>Dialog eSMS Configuration</Text>
 
-                <Text style={styles.label}>SMS API Key *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={smsApiKey}
-                  onChangeText={setSmsApiKey}
-                  placeholder="Your SMS service API key"
-                  autoCapitalize="none"
-                  multiline
-                />
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>
+                    {dialogSMSSettings?.esms_username
+                      ? 'SMS campaigns use Dialog eSMS settings from the Settings page. The details below show the active configuration.'
+                      : 'Dialog eSMS is not configured yet. Configure it in Settings > Dialog eSMS Settings. Legacy SMS settings are still available in the background as fallback only.'}
+                  </Text>
+                </View>
+
+                <Text style={styles.label}>Provider</Text>
+                <Text style={styles.configValueText}>
+                  {dialogSMSSettings?.esms_username ? 'Dialog eSMS (Active)' : (smsApiUrl && smsApiKey ? 'Legacy SMS API (Fallback only)' : 'Not configured')}
+                </Text>
+
+                <Text style={styles.label}>Dialog Username</Text>
+                <Text style={styles.configValueText}>
+                  {dialogSMSSettings?.esms_username || 'Not set'}
+                </Text>
+
+                <Text style={styles.label}>Source Address / Mask</Text>
+                <Text style={styles.configValueText}>
+                  {dialogSMSSettings?.default_source_address || 'Not set'}
+                </Text>
+
+                <Text style={styles.label}>Payment Method</Text>
+                <Text style={styles.configValueText}>
+                  {dialogSMSSettings
+                    ? (dialogSMSSettings.default_payment_method === 4 ? 'Package (4)' : 'Wallet (0)')
+                    : 'Not set'}
+                </Text>
+
+                <Text style={styles.label}>Delivery Report Webhook</Text>
+                <Text style={styles.configValueText} numberOfLines={2}>
+                  {dialogSMSSettings?.push_notification_url || 'Not set'}
+                </Text>
+
+                {(smsApiUrl && smsApiKey) && (
+                  <>
+                    <Text style={styles.label}>Legacy Fallback</Text>
+                    <Text style={styles.configValueText}>Configured (hidden fields retained for fallback only)</Text>
+                  </>
+                )}
 
                 <View style={styles.buttonRow}>
                   <TouchableOpacity
@@ -1397,13 +1442,6 @@ export default function CampaignsScreen() {
                     ) : (
                       <Text style={styles.testButtonText}>Test Connection</Text>
                     )}
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.saveSettingsButton]}
-                    onPress={saveCampaignSettings}
-                  >
-                    <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2197,6 +2235,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#92400E',
     lineHeight: 18,
+  },
+  configValueText: {
+    fontSize: 14,
+    color: Colors.light.text,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
   },
   inboxToggle: {
     flexDirection: 'row' as const,
