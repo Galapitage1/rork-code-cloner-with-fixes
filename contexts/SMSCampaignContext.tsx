@@ -11,6 +11,40 @@ const SMS_DELIVERY_EVENTS_KEY = '@sms_delivery_events';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || '';
 
+const getSMSBackendBase = (): string => {
+  if (BACKEND_URL) return BACKEND_URL;
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  return '';
+};
+
+const getSMSApiEndpoint = (action: 'test-login' | 'send-test' | 'send-campaign' | 'check-status'): string => {
+  const base = getSMSBackendBase();
+  const normalizedBase = base.replace(/\/$/, '');
+  const isTrackerHosted = normalizedBase.includes('tracker.tecclk.com');
+
+  if (isTrackerHosted) {
+    const phpMap: Record<typeof action, string> = {
+      'test-login': '/Tracker/api/dialog-esms-test-login.php',
+      'send-test': '/Tracker/api/dialog-esms-send-test.php',
+      'send-campaign': '/Tracker/api/dialog-esms-send-campaign.php',
+      'check-status': '/Tracker/api/dialog-esms-check-status.php',
+    };
+    return `${normalizedBase}${phpMap[action]}`;
+  }
+
+  return `${normalizedBase}/api/sms/${action}`;
+};
+
+const parseJsonResponseSafe = async (response: Response): Promise<any> => {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const preview = text.slice(0, 160).replace(/\s+/g, ' ').trim();
+    throw new Error(`Server returned non-JSON response (HTTP ${response.status}). ${preview}`);
+  }
+};
+
 export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
   const { currentUser } = useAuth();
   const [settings, setSettings] = useState<SMSProviderSettings | null>(null);
@@ -76,7 +110,9 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
 
   const testLogin = async (username: string, password: string): Promise<{ success: boolean; message?: string; error?: string }> => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/sms/test-login`, {
+      const response = await fetch(getSMSApiEndpoint('test-login'), {
+        // On tracker.tecclk.com, use PHP endpoints (shared hosting). Else use Hono endpoints.
+        // getSMSApiEndpoint() handles this automatically.
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +121,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponseSafe(response);
       return data;
     } catch (error: any) {
       console.error('[SMS Context] Test login error:', error);
@@ -99,7 +135,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
     }
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/sms/send-test`, {
+      const response = await fetch(getSMSApiEndpoint('send-test'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -114,7 +150,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponseSafe(response);
       return data;
     } catch (error: any) {
       console.error('[SMS Context] Send test error:', error);
@@ -137,7 +173,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
     }
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/sms/send-campaign`, {
+      const response = await fetch(getSMSApiEndpoint('send-campaign'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -155,7 +191,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
         }),
       });
 
-      const result = await response.json();
+      const result = await parseJsonResponseSafe(response);
 
       if (result.success) {
         const campaign: SMSCampaign = {
@@ -214,7 +250,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
     }
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/sms/check-status`, {
+      const response = await fetch(getSMSApiEndpoint('check-status'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -226,7 +262,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
         }),
       });
 
-      const result = await response.json();
+      const result = await parseJsonResponseSafe(response);
       return result;
     } catch (error: any) {
       console.error('[SMS Context] Check status error:', error);
