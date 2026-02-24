@@ -1023,12 +1023,12 @@ export default function CampaignsScreen() {
             }
           }
 
-          const resultMessage = `Accepted by WhatsApp API: ${successCount}\nFailed: ${failCount}${
+          const resultMessage = `Queued by WhatsApp API: ${successCount}\nAPI Rejected: ${failCount}${
             errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
-          }\n\nNote: "Accepted" means WhatsApp queued it. Final delivery depends on recipient status, policy window, and webhook delivery events.`;
+          }\n\nNote: "Queued" means WhatsApp accepted the request for processing. Final delivery depends on recipient status, policy window, templates, and webhook delivery events (sent/delivered/read/failed).`;
 
           Alert.alert(
-            'WhatsApp Campaign Complete',
+            'WhatsApp Campaign Queued',
             resultMessage,
             [{ text: 'OK' }]
           );
