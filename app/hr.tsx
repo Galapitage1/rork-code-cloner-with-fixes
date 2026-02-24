@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { ArrowLeft, FileSpreadsheet, Upload, Users, CalendarDays, Clock3, Download, RefreshCw, Trash2 } from 'lucide-react-native';
+import { ArrowLeft, FileSpreadsheet, Upload, Users, CalendarDays, Clock3, Download, RefreshCw, Trash2, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import * as XLSX from 'xlsx';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,8 +23,8 @@ import {
   formatMonthKey,
   generatePayrollRowsForMonth,
   parseFingerprintAttendanceWorkbook,
-  parsePayrollTemplateWorkbook,
-  payrollRowsToSheetAoA,
+  parseStaffDetailsWorkbook,
+  staffImportTemplateToAoa,
   PAYROLL_COLUMNS,
   minutesToDecimalHours,
 } from '@/utils/hrPayroll';
@@ -56,6 +56,16 @@ function currentMonthKey() {
   return new Date().toISOString().slice(0, 7);
 }
 
+function shiftMonthKey(monthKey: string, delta: number): string {
+  const [yearStr, monthStr] = monthKey.split('-');
+  const year = parseInt(yearStr || '', 10);
+  const month = parseInt(monthStr || '', 10);
+  if (!year || !month) return currentMonthKey();
+  const dt = new Date(Date.UTC(year, month - 1, 1));
+  dt.setUTCMonth(dt.getUTCMonth() + delta);
+  return dt.toISOString().slice(0, 7);
+}
+
 export default function HRScreen() {
   const router = useRouter();
   const { currentUser, isSuperAdmin } = useAuth();
@@ -75,7 +85,7 @@ export default function HRScreen() {
 
   const [selectedMonthKey, setSelectedMonthKey] = useState<string>(currentMonthKey());
   const [staffForm, setStaffForm] = useState<SimpleFormState>(emptyStaffForm);
-  const [isImportingPayrollTemplate, setIsImportingPayrollTemplate] = useState(false);
+  const [isImportingStaffDetails, setIsImportingStaffDetails] = useState(false);
   const [isImportingAttendance, setIsImportingAttendance] = useState(false);
   const [isSavingStaff, setIsSavingStaff] = useState(false);
 
@@ -153,19 +163,35 @@ export default function HRScreen() {
     input.click();
   };
 
-  const handleImportPayrollTemplate = async () => {
+  const handleImportStaffDetails = async () => {
     if (!currentUser?.id) return;
-    setIsImportingPayrollTemplate(true);
+    setIsImportingStaffDetails(true);
     await handlePickAndParseWorkbook(async (wb, fileName) => {
-      const parsed = parsePayrollTemplateWorkbook(wb as any, XLSX);
+      const parsed = parseStaffDetailsWorkbook(wb as any, XLSX);
       const importedCount = await importPayrollTemplateRows(parsed.rows);
       const templateMonth = parsed.monthLabel || '';
       Alert.alert(
-        'Payroll Template Imported',
-        `Imported ${importedCount} payroll template row(s) from ${fileName}.${templateMonth ? `\nTemplate month: ${templateMonth}` : ''}\n\nStaff master defaults were updated (salary components, rates, etc.).`
+        'Staff Details Imported',
+        `Imported ${importedCount} staff row(s) from ${fileName}.${templateMonth ? `\nMonth in file: ${templateMonth}` : ''}\n\nStaff master details were updated.`
       );
     });
-    setIsImportingPayrollTemplate(false);
+    setIsImportingStaffDetails(false);
+  };
+
+  const handleDownloadStaffImportTemplate = () => {
+    if (Platform.OS !== 'web') {
+      Alert.alert('Not Supported', 'Template download is currently enabled on web.');
+      return;
+    }
+    try {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(staffImportTemplateToAoa());
+      XLSX.utils.book_append_sheet(wb, ws, 'Staff Import');
+      XLSX.writeFile(wb, 'HR-Staff-Import-Template.xlsx');
+    } catch (error) {
+      console.error('[HR] Staff template export failed:', error);
+      Alert.alert('Template Error', 'Failed to download staff import template');
+    }
   };
 
   const handleImportFingerprintAttendance = async () => {
@@ -208,27 +234,6 @@ export default function HRScreen() {
       Alert.alert('Error', 'Failed to add staff member');
     } finally {
       setIsSavingStaff(false);
-    }
-  };
-
-  const handleExportPayroll = () => {
-    if (!payrollRows.length) {
-      Alert.alert('No Data', 'No payroll rows available for export');
-      return;
-    }
-    if (Platform.OS !== 'web') {
-      Alert.alert('Not Supported', 'Payroll Excel export is currently enabled on web.');
-      return;
-    }
-    try {
-      const aoa = payrollRowsToSheetAoA(payrollRows);
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      XLSX.utils.book_append_sheet(wb, ws, 'Payroll');
-      XLSX.writeFile(wb, `Payroll-${formatMonthKey(selectedMonthKey)}.xlsx`);
-    } catch (error) {
-      console.error('[HR] Payroll export failed:', error);
-      Alert.alert('Export Error', 'Failed to export payroll Excel');
     }
   };
 
@@ -285,25 +290,33 @@ export default function HRScreen() {
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>1. Staff Master / Payroll Template</Text>
+              <Text style={styles.sectionTitle}>1. Staff Master / Staff Details Import</Text>
               <Text style={styles.sectionHint}>
-                Import your payroll template Excel to load the exact payroll headers and keep salary defaults (rates/components) per staff. You can also add staff manually.
+                Import staff details only. Use the staff import template (based on your payroll sheet headers) to load names, usernames, employee codes, positions, EPF and optional pay defaults.
               </Text>
 
               <View style={styles.buttonRow}>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.primaryButton]}
-                  onPress={handleImportPayrollTemplate}
-                  disabled={isImportingPayrollTemplate}
+                  onPress={handleImportStaffDetails}
+                  disabled={isImportingStaffDetails}
                 >
-                  {isImportingPayrollTemplate ? (
+                  {isImportingStaffDetails ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
                     <>
                       <Upload size={16} color="#fff" />
-                      <Text style={styles.primaryButtonText}>Import Payroll Template</Text>
+                      <Text style={styles.primaryButtonText}>Import Staff Details</Text>
                     </>
                   )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.secondaryButton]}
+                  onPress={handleDownloadStaffImportTemplate}
+                >
+                  <Download size={16} color={Colors.light.tint} />
+                  <Text style={styles.secondaryButtonText}>Download Staff Template</Text>
                 </TouchableOpacity>
               </View>
 
@@ -455,6 +468,26 @@ export default function HRScreen() {
               </Text>
 
               <View style={styles.monthSelectorCard}>
+                <View style={styles.monthNavRow}>
+                  <TouchableOpacity
+                    style={styles.monthNavButton}
+                    onPress={() => setSelectedMonthKey((prev) => shiftMonthKey(prev, -1))}
+                  >
+                    <ChevronLeft size={16} color={Colors.light.tint} />
+                    <Text style={styles.monthNavButtonText}>Prev Month</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.monthCurrentLabel}>{formatMonthKey(selectedMonthKey)}</Text>
+
+                  <TouchableOpacity
+                    style={styles.monthNavButton}
+                    onPress={() => setSelectedMonthKey((prev) => shiftMonthKey(prev, 1))}
+                  >
+                    <Text style={styles.monthNavButtonText}>Next Month</Text>
+                    <ChevronRight size={16} color={Colors.light.tint} />
+                  </TouchableOpacity>
+                </View>
+
                 <Text style={styles.label}>Payroll Month (YYYY-MM)</Text>
                 <TextInput
                   style={styles.input}
@@ -480,13 +513,6 @@ export default function HRScreen() {
                   <Text style={styles.infoTiny}>Approved leave requests overlapping month: {approvedLeaveThisMonth.length}</Text>
                   <Text style={styles.infoTiny}>Attendance matched rows: {kpis.matched}/{payrollRows.length}</Text>
                 </View>
-              </View>
-
-              <View style={styles.buttonRow}>
-                <TouchableOpacity style={[styles.actionButton, styles.secondaryButton]} onPress={handleExportPayroll}>
-                  <Download size={16} color={Colors.light.tint} />
-                  <Text style={styles.secondaryButtonText}>Export Payroll Excel</Text>
-                </TouchableOpacity>
               </View>
 
               <ScrollView horizontal style={styles.payrollTableWrap}>
@@ -811,6 +837,33 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
+  monthNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  monthNavButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  monthNavButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.light.tint,
+  },
+  monthCurrentLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
   label: {
     fontSize: 12,
     fontWeight: '600',
@@ -859,4 +912,3 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
-

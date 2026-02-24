@@ -73,6 +73,7 @@ type WorkbookLike = {
 export type ParsedPayrollTemplateRow = {
   fullName: string;
   userName?: string;
+  employeeCode?: string;
   position?: string;
   epfNumber?: string;
   monthLabel?: string;
@@ -85,6 +86,26 @@ export type ParsedPayrollTemplate = {
   rows: ParsedPayrollTemplateRow[];
   sourceSheetName?: string;
 };
+
+export const STAFF_IMPORT_TEMPLATE_COLUMNS: PayrollColumn[] = [
+  { key: 'fullName', label: 'Full Name' },
+  { key: 'userName', label: 'User Name' },
+  { key: 'employeeCode', label: 'Employee Code' },
+  { key: 'position', label: 'Position' },
+  { key: 'epfNumber', label: 'EPF Number' },
+  { key: 'basicRatePerHr', label: 'Basic Rate/Hr' },
+  { key: 'fullRatePerHr', label: 'Fll Rate/hr' },
+  { key: 'hoursPerDay', label: 'Hr/Day' },
+  { key: 'totalSalary', label: 'Total Salary' },
+  { key: 'basic', label: 'Basic' },
+  { key: 'performanceAllowance', label: 'Performance Allawance' },
+  { key: 'attendanceAllowance', label: 'Attendence Allawance' },
+  { key: 'serviceChargeEarning', label: 'Service Charge' },
+  { key: 'bra1', label: 'BRA1' },
+  { key: 'bra2', label: 'BRA2' },
+  { key: 'advance', label: 'Advance' },
+  { key: 'loans', label: 'Loans' },
+];
 
 type FingerprintParseResult = {
   monthKey: string;
@@ -249,6 +270,7 @@ export function parsePayrollTemplateWorkbook(workbook: WorkbookLike, XLSX: any):
       parsedRows.push({
         fullName,
         userName: userName || undefined,
+        employeeCode: String(row[headerIndexMap.get('employeeCode') ?? -1] ?? '').trim() || undefined,
         position: position || undefined,
         epfNumber: String(row[headerIndexMap.get('epfNumber') ?? -1] ?? '').trim() || undefined,
         monthLabel: String(row[headerIndexMap.get('month') ?? -1] ?? '').trim() || undefined,
@@ -266,6 +288,98 @@ export function parsePayrollTemplateWorkbook(workbook: WorkbookLike, XLSX: any):
   }
 
   throw new Error('Payroll template header row not found. Expected headers like "Full Name", "User Name", "Month".');
+}
+
+export function parseStaffDetailsWorkbook(workbook: WorkbookLike, XLSX: any): ParsedPayrollTemplate {
+  for (const sheetName of workbook.SheetNames) {
+    const rows = getRows(workbook, sheetName, XLSX);
+    if (!rows.length) continue;
+
+    let headerRowIndex = -1;
+    for (let i = 0; i < Math.min(rows.length, 20); i++) {
+      const normalized = (rows[i] || []).map(normalizeText);
+      const hasFullName = normalized.includes(normalizeText('Full Name'));
+      const hasUserName = normalized.includes(normalizeText('User Name'));
+      if (hasFullName && hasUserName) {
+        headerRowIndex = i;
+        break;
+      }
+    }
+    if (headerRowIndex < 0) continue;
+
+    const headerRow = rows[headerRowIndex] || [];
+    const headerIndexMap = new Map<string, number>();
+    const acceptedColumns = [...PAYROLL_COLUMNS, { key: 'employeeCode', label: 'Employee Code' }];
+    acceptedColumns.forEach((col) => {
+      const idx = headerRow.findIndex((cell: unknown) => normalizeText(cell) === normalizeText(col.label));
+      if (idx >= 0) headerIndexMap.set(col.key, idx);
+    });
+
+    const parsedRows: ParsedPayrollTemplateRow[] = [];
+    for (const row of rows.slice(headerRowIndex + 1)) {
+      const fullName = String(row[headerIndexMap.get('fullName') ?? -1] ?? '').trim();
+      const userName = String(row[headerIndexMap.get('userName') ?? -1] ?? '').trim();
+      const position = String(row[headerIndexMap.get('position') ?? -1] ?? '').trim();
+      const employeeCode = String(row[headerIndexMap.get('employeeCode') ?? -1] ?? '').trim();
+      if (!fullName && !userName && !position && !employeeCode) continue;
+
+      const payrollDefaults: Record<string, string | number | null> = {};
+      PAYROLL_COLUMNS.forEach((col) => {
+        const idx = headerIndexMap.get(col.key);
+        if (idx === undefined) return;
+        const raw = row[idx];
+        if (raw === '' || raw === undefined || raw === null) return;
+        payrollDefaults[col.key] = typeof raw === 'number' ? raw : String(raw);
+      });
+
+      parsedRows.push({
+        fullName: fullName || userName || 'Unnamed',
+        userName: userName || undefined,
+        employeeCode: employeeCode || undefined,
+        position: position || undefined,
+        epfNumber: String(row[headerIndexMap.get('epfNumber') ?? -1] ?? '').trim() || undefined,
+        monthLabel: String(row[headerIndexMap.get('month') ?? -1] ?? '').trim() || undefined,
+        payrollDefaults,
+      });
+    }
+
+    return {
+      headers: STAFF_IMPORT_TEMPLATE_COLUMNS,
+      rows: parsedRows,
+      sourceSheetName: sheetName,
+      monthLabel: parsedRows.find((r) => r.monthLabel)?.monthLabel,
+    };
+  }
+
+  throw new Error('Staff import template header row not found. Expected at least "Full Name" and "User Name" columns.');
+}
+
+export function staffImportTemplateToAoa(): any[][] {
+  const headerRow = STAFF_IMPORT_TEMPLATE_COLUMNS.map((c) => c.label);
+  const sampleRow = [
+    'Example Staff',
+    'Example',
+    '00002003',
+    'Front End',
+    'EPF123',
+    100,
+    160,
+    8,
+    40000,
+    20000,
+    12000,
+    2200,
+    1000,
+    1000,
+    2500,
+    0,
+    0,
+  ];
+  return [
+    ['Staff Import Template (based on payroll sheet headers)', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    headerRow,
+    sampleRow,
+  ];
 }
 
 function findFingerprintHeaderMap(rows: any[][]): { headerRowIndex: number; colIndex: Record<string, number> } | null {
@@ -641,6 +755,7 @@ export function createStaffFromPayrollTemplateRows(
       ...base,
       fullName: row.fullName || base.fullName,
       userName: row.userName || base.userName,
+      employeeCode: row.employeeCode || base.employeeCode,
       position: row.position || base.position,
       epfNumber: row.epfNumber || base.epfNumber,
       payrollDefaults: {
