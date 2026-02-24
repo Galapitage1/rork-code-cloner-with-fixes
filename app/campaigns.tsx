@@ -89,6 +89,7 @@ export default function CampaignsScreen() {
   const [whatsappBusinessId, setWhatsappBusinessId] = useState<string>('895897253021976');
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
+  const [sendingWhatsAppTest, setSendingWhatsAppTest] = useState(false);
   const [showSMSSettings, setShowSMSSettings] = useState(false);
   const [showWhatsAppInbox, setShowWhatsAppInbox] = useState(false);
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
@@ -99,6 +100,8 @@ export default function CampaignsScreen() {
   const [whatsappMediaUri, setWhatsappMediaUri] = useState<string>('');
   const [whatsappMediaType, setWhatsappMediaType] = useState<'image' | 'video' | 'document' | 'audio'>('image');
   const [whatsappCaption, setWhatsappCaption] = useState<string>('');
+  const [whatsappTestPhone, setWhatsappTestPhone] = useState<string>('');
+  const [whatsappTestMessage, setWhatsappTestMessage] = useState<string>('Hello from The Cakery test message.');
 
   const loadCampaignSettings = async () => {
     try {
@@ -890,6 +893,75 @@ export default function CampaignsScreen() {
     }
   };
 
+  const sendWhatsAppTestMessage = async () => {
+    try {
+      if (!whatsappAccessToken || !whatsappPhoneNumberId) {
+        Alert.alert('Configuration Missing', 'Please configure WhatsApp settings before sending a test message.');
+        return;
+      }
+      if (!whatsappTestPhone.trim()) {
+        Alert.alert('Missing Number', 'Please enter a test WhatsApp number.');
+        return;
+      }
+      if (!whatsappTestMessage.trim()) {
+        Alert.alert('Missing Message', 'Please enter a test message.');
+        return;
+      }
+
+      setSendingWhatsAppTest(true);
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
+
+      const response = await fetch(phpEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          accessToken: whatsappAccessToken,
+          phoneNumberId: whatsappPhoneNumberId,
+          message: whatsappTestMessage.trim(),
+          recipients: [
+            {
+              name: 'Test Recipient',
+              phone: whatsappTestPhone.trim(),
+            },
+          ],
+        }),
+      });
+
+      const rawText = await response.text();
+      let result: any;
+      try {
+        result = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(`Server returned non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 160)}`);
+      }
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to send WhatsApp test message');
+      }
+
+      const accepted = result.results?.accepted ?? result.results?.success ?? 0;
+      const rejected = result.results?.failed ?? 0;
+      const pending = result.results?.delivery_pending ?? 0;
+      const firstError = Array.isArray(result.results?.errors) && result.results.errors.length > 0
+        ? `\n\nError: ${result.results.errors[0]}`
+        : '';
+
+      Alert.alert(
+        'WhatsApp Test Queued',
+        `Queued by WhatsApp API: ${accepted}\nAPI Rejected: ${rejected}\nDelivery Pending: ${pending}${firstError}\n\nFinal delivery depends on policy window/templates and webhook status events.`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('[WhatsApp Test Send] Error:', error);
+      Alert.alert('WhatsApp Test Failed', (error as Error).message);
+    } finally {
+      setSendingWhatsAppTest(false);
+    }
+  };
+
   const sendWhatsAppCampaign = async () => {
     const validationError = validateWhatsAppCampaign();
     if (validationError) {
@@ -1614,6 +1686,38 @@ export default function CampaignsScreen() {
                     <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
                   </TouchableOpacity>
                 </View>
+
+                <Text style={styles.label}>Test WhatsApp Number</Text>
+                <TextInput
+                  style={styles.input}
+                  value={whatsappTestPhone}
+                  onChangeText={setWhatsappTestPhone}
+                  placeholder="e.g., 0771234567 or 94771234567"
+                  keyboardType="phone-pad"
+                />
+
+                <Text style={styles.label}>Test WhatsApp Message</Text>
+                <TextInput
+                  style={[styles.input, styles.captionInput]}
+                  value={whatsappTestMessage}
+                  onChangeText={setWhatsappTestMessage}
+                  placeholder="Enter a short test WhatsApp message"
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.testButton, { marginTop: 12 }]}
+                  onPress={sendWhatsAppTestMessage}
+                  disabled={sendingWhatsAppTest}
+                >
+                  {sendingWhatsAppTest ? (
+                    <ActivityIndicator size="small" color={Colors.light.tint} />
+                  ) : (
+                    <Text style={styles.testButtonText}>Send Test WhatsApp Message</Text>
+                  )}
+                </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.inboxToggle}
