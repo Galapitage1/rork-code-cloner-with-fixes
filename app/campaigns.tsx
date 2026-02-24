@@ -102,6 +102,10 @@ export default function CampaignsScreen() {
   const [whatsappCaption, setWhatsappCaption] = useState<string>('');
   const [whatsappTestPhone, setWhatsappTestPhone] = useState<string>('');
   const [whatsappTestMessage, setWhatsappTestMessage] = useState<string>('Hello from The Cakery test message.');
+  const [whatsappTestUseTemplate, setWhatsappTestUseTemplate] = useState<boolean>(false);
+  const [whatsappTestTemplateName, setWhatsappTestTemplateName] = useState<string>('');
+  const [whatsappTestTemplateLanguage, setWhatsappTestTemplateLanguage] = useState<string>('en_US');
+  const [whatsappTestTemplateParamsText, setWhatsappTestTemplateParamsText] = useState<string>('');
 
   const loadCampaignSettings = async () => {
     try {
@@ -127,6 +131,10 @@ export default function CampaignsScreen() {
         setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
         setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
         setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
+        setWhatsappTestUseTemplate(!!parsed.whatsappTestUseTemplate);
+        setWhatsappTestTemplateName(parsed.whatsappTestTemplateName || '');
+        setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
+        setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
@@ -154,6 +162,10 @@ export default function CampaignsScreen() {
         whatsappAccessToken,
         whatsappPhoneNumberId,
         whatsappBusinessId,
+        whatsappTestUseTemplate,
+        whatsappTestTemplateName,
+        whatsappTestTemplateLanguage,
+        whatsappTestTemplateParamsText,
         emailNoReplyMode,
         updatedAt: Date.now(),
       };
@@ -903,14 +915,23 @@ export default function CampaignsScreen() {
         Alert.alert('Missing Number', 'Please enter a test WhatsApp number.');
         return;
       }
-      if (!whatsappTestMessage.trim()) {
+      if (!whatsappTestUseTemplate && !whatsappTestMessage.trim()) {
         Alert.alert('Missing Message', 'Please enter a test message.');
+        return;
+      }
+      if (whatsappTestUseTemplate && !whatsappTestTemplateName.trim()) {
+        Alert.alert('Missing Template Name', 'Please enter an approved WhatsApp template name.');
         return;
       }
 
       setSendingWhatsAppTest(true);
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
+
+      const templateParameters = whatsappTestTemplateParamsText
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
 
       const response = await fetch(phpEndpoint, {
         method: 'POST',
@@ -921,6 +942,10 @@ export default function CampaignsScreen() {
           accessToken: whatsappAccessToken,
           phoneNumberId: whatsappPhoneNumberId,
           message: whatsappTestMessage.trim(),
+          useTemplate: whatsappTestUseTemplate,
+          templateName: whatsappTestUseTemplate ? whatsappTestTemplateName.trim() : undefined,
+          templateLanguage: whatsappTestUseTemplate ? (whatsappTestTemplateLanguage.trim() || 'en_US') : undefined,
+          templateParameters: whatsappTestUseTemplate ? templateParameters : undefined,
           recipients: [
             {
               name: 'Test Recipient',
@@ -1705,7 +1730,53 @@ export default function CampaignsScreen() {
                   multiline
                   numberOfLines={3}
                   textAlignVertical="top"
+                  editable={!whatsappTestUseTemplate}
                 />
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.saveSettingsButton, { marginTop: 12 }]}
+                  onPress={() => setWhatsappTestUseTemplate((prev) => !prev)}
+                >
+                  <Text style={styles.saveSettingsButtonText}>
+                    {whatsappTestUseTemplate ? 'Template Mode: ON (Tap to use text)' : 'Template Mode: OFF (Tap to use template)'}
+                  </Text>
+                </TouchableOpacity>
+
+                {whatsappTestUseTemplate && (
+                  <>
+                    <Text style={[styles.label, { marginTop: 12 }]}>Template Name *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={whatsappTestTemplateName}
+                      onChangeText={setWhatsappTestTemplateName}
+                      placeholder="Approved template name (e.g. order_update)"
+                      autoCapitalize="none"
+                    />
+
+                    <Text style={styles.label}>Template Language Code *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={whatsappTestTemplateLanguage}
+                      onChangeText={setWhatsappTestTemplateLanguage}
+                      placeholder="e.g. en_US"
+                      autoCapitalize="none"
+                    />
+
+                    <Text style={styles.label}>Template Variables (optional, comma-separated)</Text>
+                    <TextInput
+                      style={[styles.input, styles.captionInput]}
+                      value={whatsappTestTemplateParamsText}
+                      onChangeText={setWhatsappTestTemplateParamsText}
+                      placeholder="e.g. John, Order #1234"
+                      multiline
+                      numberOfLines={2}
+                      textAlignVertical="top"
+                    />
+                    <Text style={styles.helpText}>
+                      Use this for body placeholders in the same order as the template variables.
+                    </Text>
+                  </>
+                )}
 
                 <TouchableOpacity
                   style={[styles.actionButton, styles.testButton, { marginTop: 12 }]}
@@ -1715,7 +1786,9 @@ export default function CampaignsScreen() {
                   {sendingWhatsAppTest ? (
                     <ActivityIndicator size="small" color={Colors.light.tint} />
                   ) : (
-                    <Text style={styles.testButtonText}>Send Test WhatsApp Message</Text>
+                    <Text style={styles.testButtonText}>
+                      {whatsappTestUseTemplate ? 'Send Test WhatsApp Template' : 'Send Test WhatsApp Message'}
+                    </Text>
                   )}
                 </TouchableOpacity>
 
@@ -2740,6 +2813,12 @@ const styles = StyleSheet.create({
   },
   captionInput: {
     minHeight: 80,
+  },
+  helpText: {
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 16,
+    marginTop: 6,
   },
   mediaTip: {
     backgroundColor: '#FEF3C7',

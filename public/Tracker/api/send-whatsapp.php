@@ -66,6 +66,10 @@ $recipients = isset($body['recipients']) ? $body['recipients'] : [];
 $mediaUrl = isset($body['mediaUrl']) ? trim($body['mediaUrl']) : '';
 $mediaType = isset($body['mediaType']) ? trim($body['mediaType']) : 'image';
 $caption = isset($body['caption']) ? trim($body['caption']) : '';
+$useTemplate = !empty($body['useTemplate']);
+$templateName = isset($body['templateName']) ? trim((string)$body['templateName']) : '';
+$templateLanguage = isset($body['templateLanguage']) ? trim((string)$body['templateLanguage']) : 'en_US';
+$templateParameters = isset($body['templateParameters']) && is_array($body['templateParameters']) ? $body['templateParameters'] : [];
 $defaultCountryCode = isset($body['defaultCountryCode']) ? preg_replace('/[^0-9]/', '', trim((string)$body['defaultCountryCode'])) : '94';
 
 if (!empty($mediaUrl)) {
@@ -81,7 +85,11 @@ if (empty($accessToken) || empty($phoneNumberId) || empty($recipients)) {
   respond(['success' => false, 'error' => 'Missing required fields'], 400);
 }
 
-if (empty($message) && empty($mediaUrl)) {
+if ($useTemplate && $templateName === '') {
+  respond(['success' => false, 'error' => 'Template name is required when template mode is enabled'], 400);
+}
+
+if (!$useTemplate && empty($message) && empty($mediaUrl)) {
   respond(['success' => false, 'error' => 'Either message or media URL is required'], 400);
 }
 
@@ -158,7 +166,43 @@ foreach ($recipients as $index => $recipient) {
 
     $url = "https://graph.facebook.com/v21.0/{$phoneNumberId}/messages";
     
-    if (!empty($mediaUrl)) {
+    if ($useTemplate) {
+      $template = [
+        'name' => $templateName,
+        'language' => [
+          'code' => $templateLanguage !== '' ? $templateLanguage : 'en_US',
+        ],
+      ];
+
+      $textParams = [];
+      foreach ($templateParameters as $param) {
+        if (is_array($param)) {
+          continue;
+        }
+        $paramText = trim((string)$param);
+        if ($paramText === '') {
+          continue;
+        }
+        $textParams[] = [
+          'type' => 'text',
+          'text' => $paramText,
+        ];
+      }
+      if (!empty($textParams)) {
+        $template['components'] = [[
+          'type' => 'body',
+          'parameters' => $textParams,
+        ]];
+      }
+
+      $payload = json_encode([
+        'messaging_product' => 'whatsapp',
+        'recipient_type' => 'individual',
+        'to' => $phone,
+        'type' => 'template',
+        'template' => $template,
+      ]);
+    } elseif (!empty($mediaUrl)) {
       $messageBody = [
         'messaging_product' => 'whatsapp',
         'recipient_type' => 'individual',
