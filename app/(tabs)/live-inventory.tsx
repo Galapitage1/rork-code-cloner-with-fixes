@@ -39,6 +39,11 @@ type ProductInventoryHistory = {
   records: DailyInventoryRecord[];
 };
 
+const isUserStockCheck = (check: StockCheck) => {
+  const completedBy = (check.completedBy || '').trim();
+  return completedBy !== '' && completedBy !== 'AUTO';
+};
+
 function LiveInventoryScreen() {
   const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll, reconcileHistory } = useStock();
   const { recipes } = useRecipes();
@@ -270,7 +275,7 @@ function LiveInventoryScreen() {
 
         // Find latest stock check from previous calendar day
         const previousDayChecks = stockChecks
-          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && isUserStockCheck(c))
           .sort((a, b) => b.timestamp - a.timestamp);
         
         if (previousDayChecks.length > 0) {
@@ -371,7 +376,7 @@ function LiveInventoryScreen() {
         let wastageSlices = 0;
 
         const todayChecks = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .filter(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c))
           .sort((a, b) => b.timestamp - a.timestamp);
 
         if (todayChecks.length > 0) {
@@ -809,7 +814,7 @@ function LiveInventoryScreen() {
 
         // Find latest stock check from previous calendar day
         const previousDayChecks = stockChecks
-          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && isUserStockCheck(c))
           .sort((a, b) => b.timestamp - a.timestamp);
         
         if (previousDayChecks.length > 0) {
@@ -867,7 +872,7 @@ function LiveInventoryScreen() {
         // Wastage from today's check
         let wastage = 0;
         const todayChecks = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO')
+          .filter(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c))
           .sort((a, b) => b.timestamp - a.timestamp);
 
         if (todayChecks.length > 0) {
@@ -1337,7 +1342,7 @@ function LiveInventoryScreen() {
       
       // STEP 1: Update TODAY's stock check to mark the edit and set the new current stock
       console.log('STEP 1: Marking current stock as manually edited on date:', date);
-      const todayCheck = stockChecks.find(c => c.date === date && c.outlet === selectedOutlet && c.completedBy !== 'AUTO');
+      const todayCheck = stockChecks.find(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c));
       
       if (todayCheck) {
         console.log('Found existing stock check for today:', todayCheck.id);

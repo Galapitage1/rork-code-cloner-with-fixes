@@ -71,8 +71,13 @@ export default function HistoryScreen() {
   const [showPullStartCalendar, setShowPullStartCalendar] = useState<boolean>(false);
   const [showPullEndCalendar, setShowPullEndCalendar] = useState<boolean>(false);
 
-  const sortedChecks = useMemo(() => 
-    [...stockChecks].sort((a, b) => b.timestamp - a.timestamp),
+  const sortedChecks = useMemo(() =>
+    [...stockChecks]
+      .filter((check) => {
+        const completedBy = (check.completedBy || '').trim();
+        return completedBy !== '' && completedBy !== 'AUTO';
+      })
+      .sort((a, b) => b.timestamp - a.timestamp),
     [stockChecks]
   );
 
