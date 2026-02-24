@@ -548,6 +548,8 @@ export default function CampaignsScreen() {
               recipients: selectedCustomers.map(c => ({
                 name: c.name,
                 email: c.email,
+                company: c.company,
+                phone: c.phone,
               })),
             }),
           });
@@ -1314,6 +1316,7 @@ export default function CampaignsScreen() {
                 onChangeText={setSubject}
                 placeholder="Email subject"
               />
+              <Text style={styles.charCount}>Placeholders: {'{{name}}'}, {'{{first_name}}'}, {'{{company}}'}</Text>
 
               {emailFormat === 'text' ? (
                 <>
@@ -1327,6 +1330,7 @@ export default function CampaignsScreen() {
                     numberOfLines={8}
                     textAlignVertical="top"
                   />
+                  <Text style={styles.charCount}>Placeholders: {'{{name}}'}, {'{{first_name}}'}, {'{{company}}'}</Text>
                 </>
               ) : (
                 <>
@@ -1340,6 +1344,7 @@ export default function CampaignsScreen() {
                     numberOfLines={10}
                     textAlignVertical="top"
                   />
+                  <Text style={styles.charCount}>Placeholders: {'{{name}}'}, {'{{first_name}}'}, {'{{company}}'}</Text>
                 </>
               )}
 

@@ -48,6 +48,70 @@ function sanitize_email($email) {
   return filter_var(trim((string)$email), FILTER_VALIDATE_EMAIL) ?: '';
 }
 
+function recipient_value($recipient, $key) {
+  return isset($recipient[$key]) ? trim((string)$recipient[$key]) : '';
+}
+
+function first_name_from_name($name) {
+  $name = trim((string)$name);
+  if ($name === '') return '';
+  $parts = preg_split('/\s+/', $name);
+  return isset($parts[0]) ? $parts[0] : '';
+}
+
+function personalize_text($text, $recipient) {
+  $text = (string)$text;
+  $name = recipient_value($recipient, 'name');
+  $firstName = recipient_value($recipient, 'first_name');
+  if ($firstName === '') {
+    $firstName = first_name_from_name($name);
+  }
+  $company = recipient_value($recipient, 'company');
+  $email = recipient_value($recipient, 'email');
+  $phone = recipient_value($recipient, 'phone');
+
+  $replacements = [
+    '{{name}}' => $name,
+    '{{first_name}}' => $firstName,
+    '{{company}}' => $company,
+    '{{email}}' => $email,
+    '{{phone}}' => $phone,
+  ];
+
+  return strtr($text, $replacements);
+}
+
+function personalize_email_data($emailData, $recipient) {
+  $personalized = $emailData;
+  $personalized['subject'] = personalize_text(isset($emailData['subject']) ? $emailData['subject'] : '', $recipient);
+  $personalized['message'] = personalize_text(isset($emailData['message']) ? $emailData['message'] : '', $recipient);
+  $personalized['htmlContent'] = personalize_text(isset($emailData['htmlContent']) ? $emailData['htmlContent'] : '', $recipient);
+  return $personalized;
+}
+
+function build_common_email_headers($host, $senderEmail, $senderName, $toEmail, $toName, $subject) {
+  $safeHost = preg_replace('/[^a-zA-Z0-9\.\-]/', '', (string)$host);
+  if ($safeHost === '') {
+    $safeHost = 'tracker.tecclk.com';
+  }
+
+  $fromDisplay = $senderName !== '' ? encode_header_utf8($senderName) . " <{$senderEmail}>" : $senderEmail;
+  $toDisplay = $toName !== '' ? encode_header_utf8($toName) . " <{$toEmail}>" : $toEmail;
+  $messageId = '<' . uniqid('tracker_', true) . '@' . $safeHost . '>';
+  $listUnsub = '<mailto:' . $senderEmail . '?subject=' . rawurlencode('unsubscribe') . '>';
+
+  return [
+    'Date: ' . date(DATE_RFC2822),
+    'From: ' . $fromDisplay,
+    'To: ' . $toDisplay,
+    'Reply-To: ' . $senderEmail,
+    'Subject: ' . encode_header_utf8($subject),
+    'Message-ID: ' . $messageId,
+    'X-Mailer: Tracker SMTP',
+    'List-Unsubscribe: ' . $listUnsub,
+  ];
+}
+
 function build_email_message($emailData) {
   $format = isset($emailData['format']) ? $emailData['format'] : 'text';
   $messageText = isset($emailData['message']) ? (string)$emailData['message'] : '';
@@ -216,18 +280,10 @@ function smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $sende
 
     list($mimeHeaders, $mimeBody) = build_email_message($emailData);
 
-    $fromDisplay = $senderName !== '' ? encode_header_utf8($senderName) . " <{$senderEmail}>" : $senderEmail;
-    $toDisplay = $toName !== '' ? encode_header_utf8($toName) . " <{$toEmail}>" : $toEmail;
-
-    $dataHeaders = array_merge([
-      'Date: ' . date(DATE_RFC2822),
-      'From: ' . $fromDisplay,
-      'To: ' . $toDisplay,
-      'Reply-To: ' . $senderEmail,
-      'Subject: ' . encode_header_utf8($subject),
-      'Message-ID: <' . uniqid('tracker_', true) . '@' . preg_replace('/[^a-zA-Z0-9\.\-]/', '', $host) . '>',
-      'X-Mailer: Tracker SMTP',
-    ], $mimeHeaders);
+    $dataHeaders = array_merge(
+      build_common_email_headers($host, $senderEmail, $senderName, $toEmail, $toName, $subject),
+      $mimeHeaders
+    );
 
     $messageData = implode("\r\n", $dataHeaders) . "\r\n\r\n" . $mimeBody;
     $messageData = str_replace(["\r\n", "\r"], "\n", $messageData);
@@ -269,7 +325,8 @@ foreach ($recipients as $recipient) {
     $toName = isset($recipient['name']) ? trim((string)$recipient['name']) : '';
     $senderEmail = sanitize_email(isset($emailData['senderEmail']) ? $emailData['senderEmail'] : '');
     $senderName = isset($emailData['senderName']) ? trim((string)$emailData['senderName']) : '';
-    $subject = isset($emailData['subject']) ? (string)$emailData['subject'] : '';
+    $personalizedEmailData = personalize_email_data($emailData, $recipient);
+    $subject = isset($personalizedEmailData['subject']) ? (string)$personalizedEmailData['subject'] : '';
 
     if ($toEmail === '' || $senderEmail === '') {
       throw new Exception('Invalid sender/recipient email');
@@ -288,19 +345,23 @@ foreach ($recipients as $recipient) {
 
       $mail->setFrom($senderEmail, $senderName);
       $mail->addAddress($toEmail, $toName);
+      $mail->addReplyTo($senderEmail, $senderName);
       $mail->Subject = $subject;
+      $mail->MessageID = '<' . uniqid('tracker_', true) . '@' . preg_replace('/[^a-zA-Z0-9\.\-]/', '', (string)$smtpConfig['host']) . '>';
+      $mail->addCustomHeader('X-Mailer', 'Tracker SMTP');
+      $mail->addCustomHeader('List-Unsubscribe', '<mailto:' . $senderEmail . '?subject=' . rawurlencode('unsubscribe') . '>');
 
-      if (isset($emailData['format']) && $emailData['format'] === 'html') {
+      if (isset($personalizedEmailData['format']) && $personalizedEmailData['format'] === 'html') {
         $mail->isHTML(true);
-        $mail->Body = isset($emailData['htmlContent']) ? $emailData['htmlContent'] : '';
+        $mail->Body = isset($personalizedEmailData['htmlContent']) ? $personalizedEmailData['htmlContent'] : '';
         $mail->AltBody = strip_tags($mail->Body);
       } else {
         $mail->isHTML(false);
-        $mail->Body = isset($emailData['message']) ? $emailData['message'] : '';
+        $mail->Body = isset($personalizedEmailData['message']) ? $personalizedEmailData['message'] : '';
       }
 
-      if (isset($emailData['attachments']) && is_array($emailData['attachments'])) {
-        foreach ($emailData['attachments'] as $attachment) {
+      if (isset($personalizedEmailData['attachments']) && is_array($personalizedEmailData['attachments'])) {
+        foreach ($personalizedEmailData['attachments'] as $attachment) {
           if (isset($attachment['content']) && isset($attachment['filename'])) {
             $decoded = base64_decode($attachment['content'], true);
             if ($decoded !== false) {
@@ -318,19 +379,10 @@ foreach ($recipients as $recipient) {
       $mail->send();
     } elseif (!empty($smtpConfig['host']) && !empty($smtpConfig['username']) && isset($smtpConfig['password'])) {
       $usedSmtpSocket = true;
-      smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $senderEmail, $senderName, $subject);
+      smtp_send_via_socket($smtpConfig, $personalizedEmailData, $toEmail, $toName, $senderEmail, $senderName, $subject);
     } else {
       $usedNativeMailFallback = true;
-      list($mimeHeaders, $body) = build_email_message($emailData);
-
-      $fromDisplay = $senderName !== ''
-        ? encode_header_utf8($senderName) . " <{$senderEmail}>"
-        : $senderEmail;
-
-      $headers = array_merge($mimeHeaders, [
-        'From: ' . $fromDisplay,
-        'Reply-To: ' . $senderEmail,
-      ]);
+      list($mimeHeaders, $body) = build_email_message($personalizedEmailData);
 
       if ($toName !== '') {
         $toHeader = encode_header_utf8($toName) . " <{$toEmail}>";
@@ -338,10 +390,15 @@ foreach ($recipients as $recipient) {
         $toHeader = $toEmail;
       }
 
+      $commonHeaders = build_common_email_headers($smtpConfig['host'] ?? 'tracker.tecclk.com', $senderEmail, $senderName, $toEmail, $toName, $subject);
+      $commonHeaders = array_values(array_filter($commonHeaders, function($h) {
+        return stripos($h, 'To:') !== 0 && stripos($h, 'Subject:') !== 0;
+      }));
+      $headerLines = array_merge($commonHeaders, $mimeHeaders);
       $subjectHeader = encode_header_utf8($subject);
-      $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headers), '-f ' . $senderEmail);
+      $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headerLines), '-f ' . $senderEmail);
       if (!$ok) {
-        $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headers));
+        $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headerLines));
       }
       if (!$ok) {
         $lastError = error_get_last();
