@@ -45,6 +45,26 @@ export const PAYROLL_COLUMNS: PayrollColumn[] = [
 
 export const PAYROLL_HEADER_LABELS = PAYROLL_COLUMNS.map((c) => c.label);
 
+export const PAYROLL_DEFAULT_IMPORT_KEYS = new Set<string>([
+  'basicRatePerHr',
+  'fullRatePerHr',
+  'hoursPerDay',
+  'totalSalary',
+  'basic',
+  'performanceAllowance',
+  'attendanceAllowance',
+  'serviceChargeEarning',
+  'bra1',
+  'bra2',
+  'epfEmployer',
+  'etfEmployer',
+  'epfEmployee',
+  'advance',
+  'otherReduction',
+  'loans',
+  'serviceChargeReduction',
+]);
+
 type WorkbookLike = {
   SheetNames: string[];
   Sheets: Record<string, any>;
@@ -609,6 +629,14 @@ export function createStaffFromPayrollTemplateRows(
       active: true,
     };
 
+    const compactDefaults: Record<string, string | number | null> = {};
+    for (const [k, v] of Object.entries(row.payrollDefaults || {})) {
+      if (!PAYROLL_DEFAULT_IMPORT_KEYS.has(k)) continue;
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'string' && v.trim() === '') continue;
+      compactDefaults[k] = typeof v === 'string' ? v.trim() : v;
+    }
+
     const updated: HRStaffMember = {
       ...base,
       fullName: row.fullName || base.fullName,
@@ -617,7 +645,7 @@ export function createStaffFromPayrollTemplateRows(
       epfNumber: row.epfNumber || base.epfNumber,
       payrollDefaults: {
         ...(base.payrollDefaults || {}),
-        ...row.payrollDefaults,
+        ...compactDefaults,
       },
       updatedAt: now + idx,
       deleted: false,

@@ -6,6 +6,45 @@ import { createStaffFromPayrollTemplateRows, ParsedPayrollTemplateRow } from '@/
 
 const HR_STAFF_KEY = '@hr_staff_members';
 const HR_ATTENDANCE_IMPORTS_KEY = '@hr_attendance_imports';
+const HR_QUOTA_RECOVERY_KEYS = [
+  '@reconciliation_sales_reports',
+  '@reconciliation_kitchen_stock_reports',
+  '@stock_app_live_inventory_snapshots',
+  '@stock_app_activity_logs',
+] as const;
+
+function isQuotaExceededError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  return lower.includes('quota') || lower.includes('exceeded');
+}
+
+function compactStaffForStorage(rows: HRStaffMember[]): HRStaffMember[] {
+  return rows.map((row) => {
+    const compactDefaults: Record<string, string | number | null> = {};
+    const defaults = row.payrollDefaults || {};
+    Object.entries(defaults).forEach(([k, v]) => {
+      if (v === null || v === undefined) return;
+      if (typeof v === 'string' && v.trim() === '') return;
+      compactDefaults[k] = typeof v === 'string' ? v.trim() : v;
+    });
+    return {
+      ...row,
+      payrollDefaults: Object.keys(compactDefaults).length ? compactDefaults : undefined,
+      notes: row.notes?.trim() || undefined,
+    };
+  });
+}
+
+async function clearQuotaRecoveryCaches() {
+  for (const key of HR_QUOTA_RECOVERY_KEYS) {
+    try {
+      await AsyncStorage.removeItem(key);
+    } catch {
+      // best effort
+    }
+  }
+}
 
 type HRContextType = {
   staffMembers: HRStaffMember[];
@@ -64,13 +103,73 @@ export function HRProvider({
   }, [loadLocal]);
 
   const persistStaff = useCallback(async (allRows: HRStaffMember[]) => {
-    await AsyncStorage.setItem(HR_STAFF_KEY, JSON.stringify(allRows));
-    setStaffMembers(allRows.filter((r) => !r.deleted));
+    const compactRows = compactStaffForStorage(allRows);
+    const serialized = JSON.stringify(compactRows);
+    try {
+      await AsyncStorage.setItem(HR_STAFF_KEY, serialized);
+      setStaffMembers(compactRows.filter((r) => !r.deleted));
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      console.warn('[HRContext] Staff storage exceeded quota, clearing temporary caches and retrying...');
+    }
+
+    await clearQuotaRecoveryCaches();
+
+    try {
+      await AsyncStorage.setItem(HR_STAFF_KEY, serialized);
+      setStaffMembers(compactRows.filter((r) => !r.deleted));
+      return;
+    } catch (retryError) {
+      if (!isQuotaExceededError(retryError)) throw retryError;
+    }
+
+    // Last resort: preserve core staff identity data without payroll defaults.
+    const minimalRows = compactRows.map((row) => ({
+      ...row,
+      payrollDefaults: undefined,
+    }));
+    try {
+      await AsyncStorage.setItem(HR_STAFF_KEY, JSON.stringify(minimalRows));
+      setStaffMembers(minimalRows.filter((r) => !r.deleted));
+      console.warn('[HRContext] Saved minimal staff cache without payrollDefaults due to storage quota');
+      return;
+    } catch (finalError) {
+      if (isQuotaExceededError(finalError)) {
+        throw new Error('Unable to save HR staff data locally because device storage is full. Run manual cleanup in Settings, then retry the payroll template import.');
+      }
+      throw finalError;
+    }
   }, []);
 
   const persistAttendanceImports = useCallback(async (allRows: HRAttendanceImport[]) => {
-    await AsyncStorage.setItem(HR_ATTENDANCE_IMPORTS_KEY, JSON.stringify(allRows));
-    setAttendanceImports(allRows.filter((r) => !r.deleted));
+    const sorted = [...allRows].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const tryWrite = async (rowsToWrite: HRAttendanceImport[]) => {
+      await AsyncStorage.setItem(HR_ATTENDANCE_IMPORTS_KEY, JSON.stringify(rowsToWrite));
+      setAttendanceImports(rowsToWrite.filter((r) => !r.deleted));
+    };
+
+    try {
+      await tryWrite(sorted);
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      console.warn('[HRContext] Attendance imports exceeded quota, trimming local HR attendance cache...');
+    }
+
+    await clearQuotaRecoveryCaches();
+
+    const retentionSizes = [12, 6, 3, 2, 1];
+    for (const keep of retentionSizes) {
+      try {
+        await tryWrite(sorted.slice(0, keep));
+        return;
+      } catch (retryError) {
+        if (!isQuotaExceededError(retryError)) throw retryError;
+      }
+    }
+
+    throw new Error('Unable to save fingerprint attendance import locally because device storage is full. Run manual cleanup in Settings, then retry.');
   }, []);
 
   const syncAll = useCallback(async (fetchOnly = false) => {
@@ -89,19 +188,14 @@ export function HRProvider({
         syncData<HRAttendanceImport>('hr_attendance_imports', localImports, currentUser.id, { fetchOnly, includeDeleted: true, minDays: 3650 }),
       ]);
 
-      await Promise.all([
-        AsyncStorage.setItem(HR_STAFF_KEY, JSON.stringify(syncedStaff)),
-        AsyncStorage.setItem(HR_ATTENDANCE_IMPORTS_KEY, JSON.stringify(syncedImports)),
-      ]);
-
-      setStaffMembers(syncedStaff.filter((r) => !r.deleted));
-      setAttendanceImports(syncedImports.filter((r) => !r.deleted));
+      await persistStaff(syncedStaff);
+      await persistAttendanceImports(syncedImports);
     } catch (error) {
       console.error('[HRContext] Sync failed:', error);
     } finally {
       setIsSyncing(false);
     }
-  }, [currentUser, isSyncing]);
+  }, [currentUser, isSyncing, persistStaff, persistAttendanceImports]);
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -208,4 +302,3 @@ export function HRProvider({
 
   return <HRCtx.Provider value={value}>{children}</HRCtx.Provider>;
 }
-
