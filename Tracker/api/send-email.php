@@ -89,22 +89,31 @@ function personalize_email_data($emailData, $recipient) {
   return $personalized;
 }
 
-function build_common_email_headers($host, $senderEmail, $senderName, $toEmail, $toName, $subject) {
+function build_common_email_headers($host, $senderEmail, $senderName, $replyToEmail, $replyToName, $toEmail, $toName, $subject) {
   $safeHost = preg_replace('/[^a-zA-Z0-9\.\-]/', '', (string)$host);
   if ($safeHost === '') {
     $safeHost = 'tracker.tecclk.com';
   }
 
   $fromDisplay = $senderName !== '' ? encode_header_utf8($senderName) . " <{$senderEmail}>" : $senderEmail;
+  $replyEmail = sanitize_email($replyToEmail);
+  if ($replyEmail === '') {
+    $replyEmail = $senderEmail;
+  }
+  $replyName = trim((string)$replyToName);
+  if ($replyName === '') {
+    $replyName = $senderName;
+  }
   $toDisplay = $toName !== '' ? encode_header_utf8($toName) . " <{$toEmail}>" : $toEmail;
   $messageId = '<' . uniqid('tracker_', true) . '@' . $safeHost . '>';
   $listUnsub = '<mailto:' . $senderEmail . '?subject=' . rawurlencode('unsubscribe') . '>';
+  $replyDisplay = $replyName !== '' ? encode_header_utf8($replyName) . " <{$replyEmail}>" : $replyEmail;
 
   return [
     'Date: ' . date(DATE_RFC2822),
     'From: ' . $fromDisplay,
     'To: ' . $toDisplay,
-    'Reply-To: ' . $senderEmail,
+    'Reply-To: ' . $replyDisplay,
     'Subject: ' . encode_header_utf8($subject),
     'Message-ID: ' . $messageId,
     'X-Mailer: Tracker SMTP',
@@ -217,7 +226,7 @@ function smtp_expect($socket, $expectedCodes, $step) {
   return $response;
 }
 
-function smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $senderEmail, $senderName, $subject) {
+function smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $senderEmail, $senderName, $replyToEmail, $replyToName, $subject) {
   $host = trim((string)($smtpConfig['host'] ?? ''));
   $port = intval($smtpConfig['port'] ?? 587);
   $username = trim((string)($smtpConfig['username'] ?? ''));
@@ -281,7 +290,7 @@ function smtp_send_via_socket($smtpConfig, $emailData, $toEmail, $toName, $sende
     list($mimeHeaders, $mimeBody) = build_email_message($emailData);
 
     $dataHeaders = array_merge(
-      build_common_email_headers($host, $senderEmail, $senderName, $toEmail, $toName, $subject),
+      build_common_email_headers($host, $senderEmail, $senderName, $replyToEmail, $replyToName, $toEmail, $toName, $subject),
       $mimeHeaders
     );
 
@@ -325,8 +334,17 @@ foreach ($recipients as $recipient) {
     $toName = isset($recipient['name']) ? trim((string)$recipient['name']) : '';
     $senderEmail = sanitize_email(isset($emailData['senderEmail']) ? $emailData['senderEmail'] : '');
     $senderName = isset($emailData['senderName']) ? trim((string)$emailData['senderName']) : '';
+    $replyToEmail = sanitize_email(isset($emailData['replyToEmail']) ? $emailData['replyToEmail'] : '');
+    $replyToName = isset($emailData['replyToName']) ? trim((string)$emailData['replyToName']) : '';
     $personalizedEmailData = personalize_email_data($emailData, $recipient);
     $subject = isset($personalizedEmailData['subject']) ? (string)$personalizedEmailData['subject'] : '';
+
+    if ($replyToEmail === '') {
+      $replyToEmail = $senderEmail;
+    }
+    if ($replyToName === '') {
+      $replyToName = $senderName;
+    }
 
     if ($toEmail === '' || $senderEmail === '') {
       throw new Exception('Invalid sender/recipient email');
@@ -345,7 +363,7 @@ foreach ($recipients as $recipient) {
 
       $mail->setFrom($senderEmail, $senderName);
       $mail->addAddress($toEmail, $toName);
-      $mail->addReplyTo($senderEmail, $senderName);
+      $mail->addReplyTo($replyToEmail, $replyToName);
       $mail->Subject = $subject;
       $mail->MessageID = '<' . uniqid('tracker_', true) . '@' . preg_replace('/[^a-zA-Z0-9\.\-]/', '', (string)$smtpConfig['host']) . '>';
       $mail->addCustomHeader('X-Mailer', 'Tracker SMTP');
@@ -379,7 +397,7 @@ foreach ($recipients as $recipient) {
       $mail->send();
     } elseif (!empty($smtpConfig['host']) && !empty($smtpConfig['username']) && isset($smtpConfig['password'])) {
       $usedSmtpSocket = true;
-      smtp_send_via_socket($smtpConfig, $personalizedEmailData, $toEmail, $toName, $senderEmail, $senderName, $subject);
+      smtp_send_via_socket($smtpConfig, $personalizedEmailData, $toEmail, $toName, $senderEmail, $senderName, $replyToEmail, $replyToName, $subject);
     } else {
       $usedNativeMailFallback = true;
       list($mimeHeaders, $body) = build_email_message($personalizedEmailData);
@@ -390,7 +408,7 @@ foreach ($recipients as $recipient) {
         $toHeader = $toEmail;
       }
 
-      $commonHeaders = build_common_email_headers($smtpConfig['host'] ?? 'tracker.tecclk.com', $senderEmail, $senderName, $toEmail, $toName, $subject);
+      $commonHeaders = build_common_email_headers($smtpConfig['host'] ?? 'tracker.tecclk.com', $senderEmail, $senderName, $replyToEmail, $replyToName, $toEmail, $toName, $subject);
       $commonHeaders = array_values(array_filter($commonHeaders, function($h) {
         return stripos($h, 'To:') !== 0 && stripos($h, 'Subject:') !== 0;
       }));

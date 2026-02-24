@@ -55,6 +55,7 @@ export default function CampaignsScreen() {
   const [htmlContent, setHtmlContent] = useState('');
   const [senderEmail, setSenderEmail] = useState('');
   const [senderName, setSenderName] = useState('');
+  const [emailNoReplyMode, setEmailNoReplyMode] = useState(false);
   
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
   const [showCustomerList, setShowCustomerList] = useState(false);
@@ -120,6 +121,7 @@ export default function CampaignsScreen() {
         setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
         setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
         setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
+        setEmailNoReplyMode(!!parsed.emailNoReplyMode);
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
       }
@@ -146,6 +148,7 @@ export default function CampaignsScreen() {
         whatsappAccessToken,
         whatsappPhoneNumberId,
         whatsappBusinessId,
+        emailNoReplyMode,
         updatedAt: Date.now(),
       };
       
@@ -195,6 +198,15 @@ export default function CampaignsScreen() {
       tokenLength: whatsappAccessToken?.length || 0
     });
   }, [whatsappAccessToken, whatsappPhoneNumberId]);
+
+  const derivedNoReplyEmail = useMemo(() => {
+    const email = senderEmail.trim();
+    const atIndex = email.indexOf('@');
+    if (atIndex < 0) return '';
+    const domain = email.slice(atIndex + 1).trim();
+    if (!domain) return '';
+    return `noreply@${domain}`;
+  }, [senderEmail]);
 
   const filteredCustomers = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
@@ -539,6 +551,8 @@ export default function CampaignsScreen() {
               emailData: {
                 senderName,
                 senderEmail,
+                replyToEmail: emailNoReplyMode ? (derivedNoReplyEmail || senderEmail) : senderEmail,
+                replyToName: senderName,
                 subject,
                 message,
                 htmlContent,
@@ -1272,6 +1286,23 @@ export default function CampaignsScreen() {
                 onChangeText={setSenderName}
                 placeholder="Your Company Name"
               />
+
+              <TouchableOpacity
+                style={styles.selectAllButton}
+                onPress={() => setEmailNoReplyMode(!emailNoReplyMode)}
+              >
+                {emailNoReplyMode ? (
+                  <CheckSquare size={20} color={Colors.light.tint} />
+                ) : (
+                  <Square size={20} color={Colors.light.tabIconDefault} />
+                )}
+                <Text style={styles.selectAllText}>No-reply mode (set Reply-To to noreply@...)</Text>
+              </TouchableOpacity>
+              {emailNoReplyMode && (
+                <Text style={styles.charCount}>
+                  Reply-To will be: {derivedNoReplyEmail || 'Enter a valid Sender Email first'}
+                </Text>
+              )}
 
               <Text style={styles.label}>Email Format</Text>
               <View style={styles.formatSelector}>
