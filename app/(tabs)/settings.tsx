@@ -191,7 +191,12 @@ export default function SettingsScreen() {
       const baseUrl = backendStatus.baseUrl;
       console.log('[Email Test] Testing connection to:', baseUrl);
 
-      const response = await fetch(`${baseUrl}/api/test-email-connection`, {
+      const normalizedBaseUrl = (baseUrl || '').replace(/\/$/, '');
+      const endpoint = normalizedBaseUrl.includes('tracker.tecclk.com')
+        ? `${normalizedBaseUrl}/Tracker/api/test-email-connection.php`
+        : `${normalizedBaseUrl}/api/test-email-connection`;
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -206,7 +211,13 @@ export default function SettingsScreen() {
         }),
       });
 
-      const result = await response.json();
+      const rawText = await response.text();
+      let result: any;
+      try {
+        result = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(`Server returned non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 120)}`);
+      }
       console.log('[Email Test] Result:', result);
 
       if (response.ok && result.success) {
