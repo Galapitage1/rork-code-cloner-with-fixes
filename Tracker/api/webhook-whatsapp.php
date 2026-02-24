@@ -29,6 +29,27 @@ function respond($data, $status = 200) {
   exit;
 }
 
+function readJsonArrayFile($filePath) {
+  if (!file_exists($filePath)) {
+    return [];
+  }
+  $contents = file_get_contents($filePath);
+  if (!$contents) {
+    return [];
+  }
+  $decoded = json_decode($contents, true);
+  return is_array($decoded) ? $decoded : [];
+}
+
+function writeJsonArrayFile($filePath, $data) {
+  $dataDir = dirname($filePath);
+  if (!is_dir($dataDir)) {
+    @mkdir($dataDir, 0755, true);
+  }
+  file_put_contents($filePath, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+  @chmod($filePath, 0644);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
   $mode = isset($_GET['hub_mode']) ? $_GET['hub_mode'] : '';
   $token = isset($_GET['hub_verify_token']) ? $_GET['hub_verify_token'] : '';
@@ -96,14 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 logMessage("Message received - From: {$contactName} ({$from}), Type: {$type}, Text: {$messageText}");
                 
                 $messagesFile = __DIR__ . '/../data/whatsapp-messages.json';
-                $messages = [];
-                if (file_exists($messagesFile)) {
-                  $contents = file_get_contents($messagesFile);
-                  $decoded = json_decode($contents, true);
-                  if (is_array($decoded)) {
-                    $messages = $decoded;
-                  }
-                }
+                $messages = readJsonArrayFile($messagesFile);
                 
                 $messages[] = [
                   'id' => $messageId,
@@ -115,14 +129,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   'receivedAt' => time(),
                 ];
                 
-                $dataDir = __DIR__ . '/../data';
-                if (!is_dir($dataDir)) {
-                  @mkdir($dataDir, 0755, true);
+                if (count($messages) > 1000) {
+                  $messages = array_slice($messages, -1000);
                 }
-                
-                file_put_contents($messagesFile, json_encode($messages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
-                @chmod($messagesFile, 0644);
+                writeJsonArrayFile($messagesFile, $messages);
               }
+            }
+
+            if (isset($change['value']['statuses']) && is_array($change['value']['statuses'])) {
+              $statusesFile = __DIR__ . '/../data/whatsapp-statuses.json';
+              $statusEvents = readJsonArrayFile($statusesFile);
+
+              foreach ($change['value']['statuses'] as $status) {
+                $statusValue = isset($status['status']) ? strtolower((string)$status['status']) : 'unknown';
+                $wamid = isset($status['id']) ? (string)$status['id'] : '';
+                $recipientId = isset($status['recipient_id']) ? (string)$status['recipient_id'] : '';
+                $timestamp = isset($status['timestamp']) ? intval($status['timestamp']) : time();
+                $conversationId = isset($status['conversation']['id']) ? (string)$status['conversation']['id'] : '';
+                $conversationOrigin = isset($status['conversation']['origin']['type']) ? (string)$status['conversation']['origin']['type'] : '';
+                $pricingCategory = isset($status['pricing']['category']) ? (string)$status['pricing']['category'] : '';
+                $pricingModel = isset($status['pricing']['pricing_model']) ? (string)$status['pricing']['pricing_model'] : '';
+                $errorCode = isset($status['errors'][0]['code']) ? $status['errors'][0]['code'] : null;
+                $errorTitle = isset($status['errors'][0]['title']) ? (string)$status['errors'][0]['title'] : '';
+                $errorMessage = isset($status['errors'][0]['message']) ? (string)$status['errors'][0]['message'] : '';
+
+                logMessage("Status event - To: {$recipientId}, Status: {$statusValue}, WAMID: {$wamid}" . ($errorTitle ? ", Error: {$errorTitle}" : ''));
+
+                $statusEvents[] = [
+                  'id' => uniqid('wa_status_', true),
+                  'wamid' => $wamid,
+                  'recipient_id' => $recipientId,
+                  'status' => $statusValue,
+                  'timestamp' => $timestamp,
+                  'receivedAt' => time(),
+                  'conversationId' => $conversationId,
+                  'conversationOriginType' => $conversationOrigin,
+                  'pricingCategory' => $pricingCategory,
+                  'pricingModel' => $pricingModel,
+                  'errorCode' => $errorCode,
+                  'errorTitle' => $errorTitle,
+                  'errorMessage' => $errorMessage,
+                  'raw' => $status,
+                ];
+              }
+
+              if (count($statusEvents) > 5000) {
+                $statusEvents = array_slice($statusEvents, -5000);
+              }
+              writeJsonArrayFile($statusesFile, $statusEvents);
             }
           }
         }

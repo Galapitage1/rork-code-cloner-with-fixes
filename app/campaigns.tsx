@@ -93,6 +93,9 @@ export default function CampaignsScreen() {
   const [showWhatsAppInbox, setShowWhatsAppInbox] = useState(false);
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [showWhatsAppStatusEvents, setShowWhatsAppStatusEvents] = useState(false);
+  const [whatsappStatusEvents, setWhatsappStatusEvents] = useState<any[]>([]);
+  const [loadingStatusEvents, setLoadingStatusEvents] = useState(false);
   const [whatsappMediaUri, setWhatsappMediaUri] = useState<string>('');
   const [whatsappMediaType, setWhatsappMediaType] = useState<'image' | 'video' | 'document' | 'audio'>('image');
   const [whatsappCaption, setWhatsappCaption] = useState<string>('');
@@ -790,6 +793,44 @@ export default function CampaignsScreen() {
     } finally {
       setLoadingMessages(false);
       console.log('[WhatsApp Inbox] Loading complete, loadingMessages set to false');
+    }
+  };
+
+  const loadWhatsAppStatusEvents = async () => {
+    console.log('[WhatsApp Status] === loadWhatsAppStatusEvents called ===');
+    try {
+      setLoadingStatusEvents(true);
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com')
+        ? `${apiUrl}/Tracker/api/get-whatsapp-statuses.php?limit=200`
+        : `${apiUrl}/api/get-whatsapp-statuses?limit=200`;
+
+      console.log('[WhatsApp Status] Fetching from:', phpEndpoint);
+      const response = await fetch(phpEndpoint, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to load WhatsApp status events');
+      }
+
+      const statuses = Array.isArray(result.statuses) ? result.statuses : [];
+      setWhatsappStatusEvents(statuses);
+      console.log('[WhatsApp Status] Loaded events:', statuses.length);
+    } catch (error) {
+      console.error('[WhatsApp Status] Error:', error);
+      Alert.alert('Error', 'Failed to load WhatsApp delivery status events: ' + (error as Error).message);
+    } finally {
+      setLoadingStatusEvents(false);
     }
   };
 
@@ -1650,6 +1691,107 @@ export default function CampaignsScreen() {
                     )}
                   </View>
                 )}
+
+                <TouchableOpacity
+                  style={styles.inboxToggle}
+                  onPress={() => {
+                    const newState = !showWhatsAppStatusEvents;
+                    console.log('[WhatsApp Status] Toggling status panel:', newState);
+                    setShowWhatsAppStatusEvents(newState);
+                    if (newState) {
+                      loadWhatsAppStatusEvents();
+                    }
+                  }}
+                >
+                  <View style={styles.settingsToggleLeft}>
+                    <MessageSquare size={20} color={Colors.light.tint} />
+                    <Text style={styles.settingsToggleText}>Delivery Status Events ({whatsappStatusEvents.length})</Text>
+                  </View>
+                  {showWhatsAppStatusEvents ? (
+                    <ChevronUp size={20} color={Colors.light.tint} />
+                  ) : (
+                    <ChevronDown size={20} color={Colors.light.tint} />
+                  )}
+                </TouchableOpacity>
+
+                {showWhatsAppStatusEvents && (
+                  <View style={styles.inboxContainer}>
+                    <View style={styles.inboxHeader}>
+                      <Text style={styles.inboxTitle}>Delivery Status Events</Text>
+                      <TouchableOpacity
+                        style={styles.refreshButton}
+                        onPress={() => loadWhatsAppStatusEvents()}
+                        disabled={loadingStatusEvents}
+                      >
+                        {loadingStatusEvents ? (
+                          <ActivityIndicator size="small" color={Colors.light.tint} />
+                        ) : (
+                          <Text style={styles.refreshButtonText}>Refresh</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    {whatsappStatusEvents.length === 0 && !loadingStatusEvents && (
+                      <View style={styles.emptyInbox}>
+                        <MessageSquare size={48} color={Colors.light.tabIconDefault} />
+                        <Text style={styles.emptyInboxText}>No delivery events yet</Text>
+                        <Text style={styles.emptyInboxSubtext}>
+                          WhatsApp webhook status callbacks (sent/delivered/read/failed) will appear here
+                        </Text>
+                      </View>
+                    )}
+
+                    {whatsappStatusEvents.length > 0 && (
+                      <View style={styles.messageListContainer}>
+                        {whatsappStatusEvents.map((event, index) => {
+                          const eventTs = Number(event.timestamp || event.receivedAt || 0);
+                          const eventMs = eventTs > 0 ? (eventTs > 9999999999 ? eventTs : eventTs * 1000) : Date.now();
+                          const status = String(event.status || 'unknown').toLowerCase();
+                          const isFailure = status === 'failed' || !!event.errorTitle || !!event.errorMessage;
+                          return (
+                            <View key={event.id || `${event.wamid || 'wa'}_${index}`} style={styles.messageItem}>
+                              <View style={styles.messageHeader}>
+                                <Text style={styles.messageSender}>{(event.recipient_id || 'Unknown recipient').toString()}</Text>
+                                <Text style={styles.messageTime}>{new Date(eventMs).toLocaleString()}</Text>
+                              </View>
+                              <View style={styles.statusRow}>
+                                <View
+                                  style={[
+                                    styles.statusBadge,
+                                    status === 'delivered' && styles.statusBadgeDelivered,
+                                    status === 'read' && styles.statusBadgeRead,
+                                    status === 'sent' && styles.statusBadgeSent,
+                                    isFailure && styles.statusBadgeFailed,
+                                  ]}
+                                >
+                                  <Text style={styles.statusBadgeText}>{status.toUpperCase()}</Text>
+                                </View>
+                                {event.conversationOriginType ? (
+                                  <Text style={styles.messageTypeLabel}>Origin: {event.conversationOriginType}</Text>
+                                ) : null}
+                              </View>
+                              {event.wamid ? (
+                                <Text style={styles.messageTypeLabel}>WAMID: {String(event.wamid)}</Text>
+                              ) : null}
+                              {event.pricingCategory || event.pricingModel ? (
+                                <Text style={styles.messageTypeLabel}>
+                                  Pricing: {event.pricingCategory || 'n/a'} {event.pricingModel ? `(${event.pricingModel})` : ''}
+                                </Text>
+                              ) : null}
+                              {(event.errorTitle || event.errorMessage || event.errorCode) ? (
+                                <Text style={styles.statusErrorText}>
+                                  {event.errorCode ? `[${event.errorCode}] ` : ''}
+                                  {event.errorTitle || event.errorMessage || 'Delivery failed'}
+                                  {event.errorMessage && event.errorTitle && event.errorMessage !== event.errorTitle ? ` - ${event.errorMessage}` : ''}
+                                </Text>
+                              ) : null}
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+                )}
               </View>
             )}
 
@@ -2384,6 +2526,48 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.tabIconDefault,
     fontStyle: 'italic' as const,
+  },
+  statusRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginBottom: 8,
+    flexWrap: 'wrap' as const,
+  },
+  statusBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  statusBadgeSent: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#93C5FD',
+  },
+  statusBadgeDelivered: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  statusBadgeRead: {
+    backgroundColor: '#EDE9FE',
+    borderColor: '#C4B5FD',
+  },
+  statusBadgeFailed: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#FCA5A5',
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  statusErrorText: {
+    fontSize: 13,
+    color: Colors.light.danger,
+    lineHeight: 18,
+    marginTop: 6,
   },
   messageListContainer: {
     gap: 8,
