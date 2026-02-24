@@ -512,6 +512,11 @@ export default function HRScreen() {
                 <View style={styles.infoInlineRow}>
                   <Text style={styles.infoTiny}>Approved leave requests overlapping month: {approvedLeaveThisMonth.length}</Text>
                   <Text style={styles.infoTiny}>Attendance matched rows: {kpis.matched}/{payrollRows.length}</Text>
+                  {!payrollRows.length && attendanceImports.length > 0 && (
+                    <Text style={[styles.infoTiny, { color: '#B45309' }]}>
+                      No rows for {formatMonthKey(selectedMonthKey)}. Try another month chip or import staff details.
+                    </Text>
+                  )}
                 </View>
               </View>
 

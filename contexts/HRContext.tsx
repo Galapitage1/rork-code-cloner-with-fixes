@@ -1,4 +1,4 @@
-import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { HRAttendanceImport, HRStaffMember } from '@/types';
 import { syncData } from '@/utils/syncData';
@@ -80,6 +80,8 @@ export function HRProvider({
   const [attendanceImports, setAttendanceImports] = useState<HRAttendanceImport[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const syncInProgressRef = useRef(false);
+  const initialFetchSyncedUserRef = useRef<string | null>(null);
 
   const loadLocal = useCallback(async () => {
     try {
@@ -173,8 +175,9 @@ export function HRProvider({
   }, []);
 
   const syncAll = useCallback(async (fetchOnly = false) => {
-    if (!currentUser?.id || isSyncing) return;
+    if (!currentUser?.id || syncInProgressRef.current) return;
     try {
+      syncInProgressRef.current = true;
       setIsSyncing(true);
       const [staffRaw, importsRaw] = await Promise.all([
         AsyncStorage.getItem(HR_STAFF_KEY),
@@ -194,13 +197,19 @@ export function HRProvider({
       console.error('[HRContext] Sync failed:', error);
     } finally {
       setIsSyncing(false);
+      syncInProgressRef.current = false;
     }
-  }, [currentUser, isSyncing, persistStaff, persistAttendanceImports]);
+  }, [currentUser, persistStaff, persistAttendanceImports]);
 
   useEffect(() => {
-    if (currentUser?.id) {
-      syncAll(true);
+    const userId = currentUser?.id || null;
+    if (!userId) {
+      initialFetchSyncedUserRef.current = null;
+      return;
     }
+    if (initialFetchSyncedUserRef.current === userId) return;
+    initialFetchSyncedUserRef.current = userId;
+    syncAll(true);
   }, [currentUser?.id, syncAll]);
 
   const addStaffMember = useCallback(async (input: Omit<HRStaffMember, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => {
