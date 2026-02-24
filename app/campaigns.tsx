@@ -17,6 +17,7 @@ import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Squa
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSMSCampaign } from '@/contexts/SMSCampaignContext';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -39,6 +40,7 @@ const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 export default function CampaignsScreen() {
   const { customers } = useCustomers();
   const { currentUser } = useAuth();
+  const { settings: dialogSMSSettings, sendCampaign: sendDialogSMSCampaign } = useSMSCampaign();
   const [isPageLoading, setIsPageLoading] = React.useState(true);
   
   const [campaignType, setCampaignType] = useState<CampaignType>('email');
@@ -576,10 +578,16 @@ export default function CampaignsScreen() {
       return;
     }
 
-    if (!smsApiUrl || !smsApiKey) {
+    const hasDialogSMSConfig = !!(
+      dialogSMSSettings?.esms_username &&
+      dialogSMSSettings?.esms_password_encrypted
+    );
+    const hasLegacySMSConfig = !!(smsApiUrl && smsApiKey);
+
+    if (!hasDialogSMSConfig && !hasLegacySMSConfig) {
       Alert.alert(
         'SMS Not Configured',
-        'Please configure SMS API settings before sending messages.',
+        'Please configure Dialog eSMS settings (preferred) or legacy SMS API settings before sending messages.',
         [{ text: 'OK' }]
       );
       return;
@@ -594,45 +602,79 @@ export default function CampaignsScreen() {
         try {
           setIsSending(true);
 
-          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
-          const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
-          
-          const response = await fetch(phpEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              message: message,
-              recipients: selectedCustomers.map(c => ({
-                name: c.name,
-                phone: c.phone,
-              })),
-              transaction_id: Date.now(),
-            }),
-          });
+          if (hasDialogSMSConfig) {
+            const mobileNumbers = selectedCustomers
+              .map(c => c.phone?.trim())
+              .filter((phone): phone is string => !!phone);
 
-          const result = await response.json();
-          console.log('[SMS CAMPAIGN] Backend response:', result);
+            const result = await sendDialogSMSCampaign(message, mobileNumbers);
+            console.log('[SMS CAMPAIGN] Dialog eSMS response:', result);
 
-          if (!response.ok || !result.success) {
-            throw new Error(result.error || 'Failed to send SMS messages');
-          }
+            if (!result.success) {
+              throw new Error(result.error || 'Failed to send SMS messages');
+            }
 
-          const { results } = result;
-          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
-            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
-          }`;
+            const submitted = result.data?.recipients?.length ?? mobileNumbers.length;
+            const invalid = result.data?.invalid_numbers ?? 0;
+            const duplicates = result.data?.duplicates_removed ?? 0;
+            const cost = result.data?.campaign_cost;
+            const comment = result.data?.comment;
 
-          Alert.alert(
-            'SMS Campaign Complete',
-            resultMessage,
-            [{ text: 'OK' }]
-          );
+            let resultMessage = `Submitted: ${submitted}\nInvalid: ${invalid}\nDuplicates Removed: ${duplicates}`;
+            if (typeof cost !== 'undefined') {
+              resultMessage += `\nCost: Rs ${cost}`;
+            }
+            if (comment) {
+              resultMessage += `\n\nProvider: ${comment}`;
+            }
 
-          if (results.success > 0) {
-            setMessage('');
-            setSelectedCustomerIds(new Set());
+            Alert.alert('SMS Campaign Submitted', resultMessage, [{ text: 'OK' }]);
+
+            if (submitted > 0) {
+              setMessage('');
+              setSelectedCustomerIds(new Set());
+            }
+          } else {
+            const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+            const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
+
+            const response = await fetch(phpEndpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                message: message,
+                recipients: selectedCustomers.map(c => ({
+                  name: c.name,
+                  phone: c.phone,
+                })),
+                transaction_id: Date.now(),
+              }),
+            });
+
+            const result = await response.json();
+            console.log('[SMS CAMPAIGN] Legacy SMS response:', result);
+
+            if (!response.ok || !result.success) {
+              throw new Error(result.error || 'Failed to send SMS messages');
+            }
+
+            const { results } = result;
+            const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
+              results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+            }`;
+
+            Alert.alert(
+              'SMS Campaign Complete',
+              resultMessage,
+              [{ text: 'OK' }]
+            );
+
+            if (results.success > 0) {
+              setMessage('');
+              setSelectedCustomerIds(new Set());
+            }
           }
 
         } catch (error) {
