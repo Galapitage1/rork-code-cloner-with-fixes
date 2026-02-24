@@ -40,14 +40,88 @@ if (!$smtpConfig || !$emailData || empty($recipients)) {
   respond(['success' => false, 'error' => 'Missing required fields'], 400);
 }
 
-if (!file_exists(__DIR__ . '/phpmailer/PHPMailerAutoload.php')) {
-  respond(['success' => false, 'error' => 'PHPMailer library not found. Please install PHPMailer in public/Tracker/api/phpmailer/ directory or use Composer to install it.'], 500);
+function encode_header_utf8($value) {
+  return '=?UTF-8?B?' . base64_encode($value) . '?=';
 }
 
-require_once __DIR__ . '/phpmailer/PHPMailerAutoload.php';
+function sanitize_email($email) {
+  return filter_var(trim((string)$email), FILTER_VALIDATE_EMAIL) ?: '';
+}
 
-if (!class_exists('PHPMailer')) {
-  respond(['success' => false, 'error' => 'PHPMailer class not loaded properly'], 500);
+function build_email_message($emailData) {
+  $format = isset($emailData['format']) ? $emailData['format'] : 'text';
+  $messageText = isset($emailData['message']) ? (string)$emailData['message'] : '';
+  $htmlContent = isset($emailData['htmlContent']) ? (string)$emailData['htmlContent'] : '';
+  $attachments = (isset($emailData['attachments']) && is_array($emailData['attachments'])) ? $emailData['attachments'] : [];
+
+  $hasAttachments = count($attachments) > 0;
+  $hasHtml = ($format === 'html');
+
+  $headers = [
+    'MIME-Version: 1.0',
+  ];
+
+  if (!$hasAttachments && !$hasHtml) {
+    $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+    $headers[] = 'Content-Transfer-Encoding: 8bit';
+    return [$headers, $messageText];
+  }
+
+  $mixedBoundary = 'b1_' . md5(uniqid((string)mt_rand(), true));
+  $altBoundary = 'b2_' . md5(uniqid((string)mt_rand(), true));
+  $headers[] = 'Content-Type: multipart/mixed; boundary="' . $mixedBoundary . '"';
+
+  $body = '';
+
+  if ($hasHtml) {
+    $plainAlt = trim(strip_tags($htmlContent));
+    if ($plainAlt === '') {
+      $plainAlt = $messageText;
+    }
+    $body .= "--{$mixedBoundary}\r\n";
+    $body .= "Content-Type: multipart/alternative; boundary=\"{$altBoundary}\"\r\n\r\n";
+    $body .= "--{$altBoundary}\r\n";
+    $body .= "Content-Type: text/plain; charset=UTF-8\r\n";
+    $body .= "Content-Transfer-Encoding: 8bit\r\n\r\n";
+    $body .= $plainAlt . "\r\n\r\n";
+    $body .= "--{$altBoundary}\r\n";
+    $body .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $body .= "Content-Transfer-Encoding: 8bit\r\n\r\n";
+    $body .= $htmlContent . "\r\n\r\n";
+    $body .= "--{$altBoundary}--\r\n";
+  } else {
+    $body .= "--{$mixedBoundary}\r\n";
+    $body .= "Content-Type: text/plain; charset=UTF-8\r\n";
+    $body .= "Content-Transfer-Encoding: 8bit\r\n\r\n";
+    $body .= $messageText . "\r\n\r\n";
+  }
+
+  foreach ($attachments as $attachment) {
+    if (!isset($attachment['content']) || !isset($attachment['filename'])) {
+      continue;
+    }
+    $binary = base64_decode($attachment['content'], true);
+    if ($binary === false) {
+      continue;
+    }
+    $filename = str_replace(["\r", "\n", "\""], '', (string)$attachment['filename']);
+    $contentType = isset($attachment['contentType']) ? (string)$attachment['contentType'] : 'application/octet-stream';
+
+    $body .= "--{$mixedBoundary}\r\n";
+    $body .= "Content-Type: {$contentType}; name=\"{$filename}\"\r\n";
+    $body .= "Content-Transfer-Encoding: base64\r\n";
+    $body .= "Content-Disposition: attachment; filename=\"{$filename}\"\r\n\r\n";
+    $body .= chunk_split(base64_encode($binary)) . "\r\n";
+  }
+
+  $body .= "--{$mixedBoundary}--\r\n";
+  return [$headers, $body];
+}
+
+$canUsePHPMailer = file_exists(__DIR__ . '/phpmailer/PHPMailerAutoload.php');
+if ($canUsePHPMailer) {
+  require_once __DIR__ . '/phpmailer/PHPMailerAutoload.php';
+  $canUsePHPMailer = class_exists('PHPMailer');
 }
 
 $results = [
@@ -56,47 +130,92 @@ $results = [
   'errors' => [],
 ];
 
+$usedNativeMailFallback = false;
+
 foreach ($recipients as $recipient) {
   try {
-    $mail = new PHPMailer(true);
-    
-    $mail->isSMTP();
-    $mail->Host = $smtpConfig['host'];
-    $mail->Port = intval($smtpConfig['port']);
-    $mail->SMTPAuth = true;
-    $mail->Username = $smtpConfig['username'];
-    $mail->Password = $smtpConfig['password'];
-    $mail->SMTPSecure = (intval($smtpConfig['port']) === 465) ? 'ssl' : 'tls';
-    $mail->CharSet = 'UTF-8';
-    
-    $mail->setFrom($emailData['senderEmail'], $emailData['senderName']);
-    $mail->addAddress($recipient['email'], $recipient['name']);
-    
-    $mail->Subject = $emailData['subject'];
-    
-    if (isset($emailData['format']) && $emailData['format'] === 'html') {
-      $mail->isHTML(true);
-      $mail->Body = isset($emailData['htmlContent']) ? $emailData['htmlContent'] : '';
-      $mail->AltBody = strip_tags($mail->Body);
-    } else {
-      $mail->isHTML(false);
-      $mail->Body = isset($emailData['message']) ? $emailData['message'] : '';
+    $toEmail = sanitize_email(isset($recipient['email']) ? $recipient['email'] : '');
+    $toName = isset($recipient['name']) ? trim((string)$recipient['name']) : '';
+    $senderEmail = sanitize_email(isset($emailData['senderEmail']) ? $emailData['senderEmail'] : '');
+    $senderName = isset($emailData['senderName']) ? trim((string)$emailData['senderName']) : '';
+    $subject = isset($emailData['subject']) ? (string)$emailData['subject'] : '';
+
+    if ($toEmail === '' || $senderEmail === '') {
+      throw new Exception('Invalid sender/recipient email');
     }
-    
-    if (isset($emailData['attachments']) && is_array($emailData['attachments'])) {
-      foreach ($emailData['attachments'] as $attachment) {
-        if (isset($attachment['content']) && isset($attachment['filename'])) {
-          $mail->addStringAttachment(
-            base64_decode($attachment['content']),
-            $attachment['filename'],
-            'base64',
-            isset($attachment['contentType']) ? $attachment['contentType'] : 'application/octet-stream'
-          );
+
+    if ($canUsePHPMailer) {
+      $mail = new PHPMailer(true);
+      $mail->isSMTP();
+      $mail->Host = $smtpConfig['host'];
+      $mail->Port = intval($smtpConfig['port']);
+      $mail->SMTPAuth = true;
+      $mail->Username = $smtpConfig['username'];
+      $mail->Password = $smtpConfig['password'];
+      $mail->SMTPSecure = (intval($smtpConfig['port']) === 465) ? 'ssl' : 'tls';
+      $mail->CharSet = 'UTF-8';
+
+      $mail->setFrom($senderEmail, $senderName);
+      $mail->addAddress($toEmail, $toName);
+      $mail->Subject = $subject;
+
+      if (isset($emailData['format']) && $emailData['format'] === 'html') {
+        $mail->isHTML(true);
+        $mail->Body = isset($emailData['htmlContent']) ? $emailData['htmlContent'] : '';
+        $mail->AltBody = strip_tags($mail->Body);
+      } else {
+        $mail->isHTML(false);
+        $mail->Body = isset($emailData['message']) ? $emailData['message'] : '';
+      }
+
+      if (isset($emailData['attachments']) && is_array($emailData['attachments'])) {
+        foreach ($emailData['attachments'] as $attachment) {
+          if (isset($attachment['content']) && isset($attachment['filename'])) {
+            $decoded = base64_decode($attachment['content'], true);
+            if ($decoded !== false) {
+              $mail->addStringAttachment(
+                $decoded,
+                $attachment['filename'],
+                'base64',
+                isset($attachment['contentType']) ? $attachment['contentType'] : 'application/octet-stream'
+              );
+            }
+          }
         }
       }
+
+      $mail->send();
+    } else {
+      $usedNativeMailFallback = true;
+      list($mimeHeaders, $body) = build_email_message($emailData);
+
+      $fromDisplay = $senderName !== ''
+        ? encode_header_utf8($senderName) . " <{$senderEmail}>"
+        : $senderEmail;
+
+      $headers = array_merge($mimeHeaders, [
+        'From: ' . $fromDisplay,
+        'Reply-To: ' . $senderEmail,
+      ]);
+
+      if ($toName !== '') {
+        $toHeader = encode_header_utf8($toName) . " <{$toEmail}>";
+      } else {
+        $toHeader = $toEmail;
+      }
+
+      $subjectHeader = encode_header_utf8($subject);
+      $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headers), '-f ' . $senderEmail);
+      if (!$ok) {
+        $ok = @mail($toHeader, $subjectHeader, $body, implode("\r\n", $headers));
+      }
+      if (!$ok) {
+        $lastError = error_get_last();
+        $msg = isset($lastError['message']) ? $lastError['message'] : 'mail() returned false';
+        throw new Exception($msg);
+      }
     }
-    
-    $mail->send();
+
     $results['success']++;
   } catch (Exception $e) {
     $results['failed']++;
@@ -107,4 +226,6 @@ foreach ($recipients as $recipient) {
 respond([
   'success' => true,
   'results' => $results,
+  'mailer' => $canUsePHPMailer ? 'phpmailer' : 'php_mail_fallback',
+  'note' => $usedNativeMailFallback ? 'PHPMailer not installed. Sent using server mail() fallback.' : null,
 ]);
