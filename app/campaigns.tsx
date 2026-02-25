@@ -237,6 +237,39 @@ export default function CampaignsScreen() {
       .map((item) => item.trim())
       .filter(Boolean);
 
+  const parseJsonResponseSafe = async (response: Response): Promise<any> => {
+    const rawText = await response.text();
+    try {
+      return rawText ? JSON.parse(rawText) : {};
+    } catch {
+      throw new Error(`Server returned non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 160)}`);
+    }
+  };
+
+  const chunkArray = <T,>(items: T[], size: number): T[][] =>
+    items.reduce((chunks, item, index) => {
+      const chunkIndex = Math.floor(index / size);
+      if (!chunks[chunkIndex]) chunks[chunkIndex] = [];
+      chunks[chunkIndex].push(item);
+      return chunks;
+    }, [] as T[][]);
+
+  const normalizeEmailForCampaign = (email?: string | null): string => {
+    const value = (email || '').trim().toLowerCase();
+    if (!value) return '';
+    const simpleEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return simpleEmailRegex.test(value) ? value : '';
+  };
+
+  const normalizePhoneForCampaign = (phone?: string | null): string => {
+    const raw = (phone || '').trim();
+    if (!raw) return '';
+    const digits = raw.replace(/[^\d+]/g, '');
+    const normalized = digits.startsWith('+') ? digits.slice(1) : digits;
+    const finalDigits = normalized.replace(/\D/g, '');
+    return finalDigits.length >= 8 ? finalDigits : '';
+  };
+
   const getEffectiveWhatsAppCampaignTemplateConfig = () => {
     if (whatsappLinkCampaignTemplateToTest) {
       return {
@@ -600,10 +633,6 @@ export default function CampaignsScreen() {
     if (selectedCustomers.length === 0) {
       return 'Please select at least one customer';
     }
-    const noEmailCustomers = selectedCustomers.filter(c => !c.email);
-    if (noEmailCustomers.length > 0) {
-      return `${noEmailCustomers.length} selected customer(s) don't have email addresses`;
-    }
     return null;
   };
 
@@ -613,10 +642,6 @@ export default function CampaignsScreen() {
     }
     if (selectedCustomers.length === 0) {
       return 'Please select at least one customer';
-    }
-    const noPhoneCustomers = selectedCustomers.filter(c => !c.phone);
-    if (noPhoneCustomers.length > 0) {
-      return `${noPhoneCustomers.length} selected customer(s) don't have phone numbers`;
     }
     return null;
   };
@@ -706,48 +731,102 @@ export default function CampaignsScreen() {
           console.log('[EMAIL CAMPAIGN] Sending to backend...');
           const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
-          const response = await fetch(phpEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              smtpConfig: {
-                host: smtpHost,
-                port: smtpPort,
-                username: smtpUsername,
-                password: smtpPassword,
-              },
-              emailData: {
-                senderName,
-                senderEmail,
-                replyToEmail: emailNoReplyMode ? (derivedNoReplyEmail || senderEmail) : senderEmail,
-                replyToName: senderName,
-                subject,
-                message,
-                htmlContent,
-                format: emailFormat,
-                attachments: processedAttachments,
-              },
-              recipients: selectedCustomers.map(c => ({
-                name: c.name,
-                email: c.email,
-                company: c.company,
-                phone: c.phone,
-              })),
-            }),
-          });
+          const mappedRecipients = selectedCustomers.map(c => ({
+            id: c.id,
+            name: c.name,
+            email: c.email,
+            company: c.company,
+            phone: c.phone,
+          }));
+          const invalidEmailRecipients = mappedRecipients.filter(r => !normalizeEmailForCampaign(r.email));
+          const validEmailRecipients = mappedRecipients
+            .map(r => ({ ...r, email: normalizeEmailForCampaign(r.email) }))
+            .filter(r => !!r.email);
 
-          const result = await response.json();
-          console.log('[EMAIL CAMPAIGN] Backend response:', result);
-
-          if (!response.ok || !result.success) {
-            throw new Error(result.error || 'Failed to send emails');
+          if (validEmailRecipients.length === 0) {
+            throw new Error('No valid email addresses found in selected customers');
           }
 
-          const { results } = result;
-          const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
-            results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+          const EMAIL_CHUNK_SIZE = 100;
+          const recipientChunks = chunkArray(validEmailRecipients, EMAIL_CHUNK_SIZE);
+          const aggregatedResults = {
+            success: 0,
+            failed: 0,
+            errors: [] as string[],
+          };
+          const chunkFailures: string[] = [];
+
+          for (let i = 0; i < recipientChunks.length; i++) {
+            const chunk = recipientChunks[i];
+            console.log(`[EMAIL CAMPAIGN] Sending chunk ${i + 1}/${recipientChunks.length} (${chunk.length} recipients)`);
+            try {
+              const response = await fetch(phpEndpoint, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  smtpConfig: {
+                    host: smtpHost,
+                    port: smtpPort,
+                    username: smtpUsername,
+                    password: smtpPassword,
+                  },
+                  emailData: {
+                    senderName,
+                    senderEmail,
+                    replyToEmail: emailNoReplyMode ? (derivedNoReplyEmail || senderEmail) : senderEmail,
+                    replyToName: senderName,
+                    subject,
+                    message,
+                    htmlContent,
+                    format: emailFormat,
+                    attachments: processedAttachments,
+                  },
+                  recipients: chunk.map(c => ({
+                    name: c.name,
+                    email: c.email,
+                    company: c.company,
+                    phone: c.phone,
+                  })),
+                }),
+              });
+
+              const result = await parseJsonResponseSafe(response);
+              console.log(`[EMAIL CAMPAIGN] Chunk ${i + 1} response:`, result);
+
+              if (!response.ok || !result.success) {
+                throw new Error(result.error || `Chunk ${i + 1} failed`);
+              }
+
+              const chunkResults = result.results || { success: 0, failed: 0, errors: [] };
+              aggregatedResults.success += Number(chunkResults.success || 0);
+              aggregatedResults.failed += Number(chunkResults.failed || 0);
+              if (Array.isArray(chunkResults.errors)) {
+                aggregatedResults.errors.push(...chunkResults.errors);
+              }
+            } catch (chunkError) {
+              const chunkMsg = `Chunk ${i + 1}/${recipientChunks.length}: ${(chunkError as Error).message}`;
+              console.error('[EMAIL CAMPAIGN] Chunk error:', chunkMsg);
+              chunkFailures.push(chunkMsg);
+              aggregatedResults.failed += chunk.length;
+              aggregatedResults.errors.push(chunkMsg);
+              continue;
+            }
+          }
+
+          if (invalidEmailRecipients.length > 0) {
+            aggregatedResults.failed += invalidEmailRecipients.length;
+            aggregatedResults.errors.push(
+              ...invalidEmailRecipients.slice(0, 20).map(r => `${r.name || 'Unknown'}: Invalid/missing email`)
+            );
+            if (invalidEmailRecipients.length > 20) {
+              aggregatedResults.errors.push(`... and ${invalidEmailRecipients.length - 20} more invalid/missing emails`);
+            }
+          }
+
+          const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Emails: ${invalidEmailRecipients.length}\nBatches: ${recipientChunks.length}${chunkFailures.length ? `\nBatch Errors: ${chunkFailures.length}` : ''}${
+            aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + aggregatedResults.errors.slice(0, 8).join('\n') : ''
           }`;
 
           Alert.alert(
@@ -756,7 +835,7 @@ export default function CampaignsScreen() {
             [{ text: 'OK' }]
           );
 
-          if (results.success > 0) {
+          if (aggregatedResults.success > 0) {
             setSubject('');
             setMessage('');
             setHtmlContent('');
@@ -810,68 +889,142 @@ export default function CampaignsScreen() {
         console.log('[SMS CAMPAIGN] User confirmed, starting send...');
         try {
           setIsSending(true);
+          const mappedSmsRecipients = selectedCustomers.map(c => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+          }));
+          const invalidSmsRecipients = mappedSmsRecipients.filter(r => !normalizePhoneForCampaign(r.phone));
+          const validSmsRecipients = mappedSmsRecipients
+            .map(r => ({ ...r, normalizedPhone: normalizePhoneForCampaign(r.phone) }))
+            .filter(r => !!r.normalizedPhone);
+
+          if (validSmsRecipients.length === 0) {
+            throw new Error('No valid phone numbers found in selected customers');
+          }
 
           if (hasDialogSMSConfig) {
-            const mobileNumbers = selectedCustomers
-              .map(c => c.phone?.trim())
-              .filter((phone): phone is string => !!phone);
+            const SMS_DIALOG_CHUNK_SIZE = 1000;
+            const mobileChunks = chunkArray(validSmsRecipients.map(r => r.normalizedPhone), SMS_DIALOG_CHUNK_SIZE);
+            let totalSubmitted = 0;
+            let totalInvalid = invalidSmsRecipients.length;
+            let totalDuplicates = 0;
+            let totalCost = 0;
+            const providerNotes: string[] = [];
+            const chunkErrors: string[] = [];
 
-            const result = await sendDialogSMSCampaign(message, mobileNumbers);
-            console.log('[SMS CAMPAIGN] Dialog eSMS response:', result);
+            for (let i = 0; i < mobileChunks.length; i++) {
+              const chunk = mobileChunks[i];
+              console.log(`[SMS CAMPAIGN] Dialog chunk ${i + 1}/${mobileChunks.length} (${chunk.length} recipients)`);
+              try {
+                const result = await sendDialogSMSCampaign(message, chunk);
+                console.log('[SMS CAMPAIGN] Dialog eSMS chunk response:', result);
 
-            if (!result.success) {
-              throw new Error(result.error || 'Failed to send SMS messages');
+                if (!result.success) {
+                  throw new Error(result.error || 'Failed to send SMS messages');
+                }
+
+                totalSubmitted += result.data?.recipients?.length ?? chunk.length;
+                totalInvalid += Number(result.data?.invalid_numbers ?? 0);
+                totalDuplicates += Number(result.data?.duplicates_removed ?? 0);
+                if (typeof result.data?.campaign_cost !== 'undefined' && result.data?.campaign_cost !== null) {
+                  totalCost += Number(result.data.campaign_cost) || 0;
+                }
+                if (result.data?.comment) {
+                  providerNotes.push(`Chunk ${i + 1}: ${result.data.comment}`);
+                }
+              } catch (chunkError) {
+                const msg = `Chunk ${i + 1}/${mobileChunks.length}: ${(chunkError as Error).message}`;
+                console.error('[SMS CAMPAIGN] Dialog chunk error:', msg);
+                chunkErrors.push(msg);
+                continue;
+              }
             }
 
-            const submitted = result.data?.recipients?.length ?? mobileNumbers.length;
-            const invalid = result.data?.invalid_numbers ?? 0;
-            const duplicates = result.data?.duplicates_removed ?? 0;
-            const cost = result.data?.campaign_cost;
-            const comment = result.data?.comment;
-
-            let resultMessage = `Submitted: ${submitted}\nInvalid: ${invalid}\nDuplicates Removed: ${duplicates}`;
-            if (typeof cost !== 'undefined') {
-              resultMessage += `\nCost: Rs ${cost}`;
+            let resultMessage = `Submitted: ${totalSubmitted}\nInvalid/Skipped: ${totalInvalid}\nDuplicates Removed: ${totalDuplicates}\nBatches: ${mobileChunks.length}`;
+            if (totalCost > 0) {
+              resultMessage += `\nTotal Cost (reported): Rs ${totalCost}`;
             }
-            if (comment) {
-              resultMessage += `\n\nProvider: ${comment}`;
+            if (chunkErrors.length > 0) {
+              resultMessage += `\nBatch Errors: ${chunkErrors.length}`;
+            }
+            const allSmsNotes = [...chunkErrors, ...providerNotes];
+            if (allSmsNotes.length > 0) {
+              resultMessage += `\n\nDetails:\n${allSmsNotes.slice(0, 6).join('\n')}`;
             }
 
             Alert.alert('SMS Campaign Submitted', resultMessage, [{ text: 'OK' }]);
 
-            if (submitted > 0) {
+            if (totalSubmitted > 0) {
               setMessage('');
               setSelectedCustomerIds(new Set());
             }
           } else {
             const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
             const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
+            const LEGACY_SMS_CHUNK_SIZE = 200;
+            const recipientChunks = chunkArray(
+              validSmsRecipients.map(r => ({ name: r.name, phone: r.normalizedPhone })),
+              LEGACY_SMS_CHUNK_SIZE
+            );
+            const aggregatedResults = {
+              success: 0,
+              failed: 0,
+              errors: [] as string[],
+            };
+            const chunkErrors: string[] = [];
 
-            const response = await fetch(phpEndpoint, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                message: message,
-                recipients: selectedCustomers.map(c => ({
-                  name: c.name,
-                  phone: c.phone,
-                })),
-                transaction_id: Date.now(),
-              }),
-            });
+            for (let i = 0; i < recipientChunks.length; i++) {
+              const chunk = recipientChunks[i];
+              console.log(`[SMS CAMPAIGN] Legacy chunk ${i + 1}/${recipientChunks.length} (${chunk.length} recipients)`);
+              try {
+                const response = await fetch(phpEndpoint, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    message: message,
+                    recipients: chunk,
+                    transaction_id: Date.now() + i,
+                  }),
+                });
 
-            const result = await response.json();
-            console.log('[SMS CAMPAIGN] Legacy SMS response:', result);
+                const result = await parseJsonResponseSafe(response);
+                console.log('[SMS CAMPAIGN] Legacy SMS chunk response:', result);
 
-            if (!response.ok || !result.success) {
-              throw new Error(result.error || 'Failed to send SMS messages');
+                if (!response.ok || !result.success) {
+                  throw new Error(result.error || 'Failed to send SMS messages');
+                }
+
+                const chunkResults = result.results || { success: 0, failed: 0, errors: [] };
+                aggregatedResults.success += Number(chunkResults.success || 0);
+                aggregatedResults.failed += Number(chunkResults.failed || 0);
+                if (Array.isArray(chunkResults.errors)) {
+                  aggregatedResults.errors.push(...chunkResults.errors);
+                }
+              } catch (chunkError) {
+                const msg = `Chunk ${i + 1}/${recipientChunks.length}: ${(chunkError as Error).message}`;
+                console.error('[SMS CAMPAIGN] Legacy chunk error:', msg);
+                chunkErrors.push(msg);
+                aggregatedResults.failed += chunk.length;
+                aggregatedResults.errors.push(msg);
+                continue;
+              }
             }
 
-            const { results } = result;
-            const resultMessage = `Sent: ${results.success}\nFailed: ${results.failed}${
-              results.errors.length > 0 ? '\n\nErrors:\n' + results.errors.slice(0, 5).join('\n') : ''
+            if (invalidSmsRecipients.length > 0) {
+              aggregatedResults.failed += invalidSmsRecipients.length;
+              aggregatedResults.errors.push(
+                ...invalidSmsRecipients.slice(0, 20).map(r => `${r.name || 'Unknown'}: Invalid/missing phone`)
+              );
+              if (invalidSmsRecipients.length > 20) {
+                aggregatedResults.errors.push(`... and ${invalidSmsRecipients.length - 20} more invalid/missing phones`);
+              }
+            }
+
+            const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Phones: ${invalidSmsRecipients.length}\nBatches: ${recipientChunks.length}${chunkErrors.length ? `\nBatch Errors: ${chunkErrors.length}` : ''}${
+              aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + aggregatedResults.errors.slice(0, 8).join('\n') : ''
             }`;
 
             Alert.alert(
@@ -880,7 +1033,7 @@ export default function CampaignsScreen() {
               [{ text: 'OK' }]
             );
 
-            if (results.success > 0) {
+            if (aggregatedResults.success > 0) {
               setMessage('');
               setSelectedCustomerIds(new Set());
             }
