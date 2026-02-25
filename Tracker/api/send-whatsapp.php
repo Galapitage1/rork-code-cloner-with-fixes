@@ -70,6 +70,10 @@ $useTemplate = !empty($body['useTemplate']);
 $templateName = isset($body['templateName']) ? trim((string)$body['templateName']) : '';
 $templateLanguage = isset($body['templateLanguage']) ? trim((string)$body['templateLanguage']) : 'en_US';
 $templateParameters = isset($body['templateParameters']) && is_array($body['templateParameters']) ? $body['templateParameters'] : [];
+$templateHeaderParameters = isset($body['templateHeaderParameters']) && is_array($body['templateHeaderParameters']) ? $body['templateHeaderParameters'] : [];
+$templateHeaderMediaUrl = isset($body['templateHeaderMediaUrl']) ? trim((string)$body['templateHeaderMediaUrl']) : '';
+$templateHeaderMediaType = isset($body['templateHeaderMediaType']) ? trim((string)$body['templateHeaderMediaType']) : 'image';
+$templateButtonParameters = isset($body['templateButtonParameters']) && is_array($body['templateButtonParameters']) ? $body['templateButtonParameters'] : [];
 $defaultCountryCode = isset($body['defaultCountryCode']) ? preg_replace('/[^0-9]/', '', trim((string)$body['defaultCountryCode'])) : '94';
 
 if (!empty($mediaUrl)) {
@@ -78,6 +82,15 @@ if (!empty($mediaUrl)) {
   }
   if (strpos($mediaUrl, 'https://') !== 0) {
     respond(['success' => false, 'error' => 'Media URL must use HTTPS'], 400);
+  }
+}
+
+if (!empty($templateHeaderMediaUrl)) {
+  if (!filter_var($templateHeaderMediaUrl, FILTER_VALIDATE_URL)) {
+    respond(['success' => false, 'error' => 'Invalid template header media URL format'], 400);
+  }
+  if (strpos($templateHeaderMediaUrl, 'https://') !== 0) {
+    respond(['success' => false, 'error' => 'Template header media URL must use HTTPS'], 400);
   }
 }
 
@@ -107,12 +120,32 @@ $debug = [
     'name' => $templateName,
     'language' => $templateLanguage !== '' ? $templateLanguage : 'en_US',
     'parameterCount' => count($templateParameters),
+    'headerParameterCount' => count($templateHeaderParameters),
+    'headerMediaUrl' => $templateHeaderMediaUrl,
+    'headerMediaType' => $templateHeaderMediaType,
+    'buttonParameterCount' => count($templateButtonParameters),
     'parameters' => array_values(array_filter(array_map(function($param) {
       if (is_array($param)) {
         return '';
       }
       return trim((string)$param);
     }, $templateParameters), function($value) {
+      return $value !== '';
+    })),
+    'headerParameters' => array_values(array_filter(array_map(function($param) {
+      if (is_array($param)) {
+        return '';
+      }
+      return trim((string)$param);
+    }, $templateHeaderParameters), function($value) {
+      return $value !== '';
+    })),
+    'buttonParameters' => array_values(array_filter(array_map(function($param) {
+      if (is_array($param)) {
+        return '';
+      }
+      return trim((string)$param);
+    }, $templateButtonParameters), function($value) {
       return $value !== '';
     })),
   ] : null,
@@ -207,6 +240,39 @@ foreach ($recipients as $index => $recipient) {
         ],
       ];
 
+      $components = [];
+      $headerParams = [];
+      foreach ($templateHeaderParameters as $param) {
+        if (is_array($param)) {
+          continue;
+        }
+        $paramText = trim((string)$param);
+        if ($paramText === '') {
+          continue;
+        }
+        $headerParams[] = [
+          'type' => 'text',
+          'text' => $paramText,
+        ];
+      }
+      if (!empty($templateHeaderMediaUrl)) {
+        $headerMediaType = in_array($templateHeaderMediaType, ['image', 'video', 'document'], true) ? $templateHeaderMediaType : 'image';
+        $components[] = [
+          'type' => 'header',
+          'parameters' => [[
+            'type' => $headerMediaType,
+            $headerMediaType => [
+              'link' => $templateHeaderMediaUrl,
+            ],
+          ]],
+        ];
+      } elseif (!empty($headerParams)) {
+        $components[] = [
+          'type' => 'header',
+          'parameters' => $headerParams,
+        ];
+      }
+
       $textParams = [];
       foreach ($templateParameters as $param) {
         if (is_array($param)) {
@@ -222,10 +288,37 @@ foreach ($recipients as $index => $recipient) {
         ];
       }
       if (!empty($textParams)) {
-        $template['components'] = [[
+        $components[] = [
           'type' => 'body',
           'parameters' => $textParams,
-        ]];
+        ];
+      }
+
+      $buttonIndex = 0;
+      foreach ($templateButtonParameters as $buttonParam) {
+        if (is_array($buttonParam)) {
+          $buttonIndex++;
+          continue;
+        }
+        $buttonText = trim((string)$buttonParam);
+        if ($buttonText === '') {
+          $buttonIndex++;
+          continue;
+        }
+        $components[] = [
+          'type' => 'button',
+          'sub_type' => 'url',
+          'index' => (string)$buttonIndex,
+          'parameters' => [[
+            'type' => 'text',
+            'text' => $buttonText,
+          ]],
+        ];
+        $buttonIndex++;
+      }
+
+      if (!empty($components)) {
+        $template['components'] = $components;
       }
 
       $payload = json_encode([

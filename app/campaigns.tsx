@@ -106,11 +106,19 @@ export default function CampaignsScreen() {
   const [whatsappTestTemplateName, setWhatsappTestTemplateName] = useState<string>('');
   const [whatsappTestTemplateLanguage, setWhatsappTestTemplateLanguage] = useState<string>('en_US');
   const [whatsappTestTemplateParamsText, setWhatsappTestTemplateParamsText] = useState<string>('');
+  const [whatsappTestTemplateHeaderParamsText, setWhatsappTestTemplateHeaderParamsText] = useState<string>('');
+  const [whatsappTestTemplateHeaderMediaUrl, setWhatsappTestTemplateHeaderMediaUrl] = useState<string>('');
+  const [whatsappTestTemplateHeaderMediaType, setWhatsappTestTemplateHeaderMediaType] = useState<'image' | 'video' | 'document'>('image');
+  const [whatsappTestTemplateButtonParamsText, setWhatsappTestTemplateButtonParamsText] = useState<string>('');
   const [whatsappCampaignUseTemplate, setWhatsappCampaignUseTemplate] = useState<boolean>(true);
   const [whatsappLinkCampaignTemplateToTest, setWhatsappLinkCampaignTemplateToTest] = useState<boolean>(true);
   const [whatsappCampaignTemplateName, setWhatsappCampaignTemplateName] = useState<string>('');
   const [whatsappCampaignTemplateLanguage, setWhatsappCampaignTemplateLanguage] = useState<string>('en_US');
   const [whatsappCampaignTemplateParamsText, setWhatsappCampaignTemplateParamsText] = useState<string>('');
+  const [whatsappCampaignTemplateHeaderParamsText, setWhatsappCampaignTemplateHeaderParamsText] = useState<string>('');
+  const [whatsappCampaignTemplateHeaderMediaUrl, setWhatsappCampaignTemplateHeaderMediaUrl] = useState<string>('');
+  const [whatsappCampaignTemplateHeaderMediaType, setWhatsappCampaignTemplateHeaderMediaType] = useState<'image' | 'video' | 'document'>('image');
+  const [whatsappCampaignTemplateButtonParamsText, setWhatsappCampaignTemplateButtonParamsText] = useState<string>('');
 
   const loadCampaignSettings = async () => {
     try {
@@ -140,11 +148,19 @@ export default function CampaignsScreen() {
         setWhatsappTestTemplateName(parsed.whatsappTestTemplateName || '');
         setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
         setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
+        setWhatsappTestTemplateHeaderParamsText(parsed.whatsappTestTemplateHeaderParamsText || '');
+        setWhatsappTestTemplateHeaderMediaUrl(parsed.whatsappTestTemplateHeaderMediaUrl || '');
+        setWhatsappTestTemplateHeaderMediaType((parsed.whatsappTestTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
+        setWhatsappTestTemplateButtonParamsText(parsed.whatsappTestTemplateButtonParamsText || '');
         setWhatsappCampaignUseTemplate(parsed.whatsappCampaignUseTemplate !== false);
         setWhatsappLinkCampaignTemplateToTest(parsed.whatsappLinkCampaignTemplateToTest !== false);
         setWhatsappCampaignTemplateName(parsed.whatsappCampaignTemplateName || '');
         setWhatsappCampaignTemplateLanguage(parsed.whatsappCampaignTemplateLanguage || 'en_US');
         setWhatsappCampaignTemplateParamsText(parsed.whatsappCampaignTemplateParamsText || '');
+        setWhatsappCampaignTemplateHeaderParamsText(parsed.whatsappCampaignTemplateHeaderParamsText || '');
+        setWhatsappCampaignTemplateHeaderMediaUrl(parsed.whatsappCampaignTemplateHeaderMediaUrl || '');
+        setWhatsappCampaignTemplateHeaderMediaType((parsed.whatsappCampaignTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
+        setWhatsappCampaignTemplateButtonParamsText(parsed.whatsappCampaignTemplateButtonParamsText || '');
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
@@ -176,11 +192,19 @@ export default function CampaignsScreen() {
         whatsappTestTemplateName,
         whatsappTestTemplateLanguage,
         whatsappTestTemplateParamsText,
+        whatsappTestTemplateHeaderParamsText,
+        whatsappTestTemplateHeaderMediaUrl,
+        whatsappTestTemplateHeaderMediaType,
+        whatsappTestTemplateButtonParamsText,
         whatsappCampaignUseTemplate,
         whatsappLinkCampaignTemplateToTest,
         whatsappCampaignTemplateName,
         whatsappCampaignTemplateLanguage,
         whatsappCampaignTemplateParamsText,
+        whatsappCampaignTemplateHeaderParamsText,
+        whatsappCampaignTemplateHeaderMediaUrl,
+        whatsappCampaignTemplateHeaderMediaType,
+        whatsappCampaignTemplateButtonParamsText,
         emailNoReplyMode,
         updatedAt: Date.now(),
       };
@@ -221,6 +245,12 @@ export default function CampaignsScreen() {
         language: whatsappTestTemplateLanguage.trim() || 'en_US',
         paramsText: whatsappTestTemplateParamsText,
         params: parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText),
+        headerParamsText: whatsappTestTemplateHeaderParamsText,
+        headerParams: parseWhatsAppTemplateParameters(whatsappTestTemplateHeaderParamsText),
+        headerMediaUrl: whatsappTestTemplateHeaderMediaUrl.trim(),
+        headerMediaType: whatsappTestTemplateHeaderMediaType,
+        buttonParamsText: whatsappTestTemplateButtonParamsText,
+        buttonParams: parseWhatsAppTemplateParameters(whatsappTestTemplateButtonParamsText),
       };
     }
 
@@ -230,6 +260,12 @@ export default function CampaignsScreen() {
       language: whatsappCampaignTemplateLanguage.trim() || 'en_US',
       paramsText: whatsappCampaignTemplateParamsText,
       params: parseWhatsAppTemplateParameters(whatsappCampaignTemplateParamsText),
+      headerParamsText: whatsappCampaignTemplateHeaderParamsText,
+      headerParams: parseWhatsAppTemplateParameters(whatsappCampaignTemplateHeaderParamsText),
+      headerMediaUrl: whatsappCampaignTemplateHeaderMediaUrl.trim(),
+      headerMediaType: whatsappCampaignTemplateHeaderMediaType,
+      buttonParamsText: whatsappCampaignTemplateButtonParamsText,
+      buttonParams: parseWhatsAppTemplateParameters(whatsappCampaignTemplateButtonParamsText),
     };
   };
 
@@ -239,6 +275,10 @@ export default function CampaignsScreen() {
     templateName?: string;
     templateLanguage?: string;
     templateParameters?: string[];
+    templateHeaderParameters?: string[];
+    templateHeaderMediaUrl?: string;
+    templateHeaderMediaType?: string;
+    templateButtonParameters?: string[];
     recipients: Array<{ name?: string; phone?: string }>;
     backendDebug?: any;
     backendErrors?: string[];
@@ -253,6 +293,17 @@ export default function CampaignsScreen() {
       lines.push(`Template Params: ${(options.templateParameters || []).length}`);
       if ((options.templateParameters || []).length > 0) {
         lines.push(`Params: ${(options.templateParameters || []).join(' | ')}`);
+      }
+      lines.push(`Header Text Params: ${(options.templateHeaderParameters || []).length}`);
+      if ((options.templateHeaderParameters || []).length > 0) {
+        lines.push(`Header Params: ${(options.templateHeaderParameters || []).join(' | ')}`);
+      }
+      if (options.templateHeaderMediaUrl) {
+        lines.push(`Header Media: ${(options.templateHeaderMediaType || 'image')} ${options.templateHeaderMediaUrl}`);
+      }
+      lines.push(`Button URL Params: ${(options.templateButtonParameters || []).length}`);
+      if ((options.templateButtonParameters || []).length > 0) {
+        lines.push(`Button Params: ${(options.templateButtonParameters || []).join(' | ')}`);
       }
     }
 
@@ -1030,6 +1081,8 @@ export default function CampaignsScreen() {
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
 
       const templateParameters = parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText);
+      const templateHeaderParameters = parseWhatsAppTemplateParameters(whatsappTestTemplateHeaderParamsText);
+      const templateButtonParameters = parseWhatsAppTemplateParameters(whatsappTestTemplateButtonParamsText);
       const testRecipients = [
         {
           name: 'Test Recipient',
@@ -1050,6 +1103,10 @@ export default function CampaignsScreen() {
           templateName: whatsappTestUseTemplate ? whatsappTestTemplateName.trim() : undefined,
           templateLanguage: whatsappTestUseTemplate ? (whatsappTestTemplateLanguage.trim() || 'en_US') : undefined,
           templateParameters: whatsappTestUseTemplate ? templateParameters : undefined,
+          templateHeaderParameters: whatsappTestUseTemplate ? templateHeaderParameters : undefined,
+          templateHeaderMediaUrl: whatsappTestUseTemplate ? whatsappTestTemplateHeaderMediaUrl.trim() : undefined,
+          templateHeaderMediaType: whatsappTestUseTemplate ? whatsappTestTemplateHeaderMediaType : undefined,
+          templateButtonParameters: whatsappTestUseTemplate ? templateButtonParameters : undefined,
           recipients: testRecipients,
         }),
       });
@@ -1078,6 +1135,10 @@ export default function CampaignsScreen() {
         templateName: whatsappTestUseTemplate ? whatsappTestTemplateName.trim() : undefined,
         templateLanguage: whatsappTestUseTemplate ? (whatsappTestTemplateLanguage.trim() || 'en_US') : undefined,
         templateParameters: whatsappTestUseTemplate ? templateParameters : undefined,
+        templateHeaderParameters: whatsappTestUseTemplate ? templateHeaderParameters : undefined,
+        templateHeaderMediaUrl: whatsappTestUseTemplate ? whatsappTestTemplateHeaderMediaUrl.trim() : undefined,
+        templateHeaderMediaType: whatsappTestUseTemplate ? whatsappTestTemplateHeaderMediaType : undefined,
+        templateButtonParameters: whatsappTestUseTemplate ? templateButtonParameters : undefined,
         recipients: testRecipients,
         backendDebug: result.debug,
         backendErrors: result.results?.errors,
@@ -1191,6 +1252,8 @@ export default function CampaignsScreen() {
 
           const effectiveTemplateConfig = getEffectiveWhatsAppCampaignTemplateConfig();
           const templateParameters = effectiveTemplateConfig.params;
+          const templateHeaderParameters = effectiveTemplateConfig.headerParams || [];
+          const templateButtonParameters = effectiveTemplateConfig.buttonParams || [];
           const campaignRecipients = selectedCustomers.map(c => ({
             name: c.name,
             phone: c.phone,
@@ -1212,6 +1275,10 @@ export default function CampaignsScreen() {
               templateName: whatsappCampaignUseTemplate ? effectiveTemplateConfig.name : undefined,
               templateLanguage: whatsappCampaignUseTemplate ? effectiveTemplateConfig.language : undefined,
               templateParameters: whatsappCampaignUseTemplate ? templateParameters : undefined,
+              templateHeaderParameters: whatsappCampaignUseTemplate ? templateHeaderParameters : undefined,
+              templateHeaderMediaUrl: whatsappCampaignUseTemplate ? (effectiveTemplateConfig.headerMediaUrl || '') : undefined,
+              templateHeaderMediaType: whatsappCampaignUseTemplate ? (effectiveTemplateConfig.headerMediaType || 'image') : undefined,
+              templateButtonParameters: whatsappCampaignUseTemplate ? templateButtonParameters : undefined,
               recipients: campaignRecipients,
             }),
           });
@@ -1238,6 +1305,10 @@ export default function CampaignsScreen() {
             templateName: whatsappCampaignUseTemplate ? effectiveTemplateConfig.name : undefined,
             templateLanguage: whatsappCampaignUseTemplate ? effectiveTemplateConfig.language : undefined,
             templateParameters: whatsappCampaignUseTemplate ? templateParameters : undefined,
+            templateHeaderParameters: whatsappCampaignUseTemplate ? templateHeaderParameters : undefined,
+            templateHeaderMediaUrl: whatsappCampaignUseTemplate ? effectiveTemplateConfig.headerMediaUrl : undefined,
+            templateHeaderMediaType: whatsappCampaignUseTemplate ? effectiveTemplateConfig.headerMediaType : undefined,
+            templateButtonParameters: whatsappCampaignUseTemplate ? templateButtonParameters : undefined,
             recipients: campaignRecipients,
             backendDebug: result.debug,
             backendErrors: errors,
@@ -1867,6 +1938,62 @@ export default function CampaignsScreen() {
                     <Text style={styles.helpText}>
                       Use this for body placeholders in the same order as the template variables.
                     </Text>
+
+                    <Text style={[styles.label, { marginTop: 12 }]}>Header Text Variables (optional, comma-separated)</Text>
+                    <TextInput
+                      style={[styles.input, styles.captionInput]}
+                      value={whatsappTestTemplateHeaderParamsText}
+                      onChangeText={setWhatsappTestTemplateHeaderParamsText}
+                      placeholder="For header text placeholders only (if template header has {{ }} )"
+                      multiline
+                      numberOfLines={2}
+                      textAlignVertical="top"
+                    />
+                    <Text style={styles.helpText}>
+                      Leave blank for static header text. Footer is static and does not need parameters.
+                    </Text>
+
+                    <Text style={[styles.label, { marginTop: 12 }]}>Header Media URL (optional, for image/video/document header templates)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={whatsappTestTemplateHeaderMediaUrl}
+                      onChangeText={setWhatsappTestTemplateHeaderMediaUrl}
+                      placeholder="https://... (must be publicly accessible)"
+                      autoCapitalize="none"
+                      keyboardType="url"
+                    />
+                    <Text style={styles.label}>Header Media Type</Text>
+                    <View style={styles.mediaButtonsRow}>
+                      {(['image', 'video', 'document'] as const).map((type) => (
+                        <TouchableOpacity
+                          key={`wa-test-header-${type}`}
+                          style={[
+                            styles.mediaButton,
+                            whatsappTestTemplateHeaderMediaType === type && {
+                              borderColor: Colors.light.tint,
+                              backgroundColor: Colors.light.secondary,
+                            },
+                          ]}
+                          onPress={() => setWhatsappTestTemplateHeaderMediaType(type)}
+                        >
+                          <Text style={styles.mediaButtonText}>{type.toUpperCase()}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <Text style={[styles.label, { marginTop: 12 }]}>Button URL Variables (optional, comma-separated)</Text>
+                    <TextInput
+                      style={[styles.input, styles.captionInput]}
+                      value={whatsappTestTemplateButtonParamsText}
+                      onChangeText={setWhatsappTestTemplateButtonParamsText}
+                      placeholder="For dynamic URL button suffix params (button 1, button 2...)"
+                      multiline
+                      numberOfLines={2}
+                      textAlignVertical="top"
+                    />
+                    <Text style={styles.helpText}>
+                      Enter button URL variables in button order. Quick reply buttons usually need no parameters.
+                    </Text>
                   </>
                 )}
 
@@ -2103,6 +2230,9 @@ export default function CampaignsScreen() {
                       <Text style={styles.helpText}>
                         Linked template params: {parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText).length}
                       </Text>
+                      <Text style={styles.helpText}>
+                        Linked header params: {parseWhatsAppTemplateParameters(whatsappTestTemplateHeaderParamsText).length} | linked button params: {parseWhatsAppTemplateParameters(whatsappTestTemplateButtonParamsText).length}
+                      </Text>
                     </View>
                   )}
 
@@ -2140,6 +2270,74 @@ export default function CampaignsScreen() {
                   <Text style={styles.helpText}>
                     Comma-separated values are sent as template body parameters in order. Example: `John, Order #123`.
                     {whatsappLinkCampaignTemplateToTest ? ' (Editing here updates the test template config because campaign is linked.)' : ''}
+                  </Text>
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>Header Text Variables (optional, comma-separated)</Text>
+                  <TextInput
+                    style={[styles.input, styles.captionInput]}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateHeaderParamsText : whatsappCampaignTemplateHeaderParamsText}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateHeaderParamsText : setWhatsappCampaignTemplateHeaderParamsText}
+                    placeholder="For header text placeholders only"
+                    multiline
+                    numberOfLines={2}
+                    textAlignVertical="top"
+                    editable={!whatsappLinkCampaignTemplateToTest}
+                  />
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>Header Media URL (optional)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateHeaderMediaUrl : whatsappCampaignTemplateHeaderMediaUrl}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateHeaderMediaUrl : setWhatsappCampaignTemplateHeaderMediaUrl}
+                    placeholder="https://... for header media templates"
+                    autoCapitalize="none"
+                    keyboardType="url"
+                    editable={!whatsappLinkCampaignTemplateToTest}
+                  />
+
+                  <Text style={styles.label}>Header Media Type</Text>
+                  <View style={styles.mediaButtonsRow}>
+                    {(['image', 'video', 'document'] as const).map((type) => {
+                      const selectedType = whatsappLinkCampaignTemplateToTest
+                        ? whatsappTestTemplateHeaderMediaType
+                        : whatsappCampaignTemplateHeaderMediaType;
+                      return (
+                        <TouchableOpacity
+                          key={`wa-campaign-header-${type}`}
+                          style={[
+                            styles.mediaButton,
+                            selectedType === type && {
+                              borderColor: Colors.light.tint,
+                              backgroundColor: Colors.light.secondary,
+                            },
+                            whatsappLinkCampaignTemplateToTest && { opacity: 0.7 },
+                          ]}
+                          onPress={() => {
+                            if (whatsappLinkCampaignTemplateToTest) return;
+                            setWhatsappCampaignTemplateHeaderMediaType(type);
+                          }}
+                          disabled={whatsappLinkCampaignTemplateToTest}
+                        >
+                          <Text style={styles.mediaButtonText}>{type.toUpperCase()}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>Button URL Variables (optional, comma-separated)</Text>
+                  <TextInput
+                    style={[styles.input, styles.captionInput]}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateButtonParamsText : whatsappCampaignTemplateButtonParamsText}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateButtonParamsText : setWhatsappCampaignTemplateButtonParamsText}
+                    placeholder="Dynamic URL button params in order"
+                    multiline
+                    numberOfLines={2}
+                    textAlignVertical="top"
+                    editable={!whatsappLinkCampaignTemplateToTest}
+                  />
+                  <Text style={styles.helpText}>
+                    Footer is static. Use body/header/button variables only if your approved template has placeholders.
+                    {whatsappLinkCampaignTemplateToTest ? ' (Campaign template fields are linked to test template settings.)' : ''}
                   </Text>
                 </View>
               ) : (
