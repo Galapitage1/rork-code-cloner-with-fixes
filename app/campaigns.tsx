@@ -106,6 +106,10 @@ export default function CampaignsScreen() {
   const [whatsappTestTemplateName, setWhatsappTestTemplateName] = useState<string>('');
   const [whatsappTestTemplateLanguage, setWhatsappTestTemplateLanguage] = useState<string>('en_US');
   const [whatsappTestTemplateParamsText, setWhatsappTestTemplateParamsText] = useState<string>('');
+  const [whatsappCampaignUseTemplate, setWhatsappCampaignUseTemplate] = useState<boolean>(true);
+  const [whatsappCampaignTemplateName, setWhatsappCampaignTemplateName] = useState<string>('');
+  const [whatsappCampaignTemplateLanguage, setWhatsappCampaignTemplateLanguage] = useState<string>('en_US');
+  const [whatsappCampaignTemplateParamsText, setWhatsappCampaignTemplateParamsText] = useState<string>('');
 
   const loadCampaignSettings = async () => {
     try {
@@ -135,6 +139,10 @@ export default function CampaignsScreen() {
         setWhatsappTestTemplateName(parsed.whatsappTestTemplateName || '');
         setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
         setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
+        setWhatsappCampaignUseTemplate(parsed.whatsappCampaignUseTemplate !== false);
+        setWhatsappCampaignTemplateName(parsed.whatsappCampaignTemplateName || '');
+        setWhatsappCampaignTemplateLanguage(parsed.whatsappCampaignTemplateLanguage || 'en_US');
+        setWhatsappCampaignTemplateParamsText(parsed.whatsappCampaignTemplateParamsText || '');
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
@@ -166,6 +174,10 @@ export default function CampaignsScreen() {
         whatsappTestTemplateName,
         whatsappTestTemplateLanguage,
         whatsappTestTemplateParamsText,
+        whatsappCampaignUseTemplate,
+        whatsappCampaignTemplateName,
+        whatsappCampaignTemplateLanguage,
+        whatsappCampaignTemplateParamsText,
         emailNoReplyMode,
         updatedAt: Date.now(),
       };
@@ -480,7 +492,14 @@ export default function CampaignsScreen() {
   };
 
   const validateWhatsAppCampaign = (): string | null => {
-    if (!message.trim() && !whatsappMediaUri) {
+    if (whatsappCampaignUseTemplate) {
+      if (!whatsappCampaignTemplateName.trim()) {
+        return 'Please enter an approved WhatsApp template name';
+      }
+      if (whatsappMediaUri) {
+        return 'Media campaigns are not supported in template mode yet. Turn template mode OFF to send text/media campaigns.';
+      }
+    } else if (!message.trim() && !whatsappMediaUri) {
       return 'Please enter a message or attach media';
     }
     if (selectedCustomers.length === 0) {
@@ -1018,8 +1037,10 @@ export default function CampaignsScreen() {
 
     console.log('[WhatsApp CAMPAIGN] Opening confirm dialog...');
     setConfirmState({
-      title: 'Send WhatsApp Campaign',
-      message: `Send WhatsApp message to ${selectedCustomers.length} customer(s)?`,
+      title: 'Send WhatsApp Cloud API Campaign',
+      message: whatsappCampaignUseTemplate
+        ? `Send WhatsApp template "${whatsappCampaignTemplateName.trim() || '(template)'}" to ${selectedCustomers.length} customer(s)?`
+        : `Send WhatsApp message to ${selectedCustomers.length} customer(s)?`,
       onConfirm: async () => {
         console.log('[WhatsApp CAMPAIGN] User confirmed, starting send...');
         console.log('[WhatsApp CAMPAIGN] Using credentials:', {
@@ -1076,92 +1097,62 @@ export default function CampaignsScreen() {
           
           const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
           console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
-          console.log('[WhatsApp CAMPAIGN] Sending messages in parallel batches...');
-          
-          let successCount = 0;
-          let failCount = 0;
-          const errors: string[] = [];
-          const successfulCustomerIds: string[] = [];
-          
-          const BATCH_SIZE = 10;
-          const sendMessage = async (customer: typeof selectedCustomers[0]) => {
-            try {
-              console.log(`[WhatsApp CAMPAIGN] Sending to ${customer.name} (${customer.phone})...`);
-              
-              const response = await fetch(phpEndpoint, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  accessToken: whatsappAccessToken,
-                  phoneNumberId: whatsappPhoneNumberId,
-                  message: publicMediaUrl ? whatsappCaption : message,
-                  mediaUrl: publicMediaUrl,
-                  mediaType: whatsappMediaType,
-                  caption: whatsappCaption,
-                  recipients: [{
-                    name: customer.name,
-                    phone: customer.phone,
-                  }],
-                }),
-              });
+          console.log('[WhatsApp CAMPAIGN] Sending via single backend request (Cloud API pattern)...');
 
-              const responseText = await response.text();
-              
-              let result;
-              try {
-                result = JSON.parse(responseText);
-              } catch (parseError) {
-                console.error(`[WhatsApp CAMPAIGN] Failed to parse response for ${customer.name}:`, parseError);
-                throw new Error('Invalid server response');
-              }
+          const templateParameters = whatsappCampaignTemplateParamsText
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
 
-              if (response.ok && result.success && result.results?.success > 0) {
-                console.log(`[WhatsApp CAMPAIGN] Successfully sent to ${customer.name}`);
-                return { success: true, customerId: customer.id };
-              } else {
-                const detailedError = result.error || result.results?.errors?.[0] || 'Unknown error';
-                console.error(`[WhatsApp CAMPAIGN] Failed to send to ${customer.name}:`, detailedError);
-                return { success: false, error: `${customer.name}: ${detailedError}` };
-              }
-            } catch (error) {
-              console.error(`[WhatsApp CAMPAIGN] Error sending to ${customer.name}:`, error);
-              return { success: false, error: `${customer.name}: ${(error as Error).message}` };
-            }
-          };
-          
-          for (let i = 0; i < selectedCustomers.length; i += BATCH_SIZE) {
-            const batch = selectedCustomers.slice(i, i + BATCH_SIZE);
-            console.log(`[WhatsApp CAMPAIGN] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(selectedCustomers.length / BATCH_SIZE)}`);
-            
-            const results = await Promise.all(batch.map(sendMessage));
-            
-            results.forEach(result => {
-              if (result.success) {
-                successCount++;
-                if (result.customerId) {
-                  successfulCustomerIds.push(result.customerId);
-                }
-              } else {
-                failCount++;
-                if (result.error) {
-                  errors.push(result.error);
-                }
-              }
-            });
-            
-            if (successfulCustomerIds.length > 0) {
-              setSelectedCustomerIds(prev => {
-                const newSet = new Set(prev);
-                successfulCustomerIds.forEach(id => newSet.delete(id));
-                return newSet;
-              });
-              successfulCustomerIds.length = 0;
-            }
+          const response = await fetch(phpEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              accessToken: whatsappAccessToken,
+              phoneNumberId: whatsappPhoneNumberId,
+              message: publicMediaUrl ? whatsappCaption : message,
+              mediaUrl: publicMediaUrl,
+              mediaType: whatsappMediaType,
+              caption: whatsappCaption,
+              useTemplate: whatsappCampaignUseTemplate,
+              templateName: whatsappCampaignUseTemplate ? whatsappCampaignTemplateName.trim() : undefined,
+              templateLanguage: whatsappCampaignUseTemplate ? (whatsappCampaignTemplateLanguage.trim() || 'en_US') : undefined,
+              templateParameters: whatsappCampaignUseTemplate ? templateParameters : undefined,
+              recipients: selectedCustomers.map(c => ({
+                name: c.name,
+                phone: c.phone,
+              })),
+            }),
+          });
+
+          const rawText = await response.text();
+          let result: any;
+          try {
+            result = rawText ? JSON.parse(rawText) : {};
+          } catch {
+            throw new Error(`Server returned non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 160)}`);
           }
 
-          const resultMessage = `Queued by WhatsApp API: ${successCount}\nAPI Rejected: ${failCount}${
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || result.results?.errors?.[0] || 'Failed to send WhatsApp campaign');
+          }
+
+          const successCount = result.results?.accepted ?? result.results?.success ?? 0;
+          const failCount = result.results?.failed ?? 0;
+          const pendingCount = result.results?.delivery_pending ?? 0;
+          const errors: string[] = Array.isArray(result.results?.errors) ? result.results.errors : [];
+
+          if (successCount > 0) {
+            setSelectedCustomerIds(prev => {
+              const next = new Set(prev);
+              selectedCustomers.forEach(c => next.delete(c.id));
+              return next;
+            });
+          }
+
+          const resultMessage = `Queued by WhatsApp API: ${successCount}\nAPI Rejected: ${failCount}\nDelivery Pending: ${pendingCount}${
             errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
           }\n\nNote: "Queued" means WhatsApp accepted the request for processing. Final delivery depends on recipient status, policy window, templates, and webhook delivery events (sent/delivered/read/failed).`;
 
@@ -1172,9 +1163,11 @@ export default function CampaignsScreen() {
           );
 
           if (successCount > 0) {
-            setMessage('');
-            setWhatsappMediaUri('');
-            setWhatsappCaption('');
+            if (!whatsappCampaignUseTemplate) {
+              setMessage('');
+              setWhatsappMediaUri('');
+              setWhatsappCaption('');
+            }
           }
 
         } catch (error) {
@@ -1974,7 +1967,54 @@ export default function CampaignsScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>WhatsApp Message</Text>
-              
+              <Text style={styles.helpText}>
+                Cloud API best practice: use approved templates for campaigns (especially outside the 24-hour window). Text/media mode is available for service-window messaging.
+              </Text>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.saveSettingsButton, { marginTop: 8 }]}
+                onPress={() => setWhatsappCampaignUseTemplate((prev) => !prev)}
+              >
+                <Text style={styles.saveSettingsButtonText}>
+                  {whatsappCampaignUseTemplate ? 'Campaign Mode: TEMPLATE (Tap for text/media)' : 'Campaign Mode: TEXT/MEDIA (Tap for template)'}
+                </Text>
+              </TouchableOpacity>
+
+              {whatsappCampaignUseTemplate ? (
+                <View style={[styles.mediaSection, { marginTop: 12 }]}>
+                  <Text style={styles.label}>Approved Template Name *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={whatsappCampaignTemplateName}
+                    onChangeText={setWhatsappCampaignTemplateName}
+                    placeholder="e.g. promo_update_jan"
+                    autoCapitalize="none"
+                  />
+
+                  <Text style={styles.label}>Template Language Code *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={whatsappCampaignTemplateLanguage}
+                    onChangeText={setWhatsappCampaignTemplateLanguage}
+                    placeholder="e.g. en_US"
+                    autoCapitalize="none"
+                  />
+
+                  <Text style={styles.label}>Template Variables (optional, shared for all recipients)</Text>
+                  <TextInput
+                    style={[styles.input, styles.captionInput]}
+                    value={whatsappCampaignTemplateParamsText}
+                    onChangeText={setWhatsappCampaignTemplateParamsText}
+                    placeholder="e.g. January Offers, Colombo 05"
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                  />
+                  <Text style={styles.helpText}>
+                    Comma-separated values are sent as template body parameters in order. Example: `John, Order #123`.
+                  </Text>
+                </View>
+              ) : (
               <View style={styles.mediaSection}>
                 <Text style={styles.label}>Media Attachment (Optional)</Text>
                 
@@ -2124,22 +2164,23 @@ export default function CampaignsScreen() {
                     💡 Tip: Media URLs must be publicly accessible. Supported: Images (JPG, PNG), Videos (MP4), Documents (PDF, etc.)
                   </Text>
                 </View>
+
+                {!whatsappMediaUri && (
+                  <>
+                    <Text style={styles.label}>Message *</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={message}
+                      onChangeText={setMessage}
+                      placeholder="Your WhatsApp message..."
+                      multiline
+                      numberOfLines={6}
+                      textAlignVertical="top"
+                    />
+                    <Text style={styles.charCount}>{message.length} characters</Text>
+                  </>
+                )}
               </View>
-              
-              {!whatsappMediaUri && (
-                <>
-                  <Text style={styles.label}>Message *</Text>
-                  <TextInput
-                    style={[styles.input, styles.textArea]}
-                    value={message}
-                    onChangeText={setMessage}
-                    placeholder="Your WhatsApp message..."
-                    multiline
-                    numberOfLines={6}
-                    textAlignVertical="top"
-                  />
-                  <Text style={styles.charCount}>{message.length} characters</Text>
-                </>
               )}
             </View>
           </>
