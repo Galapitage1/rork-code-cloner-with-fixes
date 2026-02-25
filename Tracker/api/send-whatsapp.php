@@ -101,6 +101,24 @@ $results = [
   'accepted' => 0,
   'delivery_pending' => 0,
 ];
+$debug = [
+  'mode' => $useTemplate ? 'template' : (!empty($mediaUrl) ? 'media' : 'text'),
+  'template' => $useTemplate ? [
+    'name' => $templateName,
+    'language' => $templateLanguage !== '' ? $templateLanguage : 'en_US',
+    'parameterCount' => count($templateParameters),
+    'parameters' => array_values(array_filter(array_map(function($param) {
+      if (is_array($param)) {
+        return '';
+      }
+      return trim((string)$param);
+    }, $templateParameters), function($value) {
+      return $value !== '';
+    })),
+  ] : null,
+  'defaultCountryCode' => $defaultCountryCode,
+  'recipients' => [],
+];
 
 logError('Starting to send to ' . count($recipients) . ' recipients');
 $batchStartTime = time();
@@ -147,9 +165,19 @@ foreach ($recipients as $index => $recipient) {
     }
 
     $phone = normalizePhoneNumber($recipient['phone'], $defaultCountryCode);
+    $debugRecipient = [
+      'name' => isset($recipient['name']) ? (string)$recipient['name'] : 'Unknown',
+      'inputPhone' => isset($recipient['phone']) ? (string)$recipient['phone'] : '',
+      'normalizedPhone' => $phone,
+    ];
     
     if (empty($phone)) {
       $results['skipped']++;
+      $debugRecipient['result'] = 'skipped';
+      $debugRecipient['reason'] = 'invalid_phone_number_format';
+      if (count($debug['recipients']) < 50) {
+        $debug['recipients'][] = $debugRecipient;
+      }
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Invalid phone number format';
       }
@@ -158,6 +186,11 @@ foreach ($recipients as $index => $recipient) {
     
     if (strlen($phone) < 8) {
       $results['skipped']++;
+      $debugRecipient['result'] = 'skipped';
+      $debugRecipient['reason'] = 'phone_number_too_short';
+      if (count($debug['recipients']) < 50) {
+        $debug['recipients'][] = $debugRecipient;
+      }
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ': Phone number too short';
       }
@@ -250,6 +283,12 @@ foreach ($recipients as $index => $recipient) {
 
     if ($curlError) {
       $results['failed']++;
+      $debugRecipient['result'] = 'api_rejected';
+      $debugRecipient['reason'] = 'curl_error';
+      $debugRecipient['error'] = $curlError;
+      if (count($debug['recipients']) < 50) {
+        $debug['recipients'][] = $debugRecipient;
+      }
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$curlError}";
       }
@@ -262,6 +301,15 @@ foreach ($recipients as $index => $recipient) {
     if ($httpCode !== 200 || isset($data['error'])) {
       $errorMsg = isset($data['error']['message']) ? $data['error']['message'] : 'Failed to send message';
       $results['failed']++;
+      $debugRecipient['result'] = 'api_rejected';
+      $debugRecipient['httpCode'] = $httpCode;
+      $debugRecipient['error'] = $errorMsg;
+      if (isset($data['error']['code'])) {
+        $debugRecipient['errorCode'] = $data['error']['code'];
+      }
+      if (count($debug['recipients']) < 50) {
+        $debug['recipients'][] = $debugRecipient;
+      }
       if (count($results['errors']) < 50) {
         $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": {$errorMsg} (HTTP {$httpCode})";
       }
@@ -269,6 +317,14 @@ foreach ($recipients as $index => $recipient) {
     } else {
       $results['accepted']++;
       $messageStatus = isset($data['messages'][0]['message_status']) ? strtolower((string)$data['messages'][0]['message_status']) : '';
+      $debugRecipient['result'] = 'accepted';
+      $debugRecipient['messageStatus'] = $messageStatus !== '' ? $messageStatus : 'accepted';
+      if (isset($data['messages'][0]['id'])) {
+        $debugRecipient['wamid'] = (string)$data['messages'][0]['id'];
+      }
+      if (count($debug['recipients']) < 50) {
+        $debug['recipients'][] = $debugRecipient;
+      }
       if ($messageStatus === 'accepted' || $messageStatus === '') {
         $results['delivery_pending']++;
       }
@@ -285,6 +341,15 @@ foreach ($recipients as $index => $recipient) {
     }
   } catch (Exception $e) {
     $results['failed']++;
+    if (count($debug['recipients']) < 50) {
+      $debug['recipients'][] = [
+        'name' => isset($recipient['name']) ? (string)$recipient['name'] : 'Unknown',
+        'inputPhone' => isset($recipient['phone']) ? (string)$recipient['phone'] : '',
+        'normalizedPhone' => isset($phone) ? (string)$phone : '',
+        'result' => 'exception',
+        'error' => $e->getMessage(),
+      ];
+    }
     if (count($results['errors']) < 50) {
       $results['errors'][] = ($recipient['name'] ?? 'Unknown') . ": Unexpected error - " . $e->getMessage();
     }
@@ -302,5 +367,6 @@ if (count($results['errors']) >= 50) {
 respond([
   'success' => true,
   'results' => $results,
+  'debug' => $debug,
   'deliveryNote' => 'Success means WhatsApp accepted the request. Final delivery status is confirmed via webhook events.',
 ]);

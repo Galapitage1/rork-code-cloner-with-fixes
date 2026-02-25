@@ -107,6 +107,7 @@ export default function CampaignsScreen() {
   const [whatsappTestTemplateLanguage, setWhatsappTestTemplateLanguage] = useState<string>('en_US');
   const [whatsappTestTemplateParamsText, setWhatsappTestTemplateParamsText] = useState<string>('');
   const [whatsappCampaignUseTemplate, setWhatsappCampaignUseTemplate] = useState<boolean>(true);
+  const [whatsappLinkCampaignTemplateToTest, setWhatsappLinkCampaignTemplateToTest] = useState<boolean>(true);
   const [whatsappCampaignTemplateName, setWhatsappCampaignTemplateName] = useState<string>('');
   const [whatsappCampaignTemplateLanguage, setWhatsappCampaignTemplateLanguage] = useState<string>('en_US');
   const [whatsappCampaignTemplateParamsText, setWhatsappCampaignTemplateParamsText] = useState<string>('');
@@ -140,6 +141,7 @@ export default function CampaignsScreen() {
         setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
         setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
         setWhatsappCampaignUseTemplate(parsed.whatsappCampaignUseTemplate !== false);
+        setWhatsappLinkCampaignTemplateToTest(parsed.whatsappLinkCampaignTemplateToTest !== false);
         setWhatsappCampaignTemplateName(parsed.whatsappCampaignTemplateName || '');
         setWhatsappCampaignTemplateLanguage(parsed.whatsappCampaignTemplateLanguage || 'en_US');
         setWhatsappCampaignTemplateParamsText(parsed.whatsappCampaignTemplateParamsText || '');
@@ -175,6 +177,7 @@ export default function CampaignsScreen() {
         whatsappTestTemplateLanguage,
         whatsappTestTemplateParamsText,
         whatsappCampaignUseTemplate,
+        whatsappLinkCampaignTemplateToTest,
         whatsappCampaignTemplateName,
         whatsappCampaignTemplateLanguage,
         whatsappCampaignTemplateParamsText,
@@ -202,6 +205,82 @@ export default function CampaignsScreen() {
       console.error('[CAMPAIGNS] Failed to save campaign settings:', error);
       Alert.alert('Error', 'Failed to save settings');
     }
+  };
+
+  const parseWhatsAppTemplateParameters = (raw: string): string[] =>
+    raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const getEffectiveWhatsAppCampaignTemplateConfig = () => {
+    if (whatsappLinkCampaignTemplateToTest) {
+      return {
+        source: 'linked-test' as const,
+        name: whatsappTestTemplateName.trim(),
+        language: whatsappTestTemplateLanguage.trim() || 'en_US',
+        paramsText: whatsappTestTemplateParamsText,
+        params: parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText),
+      };
+    }
+
+    return {
+      source: 'campaign' as const,
+      name: whatsappCampaignTemplateName.trim(),
+      language: whatsappCampaignTemplateLanguage.trim() || 'en_US',
+      paramsText: whatsappCampaignTemplateParamsText,
+      params: parseWhatsAppTemplateParameters(whatsappCampaignTemplateParamsText),
+    };
+  };
+
+  const buildWhatsAppSendDebugSummary = (options: {
+    mode: 'test' | 'campaign';
+    useTemplate: boolean;
+    templateName?: string;
+    templateLanguage?: string;
+    templateParameters?: string[];
+    recipients: Array<{ name?: string; phone?: string }>;
+    backendDebug?: any;
+    backendErrors?: string[];
+  }): string => {
+    const lines: string[] = [];
+    lines.push(`Mode: ${options.mode}`);
+    lines.push(`Send Type: ${options.useTemplate ? 'template' : 'text/media'}`);
+
+    if (options.useTemplate) {
+      lines.push(`Template: ${options.templateName || '(blank)'}`);
+      lines.push(`Language: ${options.templateLanguage || 'en_US'}`);
+      lines.push(`Template Params: ${(options.templateParameters || []).length}`);
+      if ((options.templateParameters || []).length > 0) {
+        lines.push(`Params: ${(options.templateParameters || []).join(' | ')}`);
+      }
+    }
+
+    const normalizedPreview = Array.isArray(options.backendDebug?.recipients)
+      ? options.backendDebug.recipients.slice(0, 5)
+      : [];
+    if (normalizedPreview.length > 0) {
+      lines.push('');
+      lines.push('Recipients (input -> normalized):');
+      normalizedPreview.forEach((recipient: any) => {
+        lines.push(
+          `${recipient.name || 'Unknown'}: ${recipient.inputPhone || '-'} -> ${recipient.normalizedPhone || '-'}`
+        );
+      });
+      if ((options.backendDebug?.recipients?.length || 0) > normalizedPreview.length) {
+        lines.push(`... +${options.backendDebug.recipients.length - normalizedPreview.length} more`);
+      }
+    } else if (options.recipients.length > 0) {
+      lines.push('');
+      lines.push(`Recipients: ${options.recipients.slice(0, 5).map((r) => r.phone || '-').join(', ')}`);
+    }
+
+    if (Array.isArray(options.backendErrors) && options.backendErrors.length > 0) {
+      lines.push('');
+      lines.push(`First Error: ${options.backendErrors[0]}`);
+    }
+
+    return lines.join('\n');
   };
 
   React.useEffect(() => {
@@ -493,8 +572,11 @@ export default function CampaignsScreen() {
 
   const validateWhatsAppCampaign = (): string | null => {
     if (whatsappCampaignUseTemplate) {
-      if (!whatsappCampaignTemplateName.trim()) {
-        return 'Please enter an approved WhatsApp template name';
+      const templateConfig = getEffectiveWhatsAppCampaignTemplateConfig();
+      if (!templateConfig.name) {
+        return whatsappLinkCampaignTemplateToTest
+          ? 'Please enter an approved WhatsApp template name in the WhatsApp Test Template settings (campaign is linked to test template).'
+          : 'Please enter an approved WhatsApp template name';
       }
       if (whatsappMediaUri) {
         return 'Media campaigns are not supported in template mode yet. Turn template mode OFF to send text/media campaigns.';
@@ -947,10 +1029,13 @@ export default function CampaignsScreen() {
       const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
       const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-whatsapp.php` : `${apiUrl}/api/send-whatsapp`;
 
-      const templateParameters = whatsappTestTemplateParamsText
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean);
+      const templateParameters = parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText);
+      const testRecipients = [
+        {
+          name: 'Test Recipient',
+          phone: whatsappTestPhone.trim(),
+        },
+      ];
 
       const response = await fetch(phpEndpoint, {
         method: 'POST',
@@ -965,12 +1050,7 @@ export default function CampaignsScreen() {
           templateName: whatsappTestUseTemplate ? whatsappTestTemplateName.trim() : undefined,
           templateLanguage: whatsappTestUseTemplate ? (whatsappTestTemplateLanguage.trim() || 'en_US') : undefined,
           templateParameters: whatsappTestUseTemplate ? templateParameters : undefined,
-          recipients: [
-            {
-              name: 'Test Recipient',
-              phone: whatsappTestPhone.trim(),
-            },
-          ],
+          recipients: testRecipients,
         }),
       });
 
@@ -992,10 +1072,20 @@ export default function CampaignsScreen() {
       const firstError = Array.isArray(result.results?.errors) && result.results.errors.length > 0
         ? `\n\nError: ${result.results.errors[0]}`
         : '';
+      const debugSummary = buildWhatsAppSendDebugSummary({
+        mode: 'test',
+        useTemplate: whatsappTestUseTemplate,
+        templateName: whatsappTestUseTemplate ? whatsappTestTemplateName.trim() : undefined,
+        templateLanguage: whatsappTestUseTemplate ? (whatsappTestTemplateLanguage.trim() || 'en_US') : undefined,
+        templateParameters: whatsappTestUseTemplate ? templateParameters : undefined,
+        recipients: testRecipients,
+        backendDebug: result.debug,
+        backendErrors: result.results?.errors,
+      });
 
       Alert.alert(
         'WhatsApp Test Queued',
-        `Queued by WhatsApp API: ${accepted}\nAPI Rejected: ${rejected}\nDelivery Pending: ${pending}${firstError}\n\nFinal delivery depends on policy window/templates and webhook status events.`,
+        `Queued by WhatsApp API: ${accepted}\nAPI Rejected: ${rejected}\nDelivery Pending: ${pending}${firstError}\n\n${debugSummary}\n\nFinal delivery depends on policy window/templates and webhook status events.`,
         [{ text: 'OK' }]
       );
     } catch (error) {
@@ -1039,7 +1129,7 @@ export default function CampaignsScreen() {
     setConfirmState({
       title: 'Send WhatsApp Cloud API Campaign',
       message: whatsappCampaignUseTemplate
-        ? `Send WhatsApp template "${whatsappCampaignTemplateName.trim() || '(template)'}" to ${selectedCustomers.length} customer(s)?`
+        ? `Send WhatsApp template "${getEffectiveWhatsAppCampaignTemplateConfig().name || '(template)'}" to ${selectedCustomers.length} customer(s)?`
         : `Send WhatsApp message to ${selectedCustomers.length} customer(s)?`,
       onConfirm: async () => {
         console.log('[WhatsApp CAMPAIGN] User confirmed, starting send...');
@@ -1099,10 +1189,12 @@ export default function CampaignsScreen() {
           console.log('[WhatsApp CAMPAIGN] Sending to:', phpEndpoint);
           console.log('[WhatsApp CAMPAIGN] Sending via single backend request (Cloud API pattern)...');
 
-          const templateParameters = whatsappCampaignTemplateParamsText
-            .split(',')
-            .map((item) => item.trim())
-            .filter(Boolean);
+          const effectiveTemplateConfig = getEffectiveWhatsAppCampaignTemplateConfig();
+          const templateParameters = effectiveTemplateConfig.params;
+          const campaignRecipients = selectedCustomers.map(c => ({
+            name: c.name,
+            phone: c.phone,
+          }));
 
           const response = await fetch(phpEndpoint, {
             method: 'POST',
@@ -1117,13 +1209,10 @@ export default function CampaignsScreen() {
               mediaType: whatsappMediaType,
               caption: whatsappCaption,
               useTemplate: whatsappCampaignUseTemplate,
-              templateName: whatsappCampaignUseTemplate ? whatsappCampaignTemplateName.trim() : undefined,
-              templateLanguage: whatsappCampaignUseTemplate ? (whatsappCampaignTemplateLanguage.trim() || 'en_US') : undefined,
+              templateName: whatsappCampaignUseTemplate ? effectiveTemplateConfig.name : undefined,
+              templateLanguage: whatsappCampaignUseTemplate ? effectiveTemplateConfig.language : undefined,
               templateParameters: whatsappCampaignUseTemplate ? templateParameters : undefined,
-              recipients: selectedCustomers.map(c => ({
-                name: c.name,
-                phone: c.phone,
-              })),
+              recipients: campaignRecipients,
             }),
           });
 
@@ -1143,6 +1232,16 @@ export default function CampaignsScreen() {
           const failCount = result.results?.failed ?? 0;
           const pendingCount = result.results?.delivery_pending ?? 0;
           const errors: string[] = Array.isArray(result.results?.errors) ? result.results.errors : [];
+          const debugSummary = buildWhatsAppSendDebugSummary({
+            mode: 'campaign',
+            useTemplate: whatsappCampaignUseTemplate,
+            templateName: whatsappCampaignUseTemplate ? effectiveTemplateConfig.name : undefined,
+            templateLanguage: whatsappCampaignUseTemplate ? effectiveTemplateConfig.language : undefined,
+            templateParameters: whatsappCampaignUseTemplate ? templateParameters : undefined,
+            recipients: campaignRecipients,
+            backendDebug: result.debug,
+            backendErrors: errors,
+          });
 
           if (successCount > 0) {
             setSelectedCustomerIds(prev => {
@@ -1154,7 +1253,7 @@ export default function CampaignsScreen() {
 
           const resultMessage = `Queued by WhatsApp API: ${successCount}\nAPI Rejected: ${failCount}\nDelivery Pending: ${pendingCount}${
             errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : ''
-          }\n\nNote: "Queued" means WhatsApp accepted the request for processing. Final delivery depends on recipient status, policy window, templates, and webhook delivery events (sent/delivered/read/failed).`;
+          }\n\n${debugSummary}\n\nNote: "Queued" means WhatsApp accepted the request for processing. Final delivery depends on recipient status, policy window, templates, and webhook delivery events (sent/delivered/read/failed).`;
 
           Alert.alert(
             'WhatsApp Campaign Queued',
@@ -1982,36 +2081,65 @@ export default function CampaignsScreen() {
 
               {whatsappCampaignUseTemplate ? (
                 <View style={[styles.mediaSection, { marginTop: 12 }]}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton, { marginBottom: 12 }]}
+                    onPress={() => setWhatsappLinkCampaignTemplateToTest((prev) => !prev)}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>
+                      {whatsappLinkCampaignTemplateToTest
+                        ? 'Campaign Template Source: LINKED TO TEST (Tap for separate campaign template)'
+                        : 'Campaign Template Source: SEPARATE (Tap to reuse test template)'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {whatsappLinkCampaignTemplateToTest && (
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={styles.helpText}>
+                        Campaign sends will use the same template settings as the test sender above.
+                      </Text>
+                      <Text style={styles.helpText}>
+                        Current linked template: {whatsappTestTemplateName.trim() || '(not set)'} / {(whatsappTestTemplateLanguage.trim() || 'en_US')}
+                      </Text>
+                      <Text style={styles.helpText}>
+                        Linked template params: {parseWhatsAppTemplateParameters(whatsappTestTemplateParamsText).length}
+                      </Text>
+                    </View>
+                  )}
+
                   <Text style={styles.label}>Approved Template Name *</Text>
                   <TextInput
                     style={styles.input}
-                    value={whatsappCampaignTemplateName}
-                    onChangeText={setWhatsappCampaignTemplateName}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateName : whatsappCampaignTemplateName}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateName : setWhatsappCampaignTemplateName}
                     placeholder="e.g. promo_update_jan"
                     autoCapitalize="none"
+                    editable={!whatsappLinkCampaignTemplateToTest}
                   />
 
                   <Text style={styles.label}>Template Language Code *</Text>
                   <TextInput
                     style={styles.input}
-                    value={whatsappCampaignTemplateLanguage}
-                    onChangeText={setWhatsappCampaignTemplateLanguage}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateLanguage : whatsappCampaignTemplateLanguage}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateLanguage : setWhatsappCampaignTemplateLanguage}
                     placeholder="e.g. en_US"
                     autoCapitalize="none"
+                    editable={!whatsappLinkCampaignTemplateToTest}
                   />
 
                   <Text style={styles.label}>Template Variables (optional, shared for all recipients)</Text>
                   <TextInput
                     style={[styles.input, styles.captionInput]}
-                    value={whatsappCampaignTemplateParamsText}
-                    onChangeText={setWhatsappCampaignTemplateParamsText}
+                    value={whatsappLinkCampaignTemplateToTest ? whatsappTestTemplateParamsText : whatsappCampaignTemplateParamsText}
+                    onChangeText={whatsappLinkCampaignTemplateToTest ? setWhatsappTestTemplateParamsText : setWhatsappCampaignTemplateParamsText}
                     placeholder="e.g. January Offers, Colombo 05"
                     multiline
                     numberOfLines={3}
                     textAlignVertical="top"
+                    editable={!whatsappLinkCampaignTemplateToTest}
                   />
                   <Text style={styles.helpText}>
                     Comma-separated values are sent as template body parameters in order. Example: `John, Order #123`.
+                    {whatsappLinkCampaignTemplateToTest ? ' (Editing here updates the test template config because campaign is linked.)' : ''}
                   </Text>
                 </View>
               ) : (
