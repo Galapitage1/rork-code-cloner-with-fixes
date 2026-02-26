@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry } from '@/utils/reconciliationSync';
 import { CalendarModal } from '@/components/CalendarModal';
 
 
@@ -1275,6 +1275,7 @@ export default function SalesUploadScreen() {
                 setProcessingSteps(prev => [...prev, { text: '✓ Sales report saved and synced', status: 'complete' }]);
               } else {
                 console.log('⚠️ Failed to sync sales report to server, will retry later');
+                await queueSalesReportForRetry(salesReport);
                 setProcessingSteps(prev => [...prev, { text: '⚠️ Sales report saved locally only', status: 'error' }]);
               }
             }
@@ -1483,6 +1484,9 @@ export default function SalesUploadScreen() {
         try {
           await saveSalesReportLocally(deletedReport);
           const synced = await saveSalesReportToServer(deletedReport);
+          if (!synced) {
+            await queueSalesReportForRetry(deletedReport);
+          }
           console.log(`✓ Marked sales report deleted for ${report.outlet} ${report.date}${synced ? ' (synced)' : ' (local only)'}`);
         } catch (reportError) {
           console.error(`Failed to delete sales report ${report.id}:`, reportError);
@@ -1499,6 +1503,9 @@ export default function SalesUploadScreen() {
         try {
           await saveKitchenStockReportLocally(deletedReport);
           const synced = await saveKitchenStockReportToServer(deletedReport);
+          if (!synced) {
+            await queueKitchenStockReportForRetry(deletedReport);
+          }
           console.log(`✓ Marked kitchen report deleted for ${report.outlet} ${report.date}${synced ? ' (synced)' : ' (local only)'}`);
         } catch (reportError) {
           console.error(`Failed to delete kitchen report ${report.id}:`, reportError);
@@ -1862,6 +1869,7 @@ export default function SalesUploadScreen() {
               console.log('✓ Kitchen stock report synced to server');
             } else {
               console.log('⚠️ Failed to sync to server, will retry later');
+              await queueKitchenStockReportForRetry(report);
             }
             
             setProcessingSteps(prev => [...prev, { text: '✓ Kitchen stock report saved and synced', status: 'complete' }]);

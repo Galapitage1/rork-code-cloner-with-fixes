@@ -45,6 +45,8 @@ export type SalesReport = {
 const STORAGE_KEYS = {
   KITCHEN_STOCK_REPORTS: '@reconciliation_kitchen_stock_reports',
   SALES_REPORTS: '@reconciliation_sales_reports',
+  PENDING_KITCHEN_STOCK_REPORTS: '@reconciliation_pending_kitchen_stock_reports',
+  PENDING_SALES_REPORTS: '@reconciliation_pending_sales_reports',
   LAST_SYNC: '@reconciliation_last_sync',
 };
 
@@ -66,6 +68,68 @@ async function readReportsFromStorage<T>(key: string): Promise<T[]> {
     await AsyncStorage.removeItem(key).catch(() => {});
     return [];
   }
+}
+
+function reportKey(report: { outlet: string; date: string }): string {
+  return `${report.outlet}__${report.date}`;
+}
+
+function dedupeLatestReports<T extends { outlet: string; date: string; updatedAt: number }>(reports: T[]): T[] {
+  const latest = new Map<string, T>();
+  for (const report of reports) {
+    const key = reportKey(report);
+    const existing = latest.get(key);
+    if (!existing || (report.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      latest.set(key, report);
+    }
+  }
+  return Array.from(latest.values());
+}
+
+async function writePendingReports<T extends { outlet: string; date: string; updatedAt: number }>(
+  key: string,
+  reports: T[],
+): Promise<void> {
+  const deduped = sortReportsForCache(dedupeLatestReports(reports));
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(deduped));
+  } catch (error) {
+    console.warn(`[RECONCILIATION SYNC] Failed to write pending queue ${key}:`, error);
+  }
+}
+
+async function queuePendingReport<T extends { outlet: string; date: string; updatedAt: number }>(
+  key: string,
+  report: T,
+): Promise<void> {
+  const pending = await readReportsFromStorage<T>(key);
+  const merged = dedupeLatestReports([...pending, report]);
+  await writePendingReports(key, merged);
+}
+
+async function removePendingReportByVersion<T extends { outlet: string; date: string; updatedAt: number }>(
+  key: string,
+  report: T,
+): Promise<void> {
+  const pending = await readReportsFromStorage<T>(key);
+  const filtered = pending.filter((p) => {
+    if (p.outlet !== report.outlet || p.date !== report.date) return true;
+    return (p.updatedAt || 0) > (report.updatedAt || 0);
+  });
+  await writePendingReports(key, filtered);
+}
+
+function pruneStalePendingReports<T extends { outlet: string; date: string; updatedAt: number }>(
+  pending: T[],
+  latestKnown: T[],
+): T[] {
+  const latestMap = new Map<string, T>();
+  latestKnown.forEach((report) => latestMap.set(reportKey(report), report));
+  return pending.filter((pendingReport) => {
+    const latest = latestMap.get(reportKey(pendingReport));
+    if (!latest) return true;
+    return (pendingReport.updatedAt || 0) >= (latest.updatedAt || 0);
+  });
 }
 
 function isQuotaExceededError(error: unknown): boolean {
@@ -219,6 +283,14 @@ export async function saveSalesReportToServer(report: SalesReport): Promise<bool
   }
 }
 
+export async function queueKitchenStockReportForRetry(report: KitchenStockReport): Promise<void> {
+  await queuePendingReport<KitchenStockReport>(STORAGE_KEYS.PENDING_KITCHEN_STOCK_REPORTS, report);
+}
+
+export async function queueSalesReportForRetry(report: SalesReport): Promise<void> {
+  await queuePendingReport<SalesReport>(STORAGE_KEYS.PENDING_SALES_REPORTS, report);
+}
+
 export async function getKitchenStockReportsFromServer(): Promise<KitchenStockReport[]> {
   try {
     const url = `${BASE_URL}/Tracker/api/get.php?endpoint=${SYNC_ENDPOINT.KITCHEN_STOCK}`;
@@ -267,6 +339,10 @@ export async function saveKitchenStockReportLocally(report: KitchenStockReport):
     
     if (existingIndex >= 0) {
       const existing = reports[existingIndex];
+      if ((existing.updatedAt || 0) > (report.updatedAt || 0)) {
+        // Do not overwrite a newer local record with an older retry/import.
+        return;
+      }
       const hasChanges =
         JSON.stringify(existing.products) !== JSON.stringify(report.products) ||
         (existing.deleted || false) !== (report.deleted || false);
@@ -295,6 +371,10 @@ export async function saveSalesReportLocally(report: SalesReport): Promise<void>
     
     if (existingIndex >= 0) {
       const existing = reports[existingIndex];
+      if ((existing.updatedAt || 0) > (report.updatedAt || 0)) {
+        // Do not overwrite a newer local record with an older retry/import.
+        return;
+      }
       const hasChanges = 
         JSON.stringify(existing.salesData) !== JSON.stringify(report.salesData) ||
         JSON.stringify(existing.rawConsumption) !== JSON.stringify(report.rawConsumption) ||
@@ -336,13 +416,15 @@ export async function syncKitchenStockReports(): Promise<void> {
   try {
     console.log('\n[RECONCILIATION SYNC] Starting kitchen stock reports sync...');
     
-    const [localReports, serverReports] = await Promise.all([
+    const [localReports, serverReports, pendingReports] = await Promise.all([
       getLocalKitchenStockReports(),
       getKitchenStockReportsFromServer(),
+      readReportsFromStorage<KitchenStockReport>(STORAGE_KEYS.PENDING_KITCHEN_STOCK_REPORTS),
     ]);
     
     console.log('[RECONCILIATION SYNC] Local reports:', localReports.length);
     console.log('[RECONCILIATION SYNC] Server reports:', serverReports.length);
+    console.log('[RECONCILIATION SYNC] Pending reports:', pendingReports.length);
     
     // Log any conflicts before merging
     localReports.forEach(local => {
@@ -355,8 +437,14 @@ export async function syncKitchenStockReports(): Promise<void> {
       }
     });
     
-    const merged = mergeReports(localReports, serverReports);
+    const localPlusPending = mergeReports(localReports, pendingReports);
+    const merged = mergeReports(localPlusPending, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
+
+    const prunedPending = pruneStalePendingReports(pendingReports, merged);
+    if (prunedPending.length !== pendingReports.length) {
+      await writePendingReports(STORAGE_KEYS.PENDING_KITCHEN_STOCK_REPORTS, prunedPending);
+    }
     
     await writeReportsWithBestEffortCache(STORAGE_KEYS.KITCHEN_STOCK_REPORTS, merged, 'kitchen reports');
     
@@ -370,7 +458,12 @@ export async function syncKitchenStockReports(): Promise<void> {
     if (changedReports.length > 0) {
       for (const report of changedReports) {
         console.log(`[RECONCILIATION SYNC] Pushing report to server: ${report.outlet} ${report.date}`);
-        await saveKitchenStockReportToServer(report);
+        const ok = await saveKitchenStockReportToServer(report);
+        if (ok) {
+          await removePendingReportByVersion(STORAGE_KEYS.PENDING_KITCHEN_STOCK_REPORTS, report);
+        } else {
+          await queueKitchenStockReportForRetry(report);
+        }
       }
     }
     
@@ -384,16 +477,20 @@ export async function syncSalesReports(): Promise<void> {
   try {
     console.log('\n[RECONCILIATION SYNC] Starting sales reports sync...');
     
-    const [localReports, serverReports] = await Promise.all([
+    const [localReports, serverReports, pendingReports] = await Promise.all([
       getLocalSalesReports(),
       getSalesReportsFromServer(),
+      readReportsFromStorage<SalesReport>(STORAGE_KEYS.PENDING_SALES_REPORTS),
     ]);
     
     console.log('[RECONCILIATION SYNC] Local reports:', localReports.length);
     console.log('[RECONCILIATION SYNC] Server reports:', serverReports.length);
+    console.log('[RECONCILIATION SYNC] Pending reports:', pendingReports.length);
     
     // Log any conflicts before merging
-    localReports.forEach(local => {
+    const localPlusPending = mergeReports(localReports, pendingReports);
+
+    localPlusPending.forEach(local => {
       const server = serverReports.find(sr => sr.outlet === local.outlet && sr.date === local.date);
       if (server && server.updatedAt !== local.updatedAt) {
         console.log(`[RECONCILIATION SYNC] Conflict for ${local.outlet} ${local.date}:`);
@@ -414,8 +511,13 @@ export async function syncSalesReports(): Promise<void> {
       }
     });
     
-    const merged = mergeReports(localReports, serverReports);
+    const merged = mergeReports(localPlusPending, serverReports);
     console.log('[RECONCILIATION SYNC] Merged reports:', merged.length);
+
+    const prunedPending = pruneStalePendingReports(pendingReports, merged);
+    if (prunedPending.length !== pendingReports.length) {
+      await writePendingReports(STORAGE_KEYS.PENDING_SALES_REPORTS, prunedPending);
+    }
     
     await writeReportsWithBestEffortCache(STORAGE_KEYS.SALES_REPORTS, merged, 'sales reports');
     
@@ -429,7 +531,12 @@ export async function syncSalesReports(): Promise<void> {
     if (changedReports.length > 0) {
       for (const report of changedReports) {
         console.log(`[RECONCILIATION SYNC] Pushing report to server: ${report.outlet} ${report.date}`);
-        await saveSalesReportToServer(report);
+        const ok = await saveSalesReportToServer(report);
+        if (ok) {
+          await removePendingReportByVersion(STORAGE_KEYS.PENDING_SALES_REPORTS, report);
+        } else {
+          await queueSalesReportForRetry(report);
+        }
       }
     }
     
