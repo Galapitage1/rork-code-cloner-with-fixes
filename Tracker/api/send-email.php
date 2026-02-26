@@ -2,7 +2,8 @@
 error_reporting(E_ALL);
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
-set_time_limit(300);
+set_time_limit(900);
+ignore_user_abort(true);
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -15,10 +16,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 function respond($data, $status = 200) {
+  if (!headers_sent()) {
+    header('Content-Type: application/json; charset=utf-8');
+  }
   http_response_code($status);
   echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
   exit;
 }
+
+function email_log($message) {
+  error_log('[Email Send] ' . $message);
+}
+
+set_error_handler(function($errno, $errstr, $errfile, $errline) {
+  email_log("PHP Error [$errno]: $errstr in $errfile:$errline");
+  respond(['success' => false, 'error' => 'Server error: ' . $errstr], 500);
+});
+
+set_exception_handler(function($e) {
+  email_log('Uncaught exception: ' . $e->getMessage());
+  respond(['success' => false, 'error' => 'Server exception: ' . $e->getMessage()], 500);
+});
+
+register_shutdown_function(function() {
+  $error = error_get_last();
+  if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+    email_log('Fatal error: ' . json_encode($error));
+    if (!headers_sent()) {
+      header('Content-Type: application/json; charset=utf-8');
+    }
+    http_response_code(500);
+    echo json_encode([
+      'success' => false,
+      'error' => 'Server fatal error: ' . $error['message'],
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+  }
+});
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   respond(['success' => false, 'error' => 'Method not allowed'], 405);

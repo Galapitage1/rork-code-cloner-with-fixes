@@ -56,6 +56,7 @@ export default function CampaignsScreen() {
   const [senderEmail, setSenderEmail] = useState('');
   const [senderName, setSenderName] = useState('');
   const [emailNoReplyMode, setEmailNoReplyMode] = useState(false);
+  const [emailBatchDelayMs, setEmailBatchDelayMs] = useState<string>('1500');
   
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
   const [showCustomerList, setShowCustomerList] = useState(false);
@@ -162,6 +163,7 @@ export default function CampaignsScreen() {
         setWhatsappCampaignTemplateHeaderMediaType((parsed.whatsappCampaignTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
         setWhatsappCampaignTemplateButtonParamsText(parsed.whatsappCampaignTemplateButtonParamsText || '');
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
+        setEmailBatchDelayMs(String(parsed.emailBatchDelayMs ?? '1500'));
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
       }
@@ -206,6 +208,7 @@ export default function CampaignsScreen() {
         whatsappCampaignTemplateHeaderMediaType,
         whatsappCampaignTemplateButtonParamsText,
         emailNoReplyMode,
+        emailBatchDelayMs: Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0)),
         updatedAt: Date.now(),
       };
       
@@ -269,6 +272,8 @@ export default function CampaignsScreen() {
     const finalDigits = normalized.replace(/\D/g, '');
     return finalDigits.length >= 8 ? finalDigits : '';
   };
+
+  const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const getEffectiveWhatsAppCampaignTemplateConfig = () => {
     if (whatsappLinkCampaignTemplateToTest) {
@@ -747,7 +752,8 @@ export default function CampaignsScreen() {
             throw new Error('No valid email addresses found in selected customers');
           }
 
-          const EMAIL_CHUNK_SIZE = 100;
+          const EMAIL_CHUNK_SIZE = 25;
+          const effectiveEmailBatchDelayMs = Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0));
           const recipientChunks = chunkArray(validEmailRecipients, EMAIL_CHUNK_SIZE);
           const aggregatedResults = {
             success: 0,
@@ -811,7 +817,14 @@ export default function CampaignsScreen() {
               chunkFailures.push(chunkMsg);
               aggregatedResults.failed += chunk.length;
               aggregatedResults.errors.push(chunkMsg);
+              if (i < recipientChunks.length - 1 && effectiveEmailBatchDelayMs > 0) {
+                await sleepMs(effectiveEmailBatchDelayMs);
+              }
               continue;
+            }
+
+            if (i < recipientChunks.length - 1 && effectiveEmailBatchDelayMs > 0) {
+              await sleepMs(effectiveEmailBatchDelayMs);
             }
           }
 
@@ -825,7 +838,7 @@ export default function CampaignsScreen() {
             }
           }
 
-          const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Emails: ${invalidEmailRecipients.length}\nBatches: ${recipientChunks.length}${chunkFailures.length ? `\nBatch Errors: ${chunkFailures.length}` : ''}${
+          const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Emails: ${invalidEmailRecipients.length}\nBatches: ${recipientChunks.length}\nBatch Size: ${EMAIL_CHUNK_SIZE}\nBatch Delay: ${effectiveEmailBatchDelayMs} ms${chunkFailures.length ? `\nBatch Errors: ${chunkFailures.length}` : ''}${
             aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + aggregatedResults.errors.slice(0, 8).join('\n') : ''
           }`;
 
@@ -1757,6 +1770,18 @@ export default function CampaignsScreen() {
                   Reply-To will be: {derivedNoReplyEmail || 'Enter a valid Sender Email first'}
                 </Text>
               )}
+
+              <Text style={styles.label}>Email Batch Delay (ms)</Text>
+              <TextInput
+                style={styles.input}
+                value={emailBatchDelayMs}
+                onChangeText={setEmailBatchDelayMs}
+                placeholder="1500"
+                keyboardType="number-pad"
+              />
+              <Text style={styles.helpText}>
+                Delay between email batches to reduce SMTP/server overload. Lower is faster; higher is safer for shared hosting.
+              </Text>
 
               <Text style={styles.label}>Email Format</Text>
               <View style={styles.formatSelector}>
