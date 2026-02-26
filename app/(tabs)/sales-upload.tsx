@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry, getPendingReconciliationUploadCounts, retryPendingReconciliationUploadsNow } from '@/utils/reconciliationSync';
 import { CalendarModal } from '@/components/CalendarModal';
 
 
@@ -82,6 +82,39 @@ export default function SalesUploadScreen() {
   const [isClearing, setIsClearing] = useState<boolean>(false);
   const [showDeleteAllReconcileConfirm, setShowDeleteAllReconcileConfirm] = useState<boolean>(false);
   const [isDeletingAllReconcile, setIsDeletingAllReconcile] = useState<boolean>(false);
+  const [pendingUploadCounts, setPendingUploadCounts] = useState<{ sales: number; kitchen: number; total: number }>({ sales: 0, kitchen: 0, total: 0 });
+  const [loadingPendingUploads, setLoadingPendingUploads] = useState<boolean>(false);
+  const [retryingPendingUploads, setRetryingPendingUploads] = useState<boolean>(false);
+
+  const refreshPendingUploadCounts = useCallback(async () => {
+    try {
+      setLoadingPendingUploads(true);
+      const counts = await getPendingReconciliationUploadCounts();
+      setPendingUploadCounts(counts);
+    } catch (error) {
+      console.error('Failed to load pending reconciliation upload counts:', error);
+    } finally {
+      setLoadingPendingUploads(false);
+    }
+  }, []);
+
+  const handleRetryPendingUploads = useCallback(async () => {
+    try {
+      setRetryingPendingUploads(true);
+      const result = await retryPendingReconciliationUploadsNow();
+      setPendingUploadCounts(result.after);
+      Alert.alert(
+        'Reconciliation Retry Complete',
+        `Before: ${result.before.total} pending (Sales ${result.before.sales}, Kitchen ${result.before.kitchen})\nAfter: ${result.after.total} pending (Sales ${result.after.sales}, Kitchen ${result.after.kitchen})`
+      );
+    } catch (error) {
+      console.error('Failed to retry pending reconciliation uploads:', error);
+      Alert.alert('Retry Failed', error instanceof Error ? error.message : 'Failed to retry pending uploads');
+    } finally {
+      setRetryingPendingUploads(false);
+      refreshPendingUploadCounts();
+    }
+  }, [refreshPendingUploadCounts]);
 
   const clearOutletOptions = useMemo(() => {
     const outletSet = new Set<string>();
@@ -1296,6 +1329,7 @@ export default function SalesUploadScreen() {
             // This must happen BEFORE StockContext sync to ensure fresh data is on server
             console.log('Step 1: Syncing NEW reconciliation system (sales reports)...');
             await syncAllReconciliationData();
+            await refreshPendingUploadCounts();
             console.log('✓ Sales reports synced to server');
             
             // Small delay to ensure server processes the sales report
@@ -1309,6 +1343,7 @@ export default function SalesUploadScreen() {
           } catch (syncError) {
             console.error('❌ Failed to sync reconciliation to server:', syncError);
             console.error('Reconciliation is saved locally but may not be available on other devices');
+            await refreshPendingUploadCounts();
             Alert.alert('Sync Warning', 'Reconciliation saved locally but could not sync to server. Other devices may not see this data.');
           }
           console.log('=== RECONCILIATION SAVE COMPLETE ===\n');
@@ -1331,9 +1366,10 @@ export default function SalesUploadScreen() {
       console.error('SalesUpload: pick error', e);
       setProcessingSteps(prev => [...prev, { text: `Fatal Error: ${e instanceof Error ? e.message : 'Failed to load file'}`, status: 'error' }]);
     } finally {
+      await refreshPendingUploadCounts();
       setIsPicking(false);
     }
-  }, [stockChecks, products, recipes, manualMode, requestBase64, productConversions, processSalesInventoryDeductions, processRawMaterialDeductions, saveReconciliationToHistory, addReconcileHistory, syncAll, updateStep]);
+  }, [stockChecks, products, recipes, manualMode, requestBase64, productConversions, processSalesInventoryDeductions, processRawMaterialDeductions, saveReconciliationToHistory, addReconcileHistory, syncAll, updateStep, refreshPendingUploadCounts]);
 
   useEffect(() => {
     const loadHistory = async () => {
@@ -1348,7 +1384,8 @@ export default function SalesUploadScreen() {
       }
     };
     loadHistory();
-  }, []);
+    refreshPendingUploadCounts();
+  }, [refreshPendingUploadCounts]);
 
   const handleDeleteHistory = useCallback(async (index: number) => {
     try {
@@ -1640,11 +1677,13 @@ export default function SalesUploadScreen() {
       console.log('Pulling latest data from server (kitchen reports + inventory)...');
       try {
         await syncAllReconciliationData();
+        await refreshPendingUploadCounts();
         console.log('✓ Reconciliation sync complete');
         await syncAll(true);
         console.log('✓ StockContext sync complete - inventory and kitchen reports are fresh');
       } catch (syncError) {
         console.error('Sync failed, proceeding with cached data:', syncError);
+        await refreshPendingUploadCounts();
       }
       updateStep(2, 'complete');
       
@@ -2012,6 +2051,7 @@ export default function SalesUploadScreen() {
                 try {
                   // First sync the kitchen stock reports
                   await syncAllReconciliationData();
+                  await refreshPendingUploadCounts();
                   console.log('✓ Kitchen stock reports synced to server');
                   
                   // Then sync inventory stocks with updated Prods.Req values
@@ -2021,6 +2061,7 @@ export default function SalesUploadScreen() {
                   console.log('✓ Live Inventory will display updated Prods.Req values');
                 } catch (syncError) {
                   console.error('❌ Failed to sync Prods.Req updates to server:', syncError);
+                  await refreshPendingUploadCounts();
                   Alert.alert('Sync Warning', 'Prods.Req updated locally but could not sync to server. Other devices may not see these updates.');
                 }
                 console.log('=== SYNC COMPLETE ===\n');
@@ -2070,6 +2111,7 @@ export default function SalesUploadScreen() {
       console.error('KitchenStock: pick error', e);
       setProcessingSteps(prev => [...prev, { text: `Fatal Error: ${e instanceof Error ? e.message : 'Failed to load file'}`, status: 'error' }]);
     } finally {
+      await refreshPendingUploadCounts();
       setIsPickingKitchen(false);
       
       // CRITICAL: Re-enable background syncs after kitchen reconciliation is complete
@@ -2080,7 +2122,7 @@ export default function SalesUploadScreen() {
         console.log('✓ Background syncs RESUMED');
       }
     }
-  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep, productConversions, inventoryStocks, updateInventoryStock, getProductPair, syncAll, stockContext]);
+  }, [stockChecks, products, kitchenManualMode, manualStockBase64, updateStep, productConversions, inventoryStocks, updateInventoryStock, getProductPair, syncAll, stockContext, refreshPendingUploadCounts]);
 
   const exportKitchenReport = useCallback(async () => {
     if (!kitchenResult) return;
@@ -2298,6 +2340,53 @@ export default function SalesUploadScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      <View style={[styles.card, styles.pendingSyncCard]}>
+        <View style={styles.cardHeader}>
+          <AlertTriangle color={pendingUploadCounts.total > 0 ? '#FF9F0A' : '#22C55E'} size={20} />
+          <Text style={styles.cardTitle}>Reconciliation Upload Queue</Text>
+        </View>
+        <Text style={styles.cardDesc}>
+          Pending uploads: {loadingPendingUploads ? '...' : pendingUploadCounts.total} (Sales: {pendingUploadCounts.sales}, Kitchen: {pendingUploadCounts.kitchen})
+        </Text>
+        {pendingUploadCounts.total > 0 ? (
+          <Text style={styles.pendingSyncHelp}>
+            If the network was slow/offline during reconciliation, these reports are queued and will retry later. Use Retry now when connection is stable.
+          </Text>
+        ) : (
+          <Text style={styles.pendingSyncHelp}>No queued reconciliation uploads.</Text>
+        )}
+        <View style={styles.pendingSyncActions}>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={refreshPendingUploadCounts}
+            disabled={loadingPendingUploads || retryingPendingUploads}
+          >
+            {loadingPendingUploads ? (
+              <ActivityIndicator color={Colors.light.tint} />
+            ) : (
+              <View style={styles.btnInner}>
+                <ChevronDown color={Colors.light.tint} size={18} />
+                <Text style={styles.secondaryBtnText}>Refresh Queue</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.primaryBtn, pendingUploadCounts.total === 0 && styles.primaryBtnDisabled]}
+            onPress={handleRetryPendingUploads}
+            disabled={retryingPendingUploads || pendingUploadCounts.total === 0}
+          >
+            {retryingPendingUploads ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <View style={styles.btnInner}>
+                <UploadCloud color="#fff" size={18} />
+                <Text style={styles.primaryBtnText}>Retry Now</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
 
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -2946,6 +3035,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.light.border,
     marginBottom: 12,
   },
+  pendingSyncCard: {
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFDF5',
+  },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   toggleLabel: { fontSize: 12, color: Colors.light.text, fontWeight: '600' },
   manualRow: { marginBottom: 8 },
@@ -2970,6 +3063,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
+  },
+  primaryBtnDisabled: {
+    opacity: 0.6,
   },
   btnInner: {
     flexDirection: 'row',
@@ -3095,6 +3191,17 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     color: Colors.light.tint,
     fontWeight: '700',
+  },
+  pendingSyncHelp: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  pendingSyncActions: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'stretch',
   },
   badgeSmall: {
     paddingHorizontal: 8,

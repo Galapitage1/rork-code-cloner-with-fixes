@@ -291,6 +291,35 @@ export async function queueSalesReportForRetry(report: SalesReport): Promise<voi
   await queuePendingReport<SalesReport>(STORAGE_KEYS.PENDING_SALES_REPORTS, report);
 }
 
+export async function getPendingReconciliationUploadCounts(): Promise<{
+  sales: number;
+  kitchen: number;
+  total: number;
+}> {
+  try {
+    const [pendingSales, pendingKitchen] = await Promise.all([
+      readReportsFromStorage<SalesReport>(STORAGE_KEYS.PENDING_SALES_REPORTS),
+      readReportsFromStorage<KitchenStockReport>(STORAGE_KEYS.PENDING_KITCHEN_STOCK_REPORTS),
+    ]);
+
+    const sales = dedupeLatestReports(pendingSales).length;
+    const kitchen = dedupeLatestReports(pendingKitchen).length;
+    return { sales, kitchen, total: sales + kitchen };
+  } catch {
+    return { sales: 0, kitchen: 0, total: 0 };
+  }
+}
+
+export async function retryPendingReconciliationUploadsNow(): Promise<{
+  before: { sales: number; kitchen: number; total: number };
+  after: { sales: number; kitchen: number; total: number };
+}> {
+  const before = await getPendingReconciliationUploadCounts();
+  await syncAllReconciliationData();
+  const after = await getPendingReconciliationUploadCounts();
+  return { before, after };
+}
+
 export async function getKitchenStockReportsFromServer(): Promise<KitchenStockReport[]> {
   try {
     const url = `${BASE_URL}/Tracker/api/get.php?endpoint=${SYNC_ENDPOINT.KITCHEN_STOCK}`;
