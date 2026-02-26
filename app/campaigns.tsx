@@ -56,6 +56,7 @@ export default function CampaignsScreen() {
   const [senderEmail, setSenderEmail] = useState('');
   const [senderName, setSenderName] = useState('');
   const [emailNoReplyMode, setEmailNoReplyMode] = useState(false);
+  const [emailBatchSize, setEmailBatchSize] = useState<string>('25');
   const [emailBatchDelayMs, setEmailBatchDelayMs] = useState<string>('1500');
   
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
@@ -163,6 +164,7 @@ export default function CampaignsScreen() {
         setWhatsappCampaignTemplateHeaderMediaType((parsed.whatsappCampaignTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
         setWhatsappCampaignTemplateButtonParamsText(parsed.whatsappCampaignTemplateButtonParamsText || '');
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
+        setEmailBatchSize(String(parsed.emailBatchSize ?? '25'));
         setEmailBatchDelayMs(String(parsed.emailBatchDelayMs ?? '1500'));
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
@@ -208,6 +210,7 @@ export default function CampaignsScreen() {
         whatsappCampaignTemplateHeaderMediaType,
         whatsappCampaignTemplateButtonParamsText,
         emailNoReplyMode,
+        emailBatchSize: Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25)),
         emailBatchDelayMs: Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0)),
         updatedAt: Date.now(),
       };
@@ -752,7 +755,7 @@ export default function CampaignsScreen() {
             throw new Error('No valid email addresses found in selected customers');
           }
 
-          const EMAIL_CHUNK_SIZE = 25;
+          const EMAIL_CHUNK_SIZE = Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25));
           const effectiveEmailBatchDelayMs = Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0));
           const recipientChunks = chunkArray(validEmailRecipients, EMAIL_CHUNK_SIZE);
           const aggregatedResults = {
@@ -1770,6 +1773,18 @@ export default function CampaignsScreen() {
                   Reply-To will be: {derivedNoReplyEmail || 'Enter a valid Sender Email first'}
                 </Text>
               )}
+
+              <Text style={styles.label}>Email Batch Size</Text>
+              <TextInput
+                style={styles.input}
+                value={emailBatchSize}
+                onChangeText={setEmailBatchSize}
+                placeholder="25"
+                keyboardType="number-pad"
+              />
+              <Text style={styles.helpText}>
+                Number of emails sent per batch request (1-100). Smaller is slower but more reliable on shared hosting.
+              </Text>
 
               <Text style={styles.label}>Email Batch Delay (ms)</Text>
               <TextInput
