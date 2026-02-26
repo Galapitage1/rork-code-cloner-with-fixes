@@ -36,6 +36,18 @@ interface Attachment {
 }
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
+const FAILED_SMS_BATCH_QUEUE_KEY = '@sms_failed_batch_queue';
+
+type FailedSMSBatchJob = {
+  id: string;
+  provider: 'dialog' | 'legacy';
+  message: string;
+  recipients: Array<{ name?: string; phone: string }>;
+  createdAt: number;
+  updatedAt: number;
+  attempts: number;
+  lastError: string;
+};
 
 export default function CampaignsScreen() {
   const { customers } = useCustomers();
@@ -66,6 +78,8 @@ export default function CampaignsScreen() {
   
   const [isSending, setIsSending] = useState(false);
   const [testingSMS, setTestingSMS] = useState(false);
+  const [loadingFailedSmsBatches, setLoadingFailedSmsBatches] = useState(false);
+  const [retryingFailedSmsBatches, setRetryingFailedSmsBatches] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmState, setConfirmState] = useState<{
@@ -74,6 +88,7 @@ export default function CampaignsScreen() {
     onConfirm: () => Promise<void> | void;
   } | null>(null);
   const [showEmailSettings, setShowEmailSettings] = useState(false);
+  const [failedSmsBatches, setFailedSmsBatches] = useState<FailedSMSBatchJob[]>([]);
   
   const [smtpHost, setSmtpHost] = useState<string>('');
   const [smtpPort, setSmtpPort] = useState<string>('587');
@@ -278,6 +293,203 @@ export default function CampaignsScreen() {
 
   const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  const buildFailedSMSBatchFingerprint = (job: Pick<FailedSMSBatchJob, 'provider' | 'message' | 'recipients'>): string => {
+    const phones = [...job.recipients.map((r) => (r.phone || '').trim())].sort().join('|');
+    return `${job.provider}::${job.message.trim()}::${phones}`;
+  };
+
+  const readFailedSMSBatchQueue = React.useCallback(async (): Promise<FailedSMSBatchJob[]> => {
+    try {
+      const raw = await AsyncStorage.getItem(FAILED_SMS_BATCH_QUEUE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item) => item && Array.isArray(item.recipients) && typeof item.message === 'string')
+        .map((item) => ({
+          id: String(item.id || `sms-batch-${Date.now()}`),
+          provider: item.provider === 'legacy' ? 'legacy' : 'dialog',
+          message: String(item.message || ''),
+          recipients: (item.recipients || [])
+            .filter((r: any) => r && typeof r.phone === 'string' && r.phone.trim())
+            .map((r: any) => ({ name: typeof r.name === 'string' ? r.name : undefined, phone: String(r.phone) })),
+          createdAt: Number(item.createdAt || Date.now()),
+          updatedAt: Number(item.updatedAt || Date.now()),
+          attempts: Number(item.attempts || 0),
+          lastError: String(item.lastError || ''),
+        })) as FailedSMSBatchJob[];
+    } catch (error) {
+      console.error('[SMS FAILED BATCHES] Failed to read queue:', error);
+      return [];
+    }
+  }, []);
+
+  const writeFailedSMSBatchQueue = React.useCallback(async (jobs: FailedSMSBatchJob[]) => {
+    const sanitized = jobs
+      .filter((job) => job.recipients.length > 0 && job.message.trim())
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    await AsyncStorage.setItem(FAILED_SMS_BATCH_QUEUE_KEY, JSON.stringify(sanitized));
+    setFailedSmsBatches(sanitized);
+  }, []);
+
+  const refreshFailedSMSBatchQueue = React.useCallback(async () => {
+    try {
+      setLoadingFailedSmsBatches(true);
+      const jobs = await readFailedSMSBatchQueue();
+      setFailedSmsBatches(jobs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+    } catch (error) {
+      console.error('[SMS FAILED BATCHES] Refresh error:', error);
+    } finally {
+      setLoadingFailedSmsBatches(false);
+    }
+  }, [readFailedSMSBatchQueue]);
+
+  const queueFailedSMSBatch = React.useCallback(async (
+    provider: 'dialog' | 'legacy',
+    batchMessage: string,
+    recipients: Array<{ name?: string; phone: string }>,
+    errorMessage: string,
+  ) => {
+    const normalizedRecipients = recipients
+      .map((r) => ({ name: r.name, phone: normalizePhoneForCampaign(r.phone) || (r.phone || '').trim() }))
+      .filter((r) => !!r.phone);
+    if (normalizedRecipients.length === 0) return;
+
+    const now = Date.now();
+    const newJobBase: Pick<FailedSMSBatchJob, 'provider' | 'message' | 'recipients'> = {
+      provider,
+      message: batchMessage,
+      recipients: normalizedRecipients,
+    };
+    const newFingerprint = buildFailedSMSBatchFingerprint(newJobBase);
+    const existing = await readFailedSMSBatchQueue();
+    const next: FailedSMSBatchJob[] = [];
+    let replaced = false;
+
+    for (const job of existing) {
+      const same = buildFailedSMSBatchFingerprint(job) === newFingerprint;
+      if (same) {
+        replaced = true;
+        next.push({
+          ...job,
+          recipients: normalizedRecipients,
+          updatedAt: now,
+          attempts: (job.attempts || 0) + 1,
+          lastError: errorMessage,
+        });
+      } else {
+        next.push(job);
+      }
+    }
+
+    if (!replaced) {
+      next.push({
+        id: `sms-failed-batch-${now}-${Math.random().toString(36).slice(2, 8)}`,
+        provider,
+        message: batchMessage,
+        recipients: normalizedRecipients,
+        createdAt: now,
+        updatedAt: now,
+        attempts: 1,
+        lastError: errorMessage,
+      });
+    }
+
+    await writeFailedSMSBatchQueue(next);
+  }, [normalizePhoneForCampaign, readFailedSMSBatchQueue, writeFailedSMSBatchQueue]);
+
+  const retryFailedSMSBatchesNow = React.useCallback(async () => {
+    const hasDialogSMSConfig = !!(
+      dialogSMSSettings?.esms_username &&
+      dialogSMSSettings?.esms_password_encrypted
+    );
+    const hasLegacySMSConfig = !!(smsApiUrl && smsApiKey);
+
+    try {
+      setRetryingFailedSmsBatches(true);
+      const queue = await readFailedSMSBatchQueue();
+      if (queue.length === 0) {
+        Alert.alert('No Failed SMS Batches', 'There are no queued SMS failed batches to retry.');
+        return;
+      }
+
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const legacyEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-sms.php` : `${apiUrl}/api/send-sms`;
+
+      let retriedOk = 0;
+      let retriedFailed = 0;
+      const notes: string[] = [];
+      const remaining: FailedSMSBatchJob[] = [];
+
+      for (const job of queue) {
+        try {
+          if (job.provider === 'dialog') {
+            if (!hasDialogSMSConfig) {
+              throw new Error('Dialog eSMS settings not configured');
+            }
+            const result = await sendDialogSMSCampaign(job.message, job.recipients.map((r) => r.phone));
+            if (!result.success) {
+              throw new Error(result.error || 'Dialog eSMS retry failed');
+            }
+          } else {
+            if (!hasLegacySMSConfig) {
+              throw new Error('Legacy SMS settings not configured');
+            }
+            const response = await fetch(legacyEndpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: job.message,
+                recipients: job.recipients.map((r) => ({ name: r.name, phone: r.phone })),
+                transaction_id: Date.now(),
+              }),
+            });
+            const result = await parseJsonResponseSafe(response);
+            if (!response.ok || !result.success) {
+              throw new Error(result.error || 'Legacy SMS retry failed');
+            }
+          }
+
+          retriedOk += 1;
+        } catch (error) {
+          retriedFailed += 1;
+          const msg = (error as Error).message;
+          notes.push(`Batch ${job.id.slice(-6)}: ${msg}`);
+          remaining.push({
+            ...job,
+            updatedAt: Date.now(),
+            attempts: (job.attempts || 0) + 1,
+            lastError: msg,
+          });
+        }
+      }
+
+      await writeFailedSMSBatchQueue(remaining);
+
+      Alert.alert(
+        'SMS Failed Batch Retry Complete',
+        `Retried Successfully: ${retriedOk}\nStill Failed: ${retriedFailed}\nRemaining Queued: ${remaining.length}${
+          notes.length ? '\n\nNotes:\n' + notes.slice(0, 5).join('\n') : ''
+        }`
+      );
+    } catch (error) {
+      console.error('[SMS FAILED BATCHES] Retry error:', error);
+      Alert.alert('Retry Failed', (error as Error).message);
+    } finally {
+      setRetryingFailedSmsBatches(false);
+      refreshFailedSMSBatchQueue();
+    }
+  }, [
+    dialogSMSSettings,
+    smsApiUrl,
+    smsApiKey,
+    readFailedSMSBatchQueue,
+    sendDialogSMSCampaign,
+    parseJsonResponseSafe,
+    writeFailedSMSBatchQueue,
+    refreshFailedSMSBatchQueue,
+  ]);
+
   const getEffectiveWhatsAppCampaignTemplateConfig = () => {
     if (whatsappLinkCampaignTemplateToTest) {
       return {
@@ -391,6 +603,16 @@ export default function CampaignsScreen() {
       });
     }
   }, [currentUser]);
+
+  React.useEffect(() => {
+    refreshFailedSMSBatchQueue();
+  }, [refreshFailedSMSBatchQueue]);
+
+  React.useEffect(() => {
+    if (campaignType === 'sms') {
+      refreshFailedSMSBatchQueue();
+    }
+  }, [campaignType, refreshFailedSMSBatchQueue]);
 
   React.useEffect(() => {
     console.log('[CAMPAIGNS] WhatsApp credentials updated:', {
@@ -928,6 +1150,7 @@ export default function CampaignsScreen() {
             let totalCost = 0;
             const providerNotes: string[] = [];
             const chunkErrors: string[] = [];
+            let queuedFailedBatches = 0;
 
             for (let i = 0; i < mobileChunks.length; i++) {
               const chunk = mobileChunks[i];
@@ -953,6 +1176,13 @@ export default function CampaignsScreen() {
                 const msg = `Chunk ${i + 1}/${mobileChunks.length}: ${(chunkError as Error).message}`;
                 console.error('[SMS CAMPAIGN] Dialog chunk error:', msg);
                 chunkErrors.push(msg);
+                await queueFailedSMSBatch(
+                  'dialog',
+                  message,
+                  chunk.map((phone) => ({ phone })),
+                  msg
+                );
+                queuedFailedBatches += 1;
                 continue;
               }
             }
@@ -964,12 +1194,16 @@ export default function CampaignsScreen() {
             if (chunkErrors.length > 0) {
               resultMessage += `\nBatch Errors: ${chunkErrors.length}`;
             }
+            if (queuedFailedBatches > 0) {
+              resultMessage += `\nQueued Failed Batches: ${queuedFailedBatches}`;
+            }
             const allSmsNotes = [...chunkErrors, ...providerNotes];
             if (allSmsNotes.length > 0) {
               resultMessage += `\n\nDetails:\n${allSmsNotes.slice(0, 6).join('\n')}`;
             }
 
             Alert.alert('SMS Campaign Submitted', resultMessage, [{ text: 'OK' }]);
+            await refreshFailedSMSBatchQueue();
 
             if (totalSubmitted > 0) {
               setMessage('');
@@ -989,6 +1223,7 @@ export default function CampaignsScreen() {
               errors: [] as string[],
             };
             const chunkErrors: string[] = [];
+            let queuedFailedBatches = 0;
 
             for (let i = 0; i < recipientChunks.length; i++) {
               const chunk = recipientChunks[i];
@@ -1025,6 +1260,8 @@ export default function CampaignsScreen() {
                 chunkErrors.push(msg);
                 aggregatedResults.failed += chunk.length;
                 aggregatedResults.errors.push(msg);
+                await queueFailedSMSBatch('legacy', message, chunk, msg);
+                queuedFailedBatches += 1;
                 continue;
               }
             }
@@ -1039,7 +1276,7 @@ export default function CampaignsScreen() {
               }
             }
 
-            const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Phones: ${invalidSmsRecipients.length}\nBatches: ${recipientChunks.length}${chunkErrors.length ? `\nBatch Errors: ${chunkErrors.length}` : ''}${
+            const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Phones: ${invalidSmsRecipients.length}\nBatches: ${recipientChunks.length}${chunkErrors.length ? `\nBatch Errors: ${chunkErrors.length}` : ''}${queuedFailedBatches ? `\nQueued Failed Batches: ${queuedFailedBatches}` : ''}${
               aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + aggregatedResults.errors.slice(0, 8).join('\n') : ''
             }`;
 
@@ -1048,6 +1285,7 @@ export default function CampaignsScreen() {
               resultMessage,
               [{ text: 'OK' }]
             );
+            await refreshFailedSMSBatchQueue();
 
             if (aggregatedResults.success > 0) {
               setMessage('');
@@ -1992,6 +2230,49 @@ export default function CampaignsScreen() {
                 textAlignVertical="top"
               />
               <Text style={styles.charCount}>{message.length}/160 characters</Text>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Failed SMS Batches</Text>
+
+              <View style={styles.infoBox}>
+                <Text style={styles.infoText}>
+                  Queued failed SMS batches: {loadingFailedSmsBatches ? '...' : failedSmsBatches.length}. Batch-level failures (network/provider/server) can be retried later without resending successful batches.
+                </Text>
+              </View>
+
+              {failedSmsBatches.length > 0 && (
+                <Text style={styles.helpText}>
+                  Oldest queued batch: {new Date(Math.min(...failedSmsBatches.map((b) => b.createdAt))).toLocaleString()}
+                  {'\n'}Latest error: {failedSmsBatches[0]?.lastError || '-'}
+                </Text>
+              )}
+
+              <View style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.testButton]}
+                  onPress={refreshFailedSMSBatchQueue}
+                  disabled={loadingFailedSmsBatches || retryingFailedSmsBatches}
+                >
+                  {loadingFailedSmsBatches ? (
+                    <ActivityIndicator size="small" color={Colors.light.tint} />
+                  ) : (
+                    <Text style={styles.testButtonText}>Refresh Queue</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.saveSettingsButton, failedSmsBatches.length === 0 && { opacity: 0.6 }]}
+                  onPress={retryFailedSMSBatchesNow}
+                  disabled={retryingFailedSmsBatches || failedSmsBatches.length === 0}
+                >
+                  {retryingFailedSmsBatches ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.saveSettingsButtonText}>Retry Failed Batches</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </>
         )}
