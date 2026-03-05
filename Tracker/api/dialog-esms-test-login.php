@@ -39,12 +39,22 @@ if ($username === '' || $password === '') {
 
 try {
     $login = dialog_esms_login($username, $password);
+    $remainingCount = null;
+    if (isset($login['remainingCount']) && $login['remainingCount'] !== '') {
+        $remainingCount = is_numeric($login['remainingCount']) ? floatval($login['remainingCount']) : $login['remainingCount'];
+    } elseif (isset($login['walletBalance']) && $login['walletBalance'] !== '') {
+        $remainingCount = is_numeric($login['walletBalance']) ? floatval($login['walletBalance']) : $login['walletBalance'];
+    }
+
     respond([
         'success' => true,
         'message' => 'Login successful',
+        'comment' => isset($login['comment']) ? $login['comment'] : null,
+        'remainingCount' => $remainingCount,
+        'walletBalance' => isset($login['walletBalance']) ? $login['walletBalance'] : null,
+        'expiration' => isset($login['expiration']) ? $login['expiration'] : null,
         'token_length' => isset($login['token']) ? strlen($login['token']) : 0,
     ]);
 } catch (Exception $e) {
     respond(['success' => false, 'error' => $e->getMessage()], 500);
 }
-

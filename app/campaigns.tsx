@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Modal,
+  Linking,
 } from 'react-native';
 
 
@@ -18,6 +20,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSMSCampaign } from '@/contexts/SMSCampaignContext';
+import { Picker } from '@react-native-picker/picker';
 import Colors from '@/constants/colors';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -37,6 +40,9 @@ interface Attachment {
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 const FAILED_SMS_BATCH_QUEUE_KEY = '@sms_failed_batch_queue';
+const EMAIL_CAMPAIGN_REMAINING_KEY = '@email_campaign_remaining';
+const EMAIL_SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DIALOG_ESMS_PORTAL_URL = 'https://e-sms.dialog.lk/';
 
 type FailedSMSBatchJob = {
   id: string;
@@ -47,6 +53,79 @@ type FailedSMSBatchJob = {
   updatedAt: number;
   attempts: number;
   lastError: string;
+};
+
+type EmailCampaignRecipient = {
+  id: string;
+  name: string;
+  email: string;
+  company?: string;
+  phone?: string;
+};
+
+type NewsletterTextBlock = {
+  id: string;
+  type: 'text';
+  content: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+};
+
+type NewsletterImageBlock = {
+  id: string;
+  type: 'image';
+  imageUrl: string;
+  caption: string;
+  widthPercent: number;
+  heightPx: number;
+};
+
+type NewsletterBlock = NewsletterTextBlock | NewsletterImageBlock;
+
+type PendingEmailCampaign = {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  senderName: string;
+  senderEmail: string;
+  replyToEmail: string;
+  replyToName: string;
+  subject: string;
+  message: string;
+  htmlContent: string;
+  format: EmailFormat;
+  attachments: Attachment[];
+  maxPerWindow: number;
+  waitUntil: number | null;
+  lastSuccessAt: number | null;
+  recipients: EmailCampaignRecipient[];
+};
+
+type ServerQueuedEmailRecipient = {
+  id: string;
+  name: string;
+  email: string;
+  company?: string;
+  phone?: string;
+};
+
+type ServerQueuedEmailJob = {
+  id: string;
+  campaignKey: string;
+  waitUntil: number;
+  maxPerWindow: number;
+  batchDelayMs: number;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt: number;
+  lastRunSuccess: number;
+  lastRunFailed: number;
+  lastRunAttempted: number;
+  remainingRecipients: number;
+  due: boolean;
+  recipients: ServerQueuedEmailRecipient[];
+  recipientsPreviewTruncated: boolean;
 };
 
 export default function CampaignsScreen() {
@@ -70,6 +149,8 @@ export default function CampaignsScreen() {
   const [emailNoReplyMode, setEmailNoReplyMode] = useState(false);
   const [emailBatchSize, setEmailBatchSize] = useState<string>('25');
   const [emailBatchDelayMs, setEmailBatchDelayMs] = useState<string>('1500');
+  const [emailDailyLimitEnabled, setEmailDailyLimitEnabled] = useState(false);
+  const [emailDailyLimitMax, setEmailDailyLimitMax] = useState<string>('500');
   
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
   const [showCustomerList, setShowCustomerList] = useState(false);
@@ -78,6 +159,10 @@ export default function CampaignsScreen() {
   
   const [isSending, setIsSending] = useState(false);
   const [testingSMS, setTestingSMS] = useState(false);
+  const [loadingDialogCredit, setLoadingDialogCredit] = useState(false);
+  const [dialogCreditRemaining, setDialogCreditRemaining] = useState<number | string | null>(null);
+  const [dialogCreditError, setDialogCreditError] = useState<string>('');
+  const [dialogCreditUpdatedAt, setDialogCreditUpdatedAt] = useState<number | null>(null);
   const [loadingFailedSmsBatches, setLoadingFailedSmsBatches] = useState(false);
   const [retryingFailedSmsBatches, setRetryingFailedSmsBatches] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
@@ -89,6 +174,24 @@ export default function CampaignsScreen() {
   } | null>(null);
   const [showEmailSettings, setShowEmailSettings] = useState(false);
   const [failedSmsBatches, setFailedSmsBatches] = useState<FailedSMSBatchJob[]>([]);
+  const [pendingEmailCampaign, setPendingEmailCampaign] = useState<PendingEmailCampaign | null>(null);
+  const [emailWindowNow, setEmailWindowNow] = useState<number>(Date.now());
+  const [loadingServerEmailQueue, setLoadingServerEmailQueue] = useState(false);
+  const [serverEmailQueueJobs, setServerEmailQueueJobs] = useState<ServerQueuedEmailJob[]>([]);
+  const [serverEmailQueueLength, setServerEmailQueueLength] = useState(0);
+  const [serverEmailQueueDueJobs, setServerEmailQueueDueJobs] = useState(0);
+  const [showAdvancedSettingsModal, setShowAdvancedSettingsModal] = useState(false);
+  const [useNewsletterBuilder, setUseNewsletterBuilder] = useState(false);
+  const [newsletterBlocks, setNewsletterBlocks] = useState<NewsletterBlock[]>([
+    {
+      id: 'newsletter-text-initial',
+      type: 'text',
+      content: 'Write your headline or story here',
+      fontFamily: 'Arial, sans-serif',
+      fontSize: 20,
+      color: '#111111',
+    },
+  ]);
   
   const [smtpHost, setSmtpHost] = useState<string>('');
   const [smtpPort, setSmtpPort] = useState<string>('587');
@@ -107,7 +210,6 @@ export default function CampaignsScreen() {
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
   const [sendingWhatsAppTest, setSendingWhatsAppTest] = useState(false);
-  const [showSMSSettings, setShowSMSSettings] = useState(false);
   const [showWhatsAppInbox, setShowWhatsAppInbox] = useState(false);
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -181,9 +283,14 @@ export default function CampaignsScreen() {
         setEmailNoReplyMode(!!parsed.emailNoReplyMode);
         setEmailBatchSize(String(parsed.emailBatchSize ?? '25'));
         setEmailBatchDelayMs(String(parsed.emailBatchDelayMs ?? '1500'));
+        setEmailDailyLimitEnabled(!!parsed.emailDailyLimitEnabled);
+        setEmailDailyLimitMax(String(parsed.emailDailyLimitMax ?? '500'));
+        setSenderEmail(parsed.senderEmail || '');
+        setSenderName(parsed.senderName || '');
       } else {
         console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
       }
+      await loadPendingEmailCampaign();
     } catch (error) {
       console.error('[CAMPAIGNS] Failed to load campaign settings:', error);
     }
@@ -227,6 +334,10 @@ export default function CampaignsScreen() {
         emailNoReplyMode,
         emailBatchSize: Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25)),
         emailBatchDelayMs: Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0)),
+        emailDailyLimitEnabled,
+        emailDailyLimitMax: getEffectiveEmailWindowMax(),
+        senderEmail,
+        senderName,
         updatedAt: Date.now(),
       };
       
@@ -258,14 +369,90 @@ export default function CampaignsScreen() {
       .map((item) => item.trim())
       .filter(Boolean);
 
-  const parseJsonResponseSafe = async (response: Response): Promise<any> => {
+  const parseJsonResponseSafe = React.useCallback(async (response: Response): Promise<any> => {
     const rawText = await response.text();
     try {
       return rawText ? JSON.parse(rawText) : {};
     } catch {
       throw new Error(`Server returned non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 160)}`);
     }
+  }, []);
+
+  const normalizeServerQueuedEmailJob = (raw: any, now: number): ServerQueuedEmailJob | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const recipients: ServerQueuedEmailRecipient[] = (Array.isArray(raw.recipients) ? raw.recipients : [])
+      .map((recipient: any) => ({
+        id: String(recipient?.id || ''),
+        name: String(recipient?.name || '').trim(),
+        email: normalizeEmailForCampaign(recipient?.email),
+        company: typeof recipient?.company === 'string' ? recipient.company : '',
+        phone: typeof recipient?.phone === 'string' ? recipient.phone : '',
+      }))
+      .filter((recipient) => !!recipient.email);
+
+    const waitUntil = Math.max(0, Number(raw.waitUntil) || 0);
+    const remainingRecipients = Math.max(0, Number(raw.remainingRecipients) || recipients.length);
+    const due = !!raw.due || (waitUntil > 0 && waitUntil <= now);
+
+    return {
+      id: String(raw.id || ''),
+      campaignKey: String(raw.campaignKey || ''),
+      waitUntil,
+      maxPerWindow: Math.max(1, Math.min(5000, Number(raw.maxPerWindow) || 500)),
+      batchDelayMs: Math.max(0, Math.min(60000, Number(raw.batchDelayMs) || 0)),
+      createdAt: Math.max(0, Number(raw.createdAt) || 0),
+      updatedAt: Math.max(0, Number(raw.updatedAt) || 0),
+      lastRunAt: Math.max(0, Number(raw.lastRunAt) || 0),
+      lastRunSuccess: Math.max(0, Number(raw.lastRunSuccess) || 0),
+      lastRunFailed: Math.max(0, Number(raw.lastRunFailed) || 0),
+      lastRunAttempted: Math.max(0, Number(raw.lastRunAttempted) || 0),
+      remainingRecipients,
+      due,
+      recipients,
+      recipientsPreviewTruncated: !!raw.recipientsPreviewTruncated,
+    };
   };
+
+  const refreshServerEmailQueueStatus = React.useCallback(async (showErrorAlert = false) => {
+    try {
+      setLoadingServerEmailQueue(true);
+      const apiUrl =
+        process.env.EXPO_PUBLIC_RORK_API_BASE_URL ||
+        (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const endpoint = apiUrl.includes('tracker.tecclk.com')
+        ? `${apiUrl}/Tracker/api/email-queue.php?action=status&details=1&recipientLimit=300`
+        : `${apiUrl}/api/email-queue?action=status&details=1&recipientLimit=300`;
+      const response = await fetch(endpoint, {
+        method: 'GET',
+      });
+      const result = await parseJsonResponseSafe(response);
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to load server email queue');
+      }
+
+      const now = Date.now();
+      const jobs = (Array.isArray(result.jobs) ? result.jobs : [])
+        .map((job: any) => normalizeServerQueuedEmailJob(job, now))
+        .filter((job: ServerQueuedEmailJob | null): job is ServerQueuedEmailJob => !!job)
+        .sort((a, b) => {
+          if (a.due !== b.due) return a.due ? -1 : 1;
+          return (a.waitUntil || 0) - (b.waitUntil || 0);
+        });
+
+      const queueLength = Math.max(0, Number(result.queueLength) || jobs.length);
+      const dueJobs = Math.max(0, Number(result.dueJobs) || jobs.filter((job) => job.due).length);
+      setServerEmailQueueJobs(jobs);
+      setServerEmailQueueLength(queueLength);
+      setServerEmailQueueDueJobs(dueJobs);
+    } catch (error) {
+      console.error('[EMAIL QUEUE] Failed to load server queue:', error);
+      if (showErrorAlert) {
+        Alert.alert('Queue Load Failed', (error as Error).message);
+      }
+    } finally {
+      setLoadingServerEmailQueue(false);
+    }
+  }, [parseJsonResponseSafe]);
 
   const chunkArray = <T,>(items: T[], size: number): T[][] =>
     items.reduce((chunks, item, index) => {
@@ -278,7 +465,7 @@ export default function CampaignsScreen() {
   const normalizeEmailForCampaign = (email?: string | null): string => {
     const value = (email || '').trim().toLowerCase();
     if (!value) return '';
-    const simpleEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const simpleEmailRegex = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i;
     return simpleEmailRegex.test(value) ? value : '';
   };
 
@@ -292,6 +479,349 @@ export default function CampaignsScreen() {
   };
 
   const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const newsletterColorPalette = ['#111111', '#334155', '#0369A1', '#0F766E', '#B45309', '#B91C1C', '#7C3AED', '#FFFFFF'];
+  const newsletterFontOptions = [
+    { label: 'Arial', value: 'Arial, sans-serif' },
+    { label: 'Georgia', value: 'Georgia, serif' },
+    { label: 'Times New Roman', value: '"Times New Roman", serif' },
+    { label: 'Verdana', value: 'Verdana, sans-serif' },
+    { label: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
+    { label: 'Courier New', value: '"Courier New", monospace' },
+  ];
+
+  const escapeHtml = (value: string): string =>
+    value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+  const addNewsletterTextBlock = () => {
+    const id = `newsletter-text-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setNewsletterBlocks((prev) => [
+      ...prev,
+      {
+        id,
+        type: 'text',
+        content: 'New text box',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: 16,
+        color: '#111111',
+      },
+    ]);
+  };
+
+  const addNewsletterImageBlock = () => {
+    const id = `newsletter-image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setNewsletterBlocks((prev) => [
+      ...prev,
+      {
+        id,
+        type: 'image',
+        imageUrl: '',
+        caption: 'Image caption',
+        widthPercent: 100,
+        heightPx: 0,
+      },
+    ]);
+  };
+
+  const moveNewsletterBlock = (blockId: string, direction: 'up' | 'down') => {
+    setNewsletterBlocks((prev) => {
+      const index = prev.findIndex((block) => block.id === blockId);
+      if (index < 0) return prev;
+      if (direction === 'up' && index === 0) return prev;
+      if (direction === 'down' && index === prev.length - 1) return prev;
+      const next = [...prev];
+      const swapIndex = direction === 'up' ? index - 1 : index + 1;
+      const temp = next[index];
+      next[index] = next[swapIndex];
+      next[swapIndex] = temp;
+      return next;
+    });
+  };
+
+  const removeNewsletterBlock = (blockId: string) => {
+    setNewsletterBlocks((prev) => prev.filter((block) => block.id !== blockId));
+  };
+
+  const updateNewsletterTextBlock = (
+    blockId: string,
+    updates: Partial<Omit<NewsletterTextBlock, 'id' | 'type'>>,
+  ) => {
+    setNewsletterBlocks((prev) =>
+      prev.map((block) => {
+        if (block.id !== blockId || block.type !== 'text') return block;
+        return { ...block, ...updates };
+      }),
+    );
+  };
+
+  const updateNewsletterImageBlock = (
+    blockId: string,
+    updates: Partial<Omit<NewsletterImageBlock, 'id' | 'type'>>,
+  ) => {
+    setNewsletterBlocks((prev) =>
+      prev.map((block) => {
+        if (block.id !== blockId || block.type !== 'image') return block;
+        return { ...block, ...updates };
+      }),
+    );
+  };
+
+  const pickNewsletterImageForBlock = async (blockId: string) => {
+    try {
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (permission.status !== 'granted') {
+          Alert.alert('Permission Required', 'Please grant media library permissions to browse images.');
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.85,
+        base64: true,
+      });
+
+      if (result.canceled || !result.assets?.[0]) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      let dataUrl = '';
+      const mime = asset.mimeType || 'image/jpeg';
+
+      if (asset.base64) {
+        dataUrl = `data:${mime};base64,${asset.base64}`;
+      } else if (Platform.OS !== 'web') {
+        const base64Content = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        dataUrl = `data:${mime};base64,${base64Content}`;
+      } else {
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+        const reader = new FileReader();
+        dataUrl = await new Promise<string>((resolve) => {
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      updateNewsletterImageBlock(blockId, { imageUrl: dataUrl });
+    } catch (error) {
+      console.error('[NEWSLETTER] Failed to pick image:', error);
+      Alert.alert('Image Attach Failed', 'Could not attach image for this newsletter block.');
+    }
+  };
+
+  const newsletterHtmlContent = useMemo(() => {
+    if (!useNewsletterBuilder || newsletterBlocks.length === 0) return '';
+    const blockHtml = newsletterBlocks
+      .map((block) => {
+        if (block.type === 'text') {
+          const safeText = escapeHtml(block.content || '').replace(/\n/g, '<br/>');
+          const safeColor = (block.color || '#111111').trim();
+          const safeFont = (block.fontFamily || 'Arial, sans-serif').trim();
+          const safeSize = Math.max(10, Math.min(72, Number(block.fontSize) || 16));
+          return `<div style="margin: 14px 0; font-family: ${safeFont}; font-size: ${safeSize}px; color: ${safeColor}; line-height: 1.6;">${safeText || '&nbsp;'}</div>`;
+        }
+        const safeUrl = escapeHtml((block.imageUrl || '').trim());
+        const safeCaption = escapeHtml((block.caption || '').trim());
+        const safeWidth = Math.max(10, Math.min(100, Number(block.widthPercent) || 100));
+        const safeHeight = Math.max(0, Math.min(1200, Number(block.heightPx) || 0));
+        const sizeStyle = safeHeight > 0
+          ? `width:${safeWidth}%;height:${safeHeight}px;object-fit:cover;`
+          : `width:${safeWidth}%;max-width:100%;`;
+        if (!safeUrl) {
+          return `<div style="margin: 14px 0; border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; color: #64748b; font-family: Arial, sans-serif;">Image Placeholder</div>`;
+        }
+        return `<div style="margin: 14px 0; text-align:center;"><img src="${safeUrl}" alt="${safeCaption || 'Newsletter image'}" style="${sizeStyle} border-radius: 8px; display: inline-block;" />${safeCaption ? `<div style="margin-top: 8px; color: #475569; font-size: 13px; font-family: Arial, sans-serif;">${safeCaption}</div>` : ''}</div>`;
+      })
+      .join('');
+    return `<!doctype html><html><body style="margin:0; padding:20px; background:#f8fafc;"><div style="max-width:680px; margin:0 auto; background:#ffffff; border-radius:12px; padding:24px;">${blockHtml}</div></body></html>`;
+  }, [useNewsletterBuilder, newsletterBlocks]);
+
+  const getEffectiveEmailWindowMax = (): number =>
+    Math.max(1, Math.min(5000, parseInt(emailDailyLimitMax || '0', 10) || 500));
+
+  const formatWaitDuration = (ms: number): string => {
+    const totalMinutes = Math.max(0, Math.ceil(ms / 60000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours <= 0) return `${minutes}m`;
+    if (minutes <= 0) return `${hours}h`;
+    return `${hours}h ${minutes}m`;
+  };
+
+  const normalizePendingEmailCampaign = (raw: any): PendingEmailCampaign | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const recipients = (Array.isArray(raw.recipients) ? raw.recipients : [])
+      .map((item: any) => ({
+        id: String(item?.id || ''),
+        name: String(item?.name || '').trim() || 'Unknown',
+        email: normalizeEmailForCampaign(item?.email),
+        company: typeof item?.company === 'string' ? item.company : '',
+        phone: typeof item?.phone === 'string' ? item.phone : '',
+      }))
+      .filter((item: EmailCampaignRecipient) => !!item.id && !!item.email);
+
+    if (recipients.length === 0) return null;
+
+    const attachments: Attachment[] = (Array.isArray(raw.attachments) ? raw.attachments : [])
+      .map((item: any) => ({
+        uri: String(item?.uri || ''),
+        name: String(item?.name || ''),
+        mimeType: String(item?.mimeType || 'application/octet-stream'),
+        size: Number(item?.size || 0),
+      }))
+      .filter((item) => !!item.uri && !!item.name);
+
+    const maxPerWindow = Math.max(1, Math.min(5000, Number(raw.maxPerWindow) || 500));
+
+    return {
+      id: String(raw.id || `pending-email-${Date.now()}`),
+      createdAt: Number(raw.createdAt || Date.now()),
+      updatedAt: Number(raw.updatedAt || Date.now()),
+      senderName: String(raw.senderName || '').trim(),
+      senderEmail: String(raw.senderEmail || '').trim(),
+      replyToEmail: String(raw.replyToEmail || '').trim(),
+      replyToName: String(raw.replyToName || '').trim(),
+      subject: String(raw.subject || ''),
+      message: String(raw.message || ''),
+      htmlContent: String(raw.htmlContent || ''),
+      format: raw.format === 'html' ? 'html' : 'text',
+      attachments,
+      maxPerWindow,
+      waitUntil: raw.waitUntil ? Number(raw.waitUntil) : null,
+      lastSuccessAt: raw.lastSuccessAt ? Number(raw.lastSuccessAt) : null,
+      recipients,
+    };
+  };
+
+  const savePendingEmailCampaign = async (campaign: PendingEmailCampaign | null) => {
+    try {
+      if (!campaign || campaign.recipients.length === 0) {
+        await AsyncStorage.removeItem(EMAIL_CAMPAIGN_REMAINING_KEY);
+        setPendingEmailCampaign(null);
+        return;
+      }
+      const sanitized = normalizePendingEmailCampaign(campaign);
+      if (!sanitized) {
+        await AsyncStorage.removeItem(EMAIL_CAMPAIGN_REMAINING_KEY);
+        setPendingEmailCampaign(null);
+        return;
+      }
+      await AsyncStorage.setItem(EMAIL_CAMPAIGN_REMAINING_KEY, JSON.stringify(sanitized));
+      setPendingEmailCampaign(sanitized);
+    } catch (error) {
+      console.error('[EMAIL CAMPAIGN] Failed to persist pending campaign:', error);
+    }
+  };
+
+  const loadPendingEmailCampaign = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(EMAIL_CAMPAIGN_REMAINING_KEY);
+      if (!raw) {
+        setPendingEmailCampaign(null);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const normalized = normalizePendingEmailCampaign(parsed);
+      if (!normalized) {
+        await AsyncStorage.removeItem(EMAIL_CAMPAIGN_REMAINING_KEY);
+        setPendingEmailCampaign(null);
+        return;
+      }
+      setPendingEmailCampaign(normalized);
+    } catch (error) {
+      console.error('[EMAIL CAMPAIGN] Failed to load pending campaign:', error);
+      setPendingEmailCampaign(null);
+    }
+  };
+
+  const enqueueRemainingEmailsForAutomation = async (options: {
+    campaignKey: string;
+    waitUntil: number;
+    maxPerWindow: number;
+    recipients: EmailCampaignRecipient[];
+    emailData: {
+      senderName: string;
+      senderEmail: string;
+      replyToEmail: string;
+      replyToName: string;
+      subject: string;
+      message: string;
+      htmlContent: string;
+      format: EmailFormat;
+      attachments: Attachment[];
+    };
+  }): Promise<{ queued: boolean; message: string }> => {
+    if (!options.recipients.length) {
+      return { queued: false, message: 'No remaining recipients to automate.' };
+    }
+
+    if (options.emailData.attachments.length > 0) {
+      return {
+        queued: false,
+        message: 'Auto-send is skipped when attachments are used. Use "Send Remaining" manually for this campaign.',
+      };
+    }
+
+    try {
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const endpoint = apiUrl.includes('tracker.tecclk.com')
+        ? `${apiUrl}/Tracker/api/email-queue.php`
+        : `${apiUrl}/api/email-queue`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'enqueue',
+          campaignKey: options.campaignKey,
+          waitUntil: options.waitUntil,
+          maxPerWindow: options.maxPerWindow,
+          batchDelayMs: Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0)),
+          smtpConfig: {
+            host: smtpHost,
+            port: smtpPort,
+            username: smtpUsername,
+            password: smtpPassword,
+          },
+          emailData: {
+            ...options.emailData,
+            attachments: [],
+          },
+          recipients: options.recipients.map((r) => ({
+            id: r.id,
+            name: r.name,
+            email: r.email,
+            company: r.company,
+            phone: r.phone,
+          })),
+        }),
+      });
+
+      const result = await parseJsonResponseSafe(response);
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to queue automated remaining emails');
+      }
+
+      return {
+        queued: true,
+        message: `Auto-send queued for ${options.recipients.length} remaining email(s) after 24 hours.`,
+      };
+    } catch (error) {
+      console.error('[EMAIL AUTO QUEUE] Failed to queue automated remaining emails:', error);
+      return {
+        queued: false,
+        message: `Auto-send queue failed: ${(error as Error).message}`,
+      };
+    }
+  };
 
   const buildFailedSMSBatchFingerprint = (job: Pick<FailedSMSBatchJob, 'provider' | 'message' | 'recipients'>): string => {
     const phones = [...job.recipients.map((r) => (r.phone || '').trim())].sort().join('|');
@@ -615,6 +1145,18 @@ export default function CampaignsScreen() {
   }, [campaignType, refreshFailedSMSBatchQueue]);
 
   React.useEffect(() => {
+    if (campaignType !== 'email') {
+      return;
+    }
+    refreshServerEmailQueueStatus(false);
+  }, [
+    campaignType,
+    pendingEmailCampaign?.id,
+    pendingEmailCampaign?.recipients.length,
+    refreshServerEmailQueueStatus,
+  ]);
+
+  React.useEffect(() => {
     console.log('[CAMPAIGNS] WhatsApp credentials updated:', {
       hasToken: !!whatsappAccessToken,
       hasPhoneId: !!whatsappPhoneNumberId,
@@ -630,6 +1172,22 @@ export default function CampaignsScreen() {
     if (!domain) return '';
     return `noreply@${domain}`;
   }, [senderEmail]);
+
+  React.useEffect(() => {
+    const waitUntil = pendingEmailCampaign?.waitUntil;
+    if (!waitUntil || waitUntil <= Date.now()) {
+      return;
+    }
+    setEmailWindowNow(Date.now());
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setEmailWindowNow(now);
+      if (now >= waitUntil) {
+        clearInterval(timer);
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [pendingEmailCampaign?.waitUntil]);
 
   const filteredCustomers = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
@@ -655,6 +1213,15 @@ export default function CampaignsScreen() {
   const selectedCustomers = useMemo(() => {
     return eligibleCustomers.filter(c => selectedCustomerIds.has(c.id));
   }, [eligibleCustomers, selectedCustomerIds]);
+
+  const emailRemainingWaitMs = useMemo(() => {
+    if (!pendingEmailCampaign?.waitUntil) return 0;
+    return Math.max(0, pendingEmailCampaign.waitUntil - emailWindowNow);
+  }, [pendingEmailCampaign?.waitUntil, emailWindowNow]);
+
+  const canSendEmailRemaining = useMemo(() => {
+    return !!pendingEmailCampaign && pendingEmailCampaign.recipients.length > 0 && emailRemainingWaitMs <= 0;
+  }, [pendingEmailCampaign, emailRemainingWaitMs]);
 
   const toggleCustomer = (customerId: string) => {
     const newSet = new Set(selectedCustomerIds);
@@ -771,6 +1338,107 @@ export default function CampaignsScreen() {
     }
   };
 
+  const extractDialogCreditValue = (result: any): number | string | null => {
+    const candidates = [
+      result?.remainingCount,
+      result?.walletBalance,
+      result?.data?.remainingCount,
+      result?.data?.walletBalance,
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate !== null && candidate !== undefined && String(candidate).trim() !== '') {
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const refreshDialogCredit = React.useCallback(async (showAlert: boolean = false) => {
+    const hasDialogSMSConfig = !!(
+      dialogSMSSettings?.esms_username &&
+      dialogSMSSettings?.esms_password_encrypted
+    );
+
+    if (!hasDialogSMSConfig) {
+      setDialogCreditRemaining(null);
+      setDialogCreditError('Dialog eSMS is not configured');
+      setDialogCreditUpdatedAt(null);
+      if (showAlert) {
+        Alert.alert('Dialog eSMS Not Configured', 'Please save Dialog eSMS username/password in Settings first.');
+      }
+      return;
+    }
+
+    try {
+      setLoadingDialogCredit(true);
+      setDialogCreditError('');
+
+      const result: any = await testDialogSMSLogin(
+        dialogSMSSettings!.esms_username,
+        dialogSMSSettings!.esms_password_encrypted
+      );
+
+      if (!result?.success) {
+        throw new Error(result?.error || result?.message || 'Failed to fetch Dialog credit');
+      }
+
+      const credit = extractDialogCreditValue(result);
+      setDialogCreditRemaining(credit);
+      setDialogCreditUpdatedAt(Date.now());
+
+      if (credit === null) {
+        const noBalanceMsg = result?.comment || 'Login successful, but Dialog did not return a credit value.';
+        setDialogCreditError(noBalanceMsg);
+      }
+
+      if (showAlert) {
+        Alert.alert(
+          'Dialog Credit Updated',
+          credit === null
+            ? 'Login successful, but no credit value was returned.'
+            : `Credit remaining: ${credit}`
+        );
+      }
+    } catch (error) {
+      const message = (error as Error).message || 'Failed to fetch Dialog credit';
+      setDialogCreditError(message);
+      if (showAlert) {
+        Alert.alert('Failed to Refresh Credit', message);
+      }
+    } finally {
+      setLoadingDialogCredit(false);
+    }
+  }, [dialogSMSSettings, testDialogSMSLogin]);
+
+  const openDialogTopUp = React.useCallback(async () => {
+    try {
+      const supported = await Linking.canOpenURL(DIALOG_ESMS_PORTAL_URL);
+      if (!supported) {
+        throw new Error('Cannot open Dialog eSMS portal URL');
+      }
+      await Linking.openURL(DIALOG_ESMS_PORTAL_URL);
+    } catch (error) {
+      Alert.alert('Unable to Open Dialog Portal', (error as Error).message);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    const hasDialogSMSConfig = !!(
+      dialogSMSSettings?.esms_username &&
+      dialogSMSSettings?.esms_password_encrypted
+    );
+
+    if (campaignType === 'sms' && hasDialogSMSConfig && !loadingDialogCredit) {
+      refreshDialogCredit(false);
+    }
+  }, [
+    campaignType,
+    dialogSMSSettings?.esms_username,
+    dialogSMSSettings?.esms_password_encrypted,
+    refreshDialogCredit,
+  ]);
+
   const testSMSConnection = async () => {
     const hasDialogSMSConfig = !!(
       dialogSMSSettings?.esms_username &&
@@ -787,7 +1455,7 @@ export default function CampaignsScreen() {
       console.log('[SMS Test] Starting connection test...');
 
       if (hasDialogSMSConfig) {
-        const result = await testDialogSMSLogin(
+        const result: any = await testDialogSMSLogin(
           dialogSMSSettings!.esms_username,
           dialogSMSSettings!.esms_password_encrypted
         );
@@ -796,7 +1464,17 @@ export default function CampaignsScreen() {
           throw new Error(result.error || result.message || 'Dialog eSMS login test failed');
         }
 
-        Alert.alert('Connection Test Successful', 'Dialog eSMS login is configured correctly');
+        const credit = extractDialogCreditValue(result);
+        setDialogCreditRemaining(credit);
+        setDialogCreditUpdatedAt(Date.now());
+        setDialogCreditError('');
+
+        Alert.alert(
+          'Connection Test Successful',
+          credit === null
+            ? 'Dialog eSMS login is configured correctly'
+            : `Dialog eSMS login is configured correctly.\nCredit remaining: ${credit}`
+        );
         return;
       }
 
@@ -845,7 +1523,8 @@ export default function CampaignsScreen() {
   };
 
   const validateEmailCampaign = (): string | null => {
-    if (!senderEmail || !senderEmail.includes('@')) {
+    const effectiveHtml = useNewsletterBuilder ? newsletterHtmlContent : htmlContent;
+    if (!normalizeEmailForCampaign(senderEmail)) {
       return 'Please enter a valid sender email address';
     }
     if (!senderName.trim()) {
@@ -857,8 +1536,11 @@ export default function CampaignsScreen() {
     if (emailFormat === 'text' && !message.trim()) {
       return 'Please enter message content';
     }
-    if (emailFormat === 'html' && !htmlContent.trim()) {
-      return 'Please enter HTML content';
+    if (emailFormat === 'html' && useNewsletterBuilder && newsletterBlocks.length === 0) {
+      return 'Please add at least one newsletter block';
+    }
+    if (emailFormat === 'html' && !effectiveHtml.trim()) {
+      return useNewsletterBuilder ? 'Please add newsletter content' : 'Please enter HTML content';
     }
     if (selectedCustomers.length === 0) {
       return 'Please select at least one customer';
@@ -916,145 +1598,209 @@ export default function CampaignsScreen() {
       return;
     }
 
-    console.log('[EMAIL CAMPAIGN] Opening confirm dialog...');
-    console.log('[EMAIL CAMPAIGN] confirmVisible before:', confirmVisible);
-    console.log('[EMAIL CAMPAIGN] Setting confirmState and visible...');
-    
+    const mapSelectedRecipients: EmailCampaignRecipient[] = selectedCustomers.map((c) => ({
+      id: c.id,
+      name: c.name || 'Unknown',
+      email: normalizeEmailForCampaign(c.email),
+      company: c.company,
+      phone: c.phone,
+    }));
+    const invalidEmailRecipients = mapSelectedRecipients.filter((r) => !r.email);
+    const validEmailRecipients = mapSelectedRecipients.filter((r) => !!r.email);
+    if (validEmailRecipients.length === 0) {
+      Alert.alert('Validation Error', 'No valid email addresses found in selected customers');
+      return;
+    }
+
+    const effectiveWindowMax = getEffectiveEmailWindowMax();
+    const targetSuccessfulSends = emailDailyLimitEnabled
+      ? Math.min(effectiveWindowMax, validEmailRecipients.length)
+      : validEmailRecipients.length;
+    const normalizedSenderEmail = normalizeEmailForCampaign(senderEmail);
+    if (!normalizedSenderEmail) {
+      Alert.alert('Validation Error', 'Sender email format is invalid.');
+      return;
+    }
+    const effectiveHtmlForSend = useNewsletterBuilder ? newsletterHtmlContent : htmlContent;
+    const replacingPendingCount = pendingEmailCampaign?.recipients.length || 0;
+
+    const processAttachmentsForSend = async (sourceAttachments: Attachment[]) => Promise.all(
+      sourceAttachments.map(async (att) => {
+        let base64Content = '';
+
+        if (Platform.OS !== 'web') {
+          base64Content = await FileSystem.readAsStringAsync(att.uri, {
+            encoding: 'base64',
+          });
+        } else {
+          const response = await fetch(att.uri);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          base64Content = await new Promise<string>((resolve) => {
+            reader.onloadend = () => {
+              const base64 = reader.result as string;
+              resolve(base64.split(',')[1]);
+            };
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        return {
+          filename: att.name,
+          content: base64Content,
+          encoding: 'base64' as const,
+          contentType: att.mimeType,
+        };
+      })
+    );
+
+    const executeEmailSend = async (
+      recipientsToSend: EmailCampaignRecipient[],
+      emailPayload: {
+        senderName: string;
+        senderEmail: string;
+        replyToEmail: string;
+        replyToName: string;
+        subject: string;
+        message: string;
+        htmlContent: string;
+        format: EmailFormat;
+        attachments: Attachment[];
+      },
+      targetSuccessCount: number,
+    ) => {
+      const processedAttachments = await processAttachmentsForSend(emailPayload.attachments);
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
+      const EMAIL_CHUNK_SIZE = Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25));
+      const effectiveEmailBatchDelayMs = Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0));
+      const aggregatedResults = {
+        success: 0,
+        failed: 0,
+        errors: [] as string[],
+      };
+      const chunkFailures: string[] = [];
+      let processedRecipientsCount = 0;
+      let sentChunks = 0;
+
+      while (processedRecipientsCount < recipientsToSend.length && aggregatedResults.success < targetSuccessCount) {
+        const neededSuccesses = targetSuccessCount - aggregatedResults.success;
+        const chunkSizeForTarget = Math.min(
+          EMAIL_CHUNK_SIZE,
+          neededSuccesses,
+          recipientsToSend.length - processedRecipientsCount,
+        );
+        const chunk = recipientsToSend.slice(
+          processedRecipientsCount,
+          processedRecipientsCount + chunkSizeForTarget,
+        );
+        processedRecipientsCount += chunk.length;
+        sentChunks += 1;
+
+        try {
+          const response = await fetch(phpEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              smtpConfig: {
+                host: smtpHost,
+                port: smtpPort,
+                username: smtpUsername,
+                password: smtpPassword,
+              },
+              emailData: {
+                senderName: emailPayload.senderName,
+                senderEmail: emailPayload.senderEmail,
+                replyToEmail: emailPayload.replyToEmail,
+                replyToName: emailPayload.replyToName,
+                subject: emailPayload.subject,
+                message: emailPayload.message,
+                htmlContent: emailPayload.htmlContent,
+                format: emailPayload.format,
+                attachments: processedAttachments,
+              },
+              recipients: chunk.map(c => ({
+                name: c.name,
+                email: c.email,
+                company: c.company,
+                phone: c.phone,
+              })),
+            }),
+          });
+
+          const result = await parseJsonResponseSafe(response);
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || `Chunk ${sentChunks} failed`);
+          }
+
+          const chunkResults = result.results || { success: 0, failed: 0, errors: [] };
+          aggregatedResults.success += Number(chunkResults.success || 0);
+          aggregatedResults.failed += Number(chunkResults.failed || 0);
+          if (Array.isArray(chunkResults.errors)) {
+            aggregatedResults.errors.push(...chunkResults.errors);
+          }
+        } catch (chunkError) {
+          const chunkMsg = `Chunk ${sentChunks}: ${(chunkError as Error).message}`;
+          console.error('[EMAIL CAMPAIGN] Chunk error:', chunkMsg);
+          chunkFailures.push(chunkMsg);
+          aggregatedResults.failed += chunk.length;
+          aggregatedResults.errors.push(chunkMsg);
+        }
+
+        if (
+          processedRecipientsCount < recipientsToSend.length &&
+          aggregatedResults.success < targetSuccessCount &&
+          effectiveEmailBatchDelayMs > 0
+        ) {
+          await sleepMs(effectiveEmailBatchDelayMs);
+        }
+      }
+
+      return {
+        aggregatedResults,
+        chunkFailures,
+        recipientChunksCount: sentChunks,
+        chunkSize: EMAIL_CHUNK_SIZE,
+        batchDelayMs: effectiveEmailBatchDelayMs,
+        processedRecipientsCount,
+      };
+    };
+
     setConfirmState({
       title: 'Send Email Campaign',
-      message: `Send ${selectedCustomers.length} email(s) via SMTP?`,
+      message: `Send email campaign now? Target successful sends this run: ${targetSuccessfulSends}.${
+        emailDailyLimitEnabled
+          ? `\n\nDaily cap is enabled (${effectiveWindowMax}/24h). Sending continues until ${targetSuccessfulSends} are sent successfully or recipients run out.`
+          : ''
+      }${
+        replacingPendingCount > 0
+          ? `\n\nThis will replace the existing remaining queue (${replacingPendingCount} email(s)).`
+          : ''
+      }`,
       onConfirm: async () => {
-        console.log('[EMAIL CAMPAIGN] User confirmed, starting send...');
         try {
           setIsSending(true);
-
-          const processedAttachments = await Promise.all(
-            attachments.map(async (att) => {
-              let base64Content = '';
-
-              if (Platform.OS !== 'web') {
-                base64Content = await FileSystem.readAsStringAsync(att.uri, {
-                  encoding: 'base64',
-                });
-              } else {
-                const response = await fetch(att.uri);
-                const blob = await response.blob();
-                const reader = new FileReader();
-                base64Content = await new Promise((resolve) => {
-                  reader.onloadend = () => {
-                    const base64 = reader.result as string;
-                    resolve(base64.split(',')[1]);
-                  };
-                  reader.readAsDataURL(blob);
-                });
-              }
-
-              return {
-                filename: att.name,
-                content: base64Content,
-                encoding: 'base64' as const,
-                contentType: att.mimeType,
-              };
-            })
-          );
-
-          console.log('[EMAIL CAMPAIGN] Sending to backend...');
-          const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
-          const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
-          const mappedRecipients = selectedCustomers.map(c => ({
-            id: c.id,
-            name: c.name,
-            email: c.email,
-            company: c.company,
-            phone: c.phone,
-          }));
-          const invalidEmailRecipients = mappedRecipients.filter(r => !normalizeEmailForCampaign(r.email));
-          const validEmailRecipients = mappedRecipients
-            .map(r => ({ ...r, email: normalizeEmailForCampaign(r.email) }))
-            .filter(r => !!r.email);
-
-          if (validEmailRecipients.length === 0) {
-            throw new Error('No valid email addresses found in selected customers');
-          }
-
-          const EMAIL_CHUNK_SIZE = Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25));
-          const effectiveEmailBatchDelayMs = Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0));
-          const recipientChunks = chunkArray(validEmailRecipients, EMAIL_CHUNK_SIZE);
-          const aggregatedResults = {
-            success: 0,
-            failed: 0,
-            errors: [] as string[],
+          const emailPayload = {
+            senderName,
+            senderEmail: normalizedSenderEmail,
+            replyToEmail: emailNoReplyMode ? (derivedNoReplyEmail || normalizedSenderEmail) : normalizedSenderEmail,
+            replyToName: senderName,
+            subject,
+            message,
+            htmlContent: effectiveHtmlForSend,
+            format: emailFormat,
+            attachments,
           };
-          const chunkFailures: string[] = [];
 
-          for (let i = 0; i < recipientChunks.length; i++) {
-            const chunk = recipientChunks[i];
-            console.log(`[EMAIL CAMPAIGN] Sending chunk ${i + 1}/${recipientChunks.length} (${chunk.length} recipients)`);
-            try {
-              const response = await fetch(phpEndpoint, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  smtpConfig: {
-                    host: smtpHost,
-                    port: smtpPort,
-                    username: smtpUsername,
-                    password: smtpPassword,
-                  },
-                  emailData: {
-                    senderName,
-                    senderEmail,
-                    replyToEmail: emailNoReplyMode ? (derivedNoReplyEmail || senderEmail) : senderEmail,
-                    replyToName: senderName,
-                    subject,
-                    message,
-                    htmlContent,
-                    format: emailFormat,
-                    attachments: processedAttachments,
-                  },
-                  recipients: chunk.map(c => ({
-                    name: c.name,
-                    email: c.email,
-                    company: c.company,
-                    phone: c.phone,
-                  })),
-                }),
-              });
-
-              const result = await parseJsonResponseSafe(response);
-              console.log(`[EMAIL CAMPAIGN] Chunk ${i + 1} response:`, result);
-
-              if (!response.ok || !result.success) {
-                throw new Error(result.error || `Chunk ${i + 1} failed`);
-              }
-
-              const chunkResults = result.results || { success: 0, failed: 0, errors: [] };
-              aggregatedResults.success += Number(chunkResults.success || 0);
-              aggregatedResults.failed += Number(chunkResults.failed || 0);
-              if (Array.isArray(chunkResults.errors)) {
-                aggregatedResults.errors.push(...chunkResults.errors);
-              }
-            } catch (chunkError) {
-              const chunkMsg = `Chunk ${i + 1}/${recipientChunks.length}: ${(chunkError as Error).message}`;
-              console.error('[EMAIL CAMPAIGN] Chunk error:', chunkMsg);
-              chunkFailures.push(chunkMsg);
-              aggregatedResults.failed += chunk.length;
-              aggregatedResults.errors.push(chunkMsg);
-              if (i < recipientChunks.length - 1 && effectiveEmailBatchDelayMs > 0) {
-                await sleepMs(effectiveEmailBatchDelayMs);
-              }
-              continue;
-            }
-
-            if (i < recipientChunks.length - 1 && effectiveEmailBatchDelayMs > 0) {
-              await sleepMs(effectiveEmailBatchDelayMs);
-            }
-          }
-
+          const result = await executeEmailSend(validEmailRecipients, emailPayload, targetSuccessfulSends);
+          const aggregatedResults = {
+            ...result.aggregatedResults,
+            failed: result.aggregatedResults.failed + invalidEmailRecipients.length,
+            errors: [...result.aggregatedResults.errors],
+          };
           if (invalidEmailRecipients.length > 0) {
-            aggregatedResults.failed += invalidEmailRecipients.length;
             aggregatedResults.errors.push(
               ...invalidEmailRecipients.slice(0, 20).map(r => `${r.name || 'Unknown'}: Invalid/missing email`)
             );
@@ -1063,24 +1809,74 @@ export default function CampaignsScreen() {
             }
           }
 
-          const resultMessage = `Sent: ${aggregatedResults.success}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Emails: ${invalidEmailRecipients.length}\nBatches: ${recipientChunks.length}\nBatch Size: ${EMAIL_CHUNK_SIZE}\nBatch Delay: ${effectiveEmailBatchDelayMs} ms${chunkFailures.length ? `\nBatch Errors: ${chunkFailures.length}` : ''}${
+          let queuedRemaining = 0;
+          let waitUntil: number | null = null;
+          let automationNote = '';
+          const unattemptedRecipients = validEmailRecipients.slice(result.processedRecipientsCount);
+          if (emailDailyLimitEnabled && unattemptedRecipients.length > 0) {
+            const now = Date.now();
+            waitUntil = aggregatedResults.success > 0 ? now + EMAIL_SEND_WINDOW_MS : null;
+            const campaignId = `email-campaign-${now}`;
+            const nextPending: PendingEmailCampaign = {
+              id: campaignId,
+              createdAt: now,
+              updatedAt: now,
+              senderName: emailPayload.senderName,
+              senderEmail: emailPayload.senderEmail,
+              replyToEmail: emailPayload.replyToEmail,
+              replyToName: emailPayload.replyToName,
+              subject: emailPayload.subject,
+              message: emailPayload.message,
+              htmlContent: emailPayload.htmlContent,
+              format: emailPayload.format,
+              attachments: emailPayload.attachments,
+              maxPerWindow: effectiveWindowMax,
+              waitUntil,
+              lastSuccessAt: aggregatedResults.success > 0 ? now : null,
+              recipients: unattemptedRecipients,
+            };
+            await savePendingEmailCampaign(nextPending);
+            queuedRemaining = unattemptedRecipients.length;
+            setSelectedCustomerIds(new Set(unattemptedRecipients.map((r) => r.id)));
+
+            if (waitUntil) {
+              const autoQueue = await enqueueRemainingEmailsForAutomation({
+                campaignKey: campaignId,
+                waitUntil,
+                maxPerWindow: effectiveWindowMax,
+                recipients: unattemptedRecipients,
+                emailData: emailPayload,
+              });
+              automationNote = autoQueue.message;
+              if (autoQueue.queued) {
+                // Auto-scheduled on server: clear local manual queue to avoid duplicate sends.
+                await savePendingEmailCampaign(null);
+                setSelectedCustomerIds(new Set());
+              }
+            }
+          } else if (replacingPendingCount > 0) {
+            await savePendingEmailCampaign(null);
+          }
+
+          const resultMessage = `Sent: ${aggregatedResults.success}\nTarget Successful This Run: ${targetSuccessfulSends}\nAttempted: ${result.processedRecipientsCount}\nFailed: ${aggregatedResults.failed}\nSkipped Invalid Emails: ${invalidEmailRecipients.length}\nBatches: ${result.recipientChunksCount}\nBatch Size: ${result.chunkSize}\nBatch Delay: ${result.batchDelayMs} ms${result.chunkFailures.length ? `\nBatch Errors: ${result.chunkFailures.length}` : ''}${
+            queuedRemaining > 0 ? `\nQueued Remaining: ${queuedRemaining}` : ''
+          }${
+            queuedRemaining > 0 && waitUntil ? `\nNext Send Remaining: ${new Date(waitUntil).toLocaleString()}` : ''
+          }${
+            automationNote ? `\n${automationNote}` : ''
+          }${
             aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + aggregatedResults.errors.slice(0, 8).join('\n') : ''
           }`;
 
-          Alert.alert(
-            'Email Campaign Complete',
-            resultMessage,
-            [{ text: 'OK' }]
-          );
+          Alert.alert('Email Campaign Complete', resultMessage, [{ text: 'OK' }]);
 
-          if (aggregatedResults.success > 0) {
+          if (queuedRemaining === 0 && aggregatedResults.success > 0) {
             setSubject('');
             setMessage('');
             setHtmlContent('');
             setAttachments([]);
             setSelectedCustomerIds(new Set());
           }
-
         } catch (error) {
           console.error('[EMAIL CAMPAIGN] Error:', error);
           Alert.alert('Error', 'Failed to send email campaign: ' + (error as Error).message);
@@ -1089,11 +1885,244 @@ export default function CampaignsScreen() {
         }
       },
     });
-    
+
     setTimeout(() => {
-      console.log('[EMAIL CAMPAIGN] Setting confirmVisible to true...');
       setConfirmVisible(true);
-      console.log('[EMAIL CAMPAIGN] confirmVisible set to:', true);
+    }, 100);
+  };
+
+  const sendRemainingEmailCampaign = async () => {
+    if (!pendingEmailCampaign || pendingEmailCampaign.recipients.length === 0) {
+      Alert.alert('No Remaining Emails', 'There are no queued remaining campaign emails.');
+      return;
+    }
+    if (!smtpHost || !smtpUsername || !smtpPassword) {
+      Alert.alert(
+        'SMTP Not Configured',
+        'Please configure SMTP settings in the Settings page before sending emails.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    if (emailRemainingWaitMs > 0) {
+      Alert.alert(
+        'Daily Send Window Active',
+        `You can send the next batch in ${formatWaitDuration(emailRemainingWaitMs)}.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const maxPerWindow = Math.max(1, pendingEmailCampaign.maxPerWindow || 1);
+    const targetSuccessfulSends = Math.min(maxPerWindow, pendingEmailCampaign.recipients.length);
+
+    const processAttachmentsForSend = async (sourceAttachments: Attachment[]) => Promise.all(
+      sourceAttachments.map(async (att) => {
+        let base64Content = '';
+
+        if (Platform.OS !== 'web') {
+          base64Content = await FileSystem.readAsStringAsync(att.uri, {
+            encoding: 'base64',
+          });
+        } else {
+          const response = await fetch(att.uri);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          base64Content = await new Promise<string>((resolve) => {
+            reader.onloadend = () => {
+              const base64 = reader.result as string;
+              resolve(base64.split(',')[1]);
+            };
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        return {
+          filename: att.name,
+          content: base64Content,
+          encoding: 'base64' as const,
+          contentType: att.mimeType,
+        };
+      })
+    );
+
+    const executeEmailSend = async (
+      recipientsToSend: EmailCampaignRecipient[],
+      emailPayload: PendingEmailCampaign,
+      targetSuccessCount: number,
+    ) => {
+      const processedAttachments = await processAttachmentsForSend(emailPayload.attachments);
+      const apiUrl = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8081');
+      const phpEndpoint = apiUrl.includes('tracker.tecclk.com') ? `${apiUrl}/Tracker/api/send-email.php` : `${apiUrl}/api/send-email`;
+      const EMAIL_CHUNK_SIZE = Math.max(1, Math.min(100, parseInt(emailBatchSize || '0', 10) || 25));
+      const effectiveEmailBatchDelayMs = Math.max(0, Math.min(60000, parseInt(emailBatchDelayMs || '0', 10) || 0));
+      const aggregatedResults = {
+        success: 0,
+        failed: 0,
+        errors: [] as string[],
+      };
+      const chunkFailures: string[] = [];
+      let processedRecipientsCount = 0;
+      let sentChunks = 0;
+
+      while (processedRecipientsCount < recipientsToSend.length && aggregatedResults.success < targetSuccessCount) {
+        const neededSuccesses = targetSuccessCount - aggregatedResults.success;
+        const chunkSizeForTarget = Math.min(
+          EMAIL_CHUNK_SIZE,
+          neededSuccesses,
+          recipientsToSend.length - processedRecipientsCount,
+        );
+        const chunk = recipientsToSend.slice(
+          processedRecipientsCount,
+          processedRecipientsCount + chunkSizeForTarget,
+        );
+        processedRecipientsCount += chunk.length;
+        sentChunks += 1;
+
+        try {
+          const response = await fetch(phpEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              smtpConfig: {
+                host: smtpHost,
+                port: smtpPort,
+                username: smtpUsername,
+                password: smtpPassword,
+              },
+              emailData: {
+                senderName: emailPayload.senderName,
+                senderEmail: emailPayload.senderEmail,
+                replyToEmail: emailPayload.replyToEmail,
+                replyToName: emailPayload.replyToName,
+                subject: emailPayload.subject,
+                message: emailPayload.message,
+                htmlContent: emailPayload.htmlContent,
+                format: emailPayload.format,
+                attachments: processedAttachments,
+              },
+              recipients: chunk.map(c => ({
+                name: c.name,
+                email: c.email,
+                company: c.company,
+                phone: c.phone,
+              })),
+            }),
+          });
+
+          const result = await parseJsonResponseSafe(response);
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || `Chunk ${sentChunks} failed`);
+          }
+          const chunkResults = result.results || { success: 0, failed: 0, errors: [] };
+          aggregatedResults.success += Number(chunkResults.success || 0);
+          aggregatedResults.failed += Number(chunkResults.failed || 0);
+          if (Array.isArray(chunkResults.errors)) {
+            aggregatedResults.errors.push(...chunkResults.errors);
+          }
+        } catch (chunkError) {
+          const chunkMsg = `Chunk ${sentChunks}: ${(chunkError as Error).message}`;
+          chunkFailures.push(chunkMsg);
+          aggregatedResults.failed += chunk.length;
+          aggregatedResults.errors.push(chunkMsg);
+        }
+
+        if (
+          processedRecipientsCount < recipientsToSend.length &&
+          aggregatedResults.success < targetSuccessCount &&
+          effectiveEmailBatchDelayMs > 0
+        ) {
+          await sleepMs(effectiveEmailBatchDelayMs);
+        }
+      }
+
+      return {
+        aggregatedResults,
+        chunkFailures,
+        recipientChunksCount: sentChunks,
+        chunkSize: EMAIL_CHUNK_SIZE,
+        batchDelayMs: effectiveEmailBatchDelayMs,
+        processedRecipientsCount,
+      };
+    };
+
+    setConfirmState({
+      title: 'Send Remaining Emails',
+      message: `Send remaining campaign now? Target successful sends this run: ${targetSuccessfulSends}.`,
+      onConfirm: async () => {
+        try {
+          setIsSending(true);
+          const result = await executeEmailSend(pendingEmailCampaign.recipients, pendingEmailCampaign, targetSuccessfulSends);
+          const futureRecipients = pendingEmailCampaign.recipients.slice(result.processedRecipientsCount);
+          let queuedRemaining = futureRecipients.length;
+          let waitUntil: number | null = null;
+          let automationNote = '';
+
+          if (futureRecipients.length > 0) {
+            const now = Date.now();
+            waitUntil = result.aggregatedResults.success > 0 ? now + EMAIL_SEND_WINDOW_MS : null;
+            const updatedPending: PendingEmailCampaign = {
+              ...pendingEmailCampaign,
+              updatedAt: now,
+              lastSuccessAt: result.aggregatedResults.success > 0 ? now : pendingEmailCampaign.lastSuccessAt,
+              waitUntil,
+              recipients: futureRecipients,
+            };
+            await savePendingEmailCampaign(updatedPending);
+            setSelectedCustomerIds(new Set(futureRecipients.map((r) => r.id)));
+
+            if (waitUntil) {
+              const autoQueue = await enqueueRemainingEmailsForAutomation({
+                campaignKey: updatedPending.id,
+                waitUntil,
+                maxPerWindow: maxPerWindow,
+                recipients: futureRecipients,
+                emailData: {
+                  senderName: updatedPending.senderName,
+                  senderEmail: updatedPending.senderEmail,
+                  replyToEmail: updatedPending.replyToEmail,
+                  replyToName: updatedPending.replyToName,
+                  subject: updatedPending.subject,
+                  message: updatedPending.message,
+                  htmlContent: updatedPending.htmlContent,
+                  format: updatedPending.format,
+                  attachments: updatedPending.attachments,
+                },
+              });
+              automationNote = autoQueue.message;
+              if (autoQueue.queued) {
+                await savePendingEmailCampaign(null);
+                setSelectedCustomerIds(new Set());
+              }
+            }
+          } else {
+            queuedRemaining = 0;
+            await savePendingEmailCampaign(null);
+          }
+
+          const resultMessage = `Sent: ${result.aggregatedResults.success}\nTarget Successful This Run: ${targetSuccessfulSends}\nAttempted: ${result.processedRecipientsCount}\nFailed: ${result.aggregatedResults.failed}\nBatches: ${result.recipientChunksCount}\nBatch Size: ${result.chunkSize}\nBatch Delay: ${result.batchDelayMs} ms${result.chunkFailures.length ? `\nBatch Errors: ${result.chunkFailures.length}` : ''}${
+            queuedRemaining > 0 ? `\nQueued Remaining: ${queuedRemaining}` : '\nQueued Remaining: 0'
+          }${
+            queuedRemaining > 0 && waitUntil ? `\nNext Send Remaining: ${new Date(waitUntil).toLocaleString()}` : ''
+          }${
+            automationNote ? `\n${automationNote}` : ''
+          }${
+            result.aggregatedResults.errors.length > 0 ? '\n\nErrors:\n' + result.aggregatedResults.errors.slice(0, 8).join('\n') : ''
+          }`;
+          Alert.alert('Email Campaign Complete', resultMessage, [{ text: 'OK' }]);
+        } catch (error) {
+          console.error('[EMAIL CAMPAIGN] Send remaining error:', error);
+          Alert.alert('Error', 'Failed to send remaining emails: ' + (error as Error).message);
+        } finally {
+          setIsSending(false);
+        }
+      },
+    });
+
+    setTimeout(() => {
+      setConfirmVisible(true);
     }, 100);
   };
 
@@ -1850,6 +2879,18 @@ export default function CampaignsScreen() {
           </TouchableOpacity>
         </View>
 
+        {(campaignType === 'email' || campaignType === 'sms') && (
+          <TouchableOpacity
+            style={styles.advancedSettingsTrigger}
+            onPress={() => setShowAdvancedSettingsModal(true)}
+          >
+            <Settings size={18} color={Colors.light.tint} />
+            <Text style={styles.advancedSettingsTriggerText}>
+              {campaignType === 'email' ? 'Email Advanced Settings' : 'SMS Settings'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {campaignType === 'email' && (
           <>
             <TouchableOpacity
@@ -2012,28 +3053,8 @@ export default function CampaignsScreen() {
                 </Text>
               )}
 
-              <Text style={styles.label}>Email Batch Size</Text>
-              <TextInput
-                style={styles.input}
-                value={emailBatchSize}
-                onChangeText={setEmailBatchSize}
-                placeholder="25"
-                keyboardType="number-pad"
-              />
               <Text style={styles.helpText}>
-                Number of emails sent per batch request (1-100). Smaller is slower but more reliable on shared hosting.
-              </Text>
-
-              <Text style={styles.label}>Email Batch Delay (ms)</Text>
-              <TextInput
-                style={styles.input}
-                value={emailBatchDelayMs}
-                onChangeText={setEmailBatchDelayMs}
-                placeholder="1500"
-                keyboardType="number-pad"
-              />
-              <Text style={styles.helpText}>
-                Delay between email batches to reduce SMTP/server overload. Lower is faster; higher is safer for shared hosting.
+                Batch controls are in Email Advanced Settings (button above).
               </Text>
 
               <Text style={styles.label}>Email Format</Text>
@@ -2072,6 +3093,34 @@ export default function CampaignsScreen() {
                 </TouchableOpacity>
               </View>
 
+              <TouchableOpacity
+                style={styles.selectAllButton}
+                onPress={() => setEmailDailyLimitEnabled(!emailDailyLimitEnabled)}
+              >
+                {emailDailyLimitEnabled ? (
+                  <CheckSquare size={20} color={Colors.light.tint} />
+                ) : (
+                  <Square size={20} color={Colors.light.tabIconDefault} />
+                )}
+                <Text style={styles.selectAllText}>Enable campaign daily send cap (24h)</Text>
+              </TouchableOpacity>
+
+              {emailDailyLimitEnabled && (
+                <>
+                  <Text style={styles.label}>Max Emails Per 24 Hours</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={emailDailyLimitMax}
+                    onChangeText={setEmailDailyLimitMax}
+                    placeholder="500"
+                    keyboardType="number-pad"
+                  />
+                  <Text style={styles.helpText}>
+                    Sends up to this amount now, then queues the rest for "Send remaining" after 24 hours.
+                  </Text>
+                </>
+              )}
+
               <Text style={styles.label}>Subject *</Text>
               <TextInput
                 style={styles.input}
@@ -2097,16 +3146,266 @@ export default function CampaignsScreen() {
                 </>
               ) : (
                 <>
-                  <Text style={styles.label}>HTML Content *</Text>
-                  <TextInput
-                    style={[styles.input, styles.textArea]}
-                    value={htmlContent}
-                    onChangeText={setHtmlContent}
-                    placeholder="<html><body>Your HTML content...</body></html>"
-                    multiline
-                    numberOfLines={10}
-                    textAlignVertical="top"
-                  />
+                  <TouchableOpacity
+                    style={styles.selectAllButton}
+                    onPress={() => setUseNewsletterBuilder(!useNewsletterBuilder)}
+                  >
+                    {useNewsletterBuilder ? (
+                      <CheckSquare size={20} color={Colors.light.tint} />
+                    ) : (
+                      <Square size={20} color={Colors.light.tabIconDefault} />
+                    )}
+                    <Text style={styles.selectAllText}>Newsletter Builder Mode</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.helpText}>
+                    Add movable text boxes and image holders. Text supports font, size, and color settings.
+                  </Text>
+
+                  {useNewsletterBuilder ? (
+                    <View style={styles.newsletterBuilderCard}>
+                      <View style={styles.newsletterBuilderActions}>
+                        <TouchableOpacity style={styles.newsletterActionButton} onPress={addNewsletterTextBlock}>
+                          <Text style={styles.newsletterActionButtonText}>Add Text Box</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.newsletterActionButton} onPress={addNewsletterImageBlock}>
+                          <Text style={styles.newsletterActionButtonText}>Add Image Holder</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {newsletterBlocks.map((block, index) => (
+                        <View key={block.id} style={styles.newsletterBlockCard}>
+                          <View style={styles.newsletterBlockHeader}>
+                            <Text style={styles.newsletterBlockTitle}>
+                              {block.type === 'text' ? `Text Box ${index + 1}` : `Image Holder ${index + 1}`}
+                            </Text>
+                            <View style={styles.newsletterBlockHeaderActions}>
+                              <TouchableOpacity
+                                style={styles.newsletterMiniButton}
+                                onPress={() => moveNewsletterBlock(block.id, 'up')}
+                                disabled={index === 0}
+                              >
+                                <Text style={styles.newsletterMiniButtonText}>Up</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.newsletterMiniButton}
+                                onPress={() => moveNewsletterBlock(block.id, 'down')}
+                                disabled={index === newsletterBlocks.length - 1}
+                              >
+                                <Text style={styles.newsletterMiniButtonText}>Down</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.newsletterMiniDeleteButton}
+                                onPress={() => removeNewsletterBlock(block.id)}
+                              >
+                                <Text style={styles.newsletterMiniDeleteButtonText}>Remove</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+
+                          {block.type === 'text' ? (
+                            <>
+                              <TextInput
+                                style={[styles.input, styles.newsletterTextArea]}
+                                value={block.content}
+                                onChangeText={(value) => updateNewsletterTextBlock(block.id, { content: value })}
+                                placeholder="Write text content..."
+                                multiline
+                                numberOfLines={5}
+                                textAlignVertical="top"
+                              />
+                              <Text style={styles.label}>Font Family</Text>
+                              <View style={styles.newsletterPickerWrap}>
+                                <Picker
+                                  selectedValue={block.fontFamily}
+                                  onValueChange={(value) => updateNewsletterTextBlock(block.id, { fontFamily: String(value) })}
+                                  style={styles.newsletterPicker}
+                                >
+                                  {newsletterFontOptions.map((fontOption) => (
+                                    <Picker.Item
+                                      key={`${block.id}-${fontOption.label}`}
+                                      label={fontOption.label}
+                                      value={fontOption.value}
+                                    />
+                                  ))}
+                                </Picker>
+                              </View>
+                              <Text style={styles.label}>Font Size (px)</Text>
+                              <TextInput
+                                style={styles.input}
+                                value={String(block.fontSize)}
+                                onChangeText={(value) => {
+                                  const parsed = parseInt(value || '0', 10);
+                                  updateNewsletterTextBlock(block.id, { fontSize: Number.isFinite(parsed) ? parsed : 16 });
+                                }}
+                                placeholder="16"
+                                keyboardType="number-pad"
+                              />
+                              <Text style={styles.label}>Font Color Picker</Text>
+                              <View style={styles.newsletterColorRow}>
+                                {newsletterColorPalette.map((color) => (
+                                  <TouchableOpacity
+                                    key={`${block.id}-${color}`}
+                                    style={[
+                                      styles.newsletterColorSwatch,
+                                      { backgroundColor: color },
+                                      block.color === color && styles.newsletterColorSwatchActive,
+                                      color === '#FFFFFF' && styles.newsletterColorSwatchWhite,
+                                    ]}
+                                    onPress={() => updateNewsletterTextBlock(block.id, { color })}
+                                  />
+                                ))}
+                              </View>
+                              <TextInput
+                                style={styles.input}
+                                value={block.color}
+                                onChangeText={(value) => updateNewsletterTextBlock(block.id, { color: value })}
+                                placeholder="#111111"
+                                autoCapitalize="none"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <Text style={styles.label}>Attach Image</Text>
+                              <TouchableOpacity
+                                style={styles.newsletterAttachButton}
+                                onPress={() => pickNewsletterImageForBlock(block.id)}
+                              >
+                                <ImageIcon size={20} color={Colors.light.tint} />
+                                <Text style={styles.newsletterAttachButtonText}>
+                                  {block.imageUrl ? 'Browse & Replace Image' : 'Browse & Attach Image'}
+                                </Text>
+                              </TouchableOpacity>
+                              {block.imageUrl ? (
+                                <View style={styles.newsletterImagePreviewWrap}>
+                                  <Image
+                                    source={{ uri: block.imageUrl }}
+                                    style={[
+                                      styles.newsletterImagePreview,
+                                      {
+                                        width: `${Math.max(10, Math.min(100, Number(block.widthPercent) || 100))}%`,
+                                        height: (Number(block.heightPx) || 0) > 0 ? Number(block.heightPx) : 180,
+                                      },
+                                    ]}
+                                    resizeMode={(Number(block.heightPx) || 0) > 0 ? 'cover' : 'contain'}
+                                  />
+                                </View>
+                              ) : (
+                                <View style={styles.newsletterImagePlaceholder}>
+                                  <ImageIcon size={28} color={Colors.light.tabIconDefault} />
+                                  <Text style={styles.newsletterImagePlaceholderText}>No image attached</Text>
+                                </View>
+                              )}
+                              <Text style={styles.helpText}>
+                                You can also paste an external image URL (optional).
+                              </Text>
+                              <TextInput
+                                style={styles.input}
+                                value={block.imageUrl.startsWith('data:') ? '' : block.imageUrl}
+                                onChangeText={(value) => updateNewsletterImageBlock(block.id, { imageUrl: value })}
+                                placeholder="https://example.com/image.jpg"
+                                autoCapitalize="none"
+                                keyboardType="url"
+                              />
+                              <Text style={styles.label}>Image Width (%)</Text>
+                              <TextInput
+                                style={styles.input}
+                                value={String(block.widthPercent)}
+                                onChangeText={(value) => {
+                                  const parsed = parseInt(value || '0', 10);
+                                  updateNewsletterImageBlock(block.id, {
+                                    widthPercent: Number.isFinite(parsed) ? parsed : 100,
+                                  });
+                                }}
+                                placeholder="100"
+                                keyboardType="number-pad"
+                              />
+                              <Text style={styles.label}>Image Height (px, 0 = auto)</Text>
+                              <TextInput
+                                style={styles.input}
+                                value={String(block.heightPx)}
+                                onChangeText={(value) => {
+                                  const parsed = parseInt(value || '0', 10);
+                                  updateNewsletterImageBlock(block.id, {
+                                    heightPx: Number.isFinite(parsed) ? parsed : 0,
+                                  });
+                                }}
+                                placeholder="0"
+                                keyboardType="number-pad"
+                              />
+                              <Text style={styles.label}>Caption (optional)</Text>
+                              <TextInput
+                                style={styles.input}
+                                value={block.caption}
+                                onChangeText={(value) => updateNewsletterImageBlock(block.id, { caption: value })}
+                                placeholder="Image caption"
+                              />
+                            </>
+                          )}
+                        </View>
+                      ))}
+
+                      <Text style={styles.label}>Live Newsletter Preview</Text>
+                      <View style={styles.newsletterLivePreview}>
+                        {newsletterBlocks.map((previewBlock) =>
+                          previewBlock.type === 'text' ? (
+                            <Text
+                              key={`preview-${previewBlock.id}`}
+                              style={{
+                                marginVertical: 8,
+                                color: previewBlock.color || '#111111',
+                                fontFamily: previewBlock.fontFamily,
+                                fontSize: Math.max(10, Math.min(72, Number(previewBlock.fontSize) || 16)),
+                                lineHeight: Math.max(16, (Number(previewBlock.fontSize) || 16) + 6),
+                              }}
+                            >
+                              {previewBlock.content || ' '}
+                            </Text>
+                          ) : (
+                            <View key={`preview-${previewBlock.id}`} style={styles.newsletterLivePreviewImageWrap}>
+                              {previewBlock.imageUrl ? (
+                                <Image
+                                  source={{ uri: previewBlock.imageUrl }}
+                                  style={{
+                                    width: `${Math.max(10, Math.min(100, Number(previewBlock.widthPercent) || 100))}%`,
+                                    height: (Number(previewBlock.heightPx) || 0) > 0
+                                      ? Number(previewBlock.heightPx)
+                                      : 180,
+                                    alignSelf: 'center',
+                                    borderRadius: 8,
+                                  }}
+                                  resizeMode={(Number(previewBlock.heightPx) || 0) > 0 ? 'cover' : 'contain'}
+                                />
+                              ) : (
+                                <View style={styles.newsletterImagePlaceholder}>
+                                  <ImageIcon size={28} color={Colors.light.tabIconDefault} />
+                                  <Text style={styles.newsletterImagePlaceholderText}>No image attached</Text>
+                                </View>
+                              )}
+                              {!!previewBlock.caption && (
+                                <Text style={styles.newsletterPreviewCaption}>{previewBlock.caption}</Text>
+                              )}
+                            </View>
+                          ),
+                        )}
+                      </View>
+                      <Text style={styles.helpText}>
+                        HTML is generated from this layout automatically when sending.
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Text style={styles.label}>HTML Content *</Text>
+                      <TextInput
+                        style={[styles.input, styles.textArea]}
+                        value={htmlContent}
+                        onChangeText={setHtmlContent}
+                        placeholder="<html><body>Your HTML content...</body></html>"
+                        multiline
+                        numberOfLines={10}
+                        textAlignVertical="top"
+                      />
+                    </>
+                  )}
                   <Text style={styles.charCount}>Placeholders: {'{{name}}'}, {'{{first_name}}'}, {'{{company}}'}</Text>
                 </>
               )}
@@ -2138,82 +3437,51 @@ export default function CampaignsScreen() {
 
         {campaignType === 'sms' && (
           <>
-            <TouchableOpacity
-              style={styles.settingsToggle}
-              onPress={() => setShowSMSSettings(!showSMSSettings)}
-            >
-              <View style={styles.settingsToggleLeft}>
-                <Settings size={20} color={Colors.light.tint} />
-                <Text style={styles.settingsToggleText}>SMS Configuration</Text>
-              </View>
-              {showSMSSettings ? (
-                <ChevronUp size={20} color={Colors.light.tint} />
-              ) : (
-                <ChevronDown size={20} color={Colors.light.tint} />
-              )}
-            </TouchableOpacity>
+            <Text style={styles.helpText}>
+              SMS configuration is available in the SMS Settings popup (button above).
+            </Text>
 
-            {showSMSSettings && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Dialog eSMS Configuration</Text>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Dialog Credit Remaining</Text>
+              <View style={styles.infoBox}>
+                <Text style={styles.infoText}>
+                  {loadingDialogCredit
+                    ? 'Checking Dialog eSMS credit...'
+                    : `Credit remaining: ${dialogCreditRemaining !== null ? dialogCreditRemaining : 'Not available'}`}
+                </Text>
 
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    {dialogSMSSettings?.esms_username
-                      ? 'SMS campaigns use Dialog eSMS settings from the Settings page. The details below show the active configuration.'
-                      : 'Dialog eSMS is not configured yet. Configure it in Settings > Dialog eSMS Settings. Legacy SMS settings are still available in the background as fallback only.'}
+                {dialogCreditUpdatedAt ? (
+                  <Text style={styles.helpText}>
+                    Last checked: {new Date(dialogCreditUpdatedAt).toLocaleString()}
                   </Text>
-                </View>
+                ) : null}
 
-                <Text style={styles.label}>Provider</Text>
-                <Text style={styles.configValueText}>
-                  {dialogSMSSettings?.esms_username ? 'Dialog eSMS (Active)' : (smsApiUrl && smsApiKey ? 'Legacy SMS API (Fallback only)' : 'Not configured')}
-                </Text>
-
-                <Text style={styles.label}>Dialog Username</Text>
-                <Text style={styles.configValueText}>
-                  {dialogSMSSettings?.esms_username || 'Not set'}
-                </Text>
-
-                <Text style={styles.label}>Source Address / Mask</Text>
-                <Text style={styles.configValueText}>
-                  {dialogSMSSettings?.default_source_address || 'Not set'}
-                </Text>
-
-                <Text style={styles.label}>Payment Method</Text>
-                <Text style={styles.configValueText}>
-                  {dialogSMSSettings
-                    ? (dialogSMSSettings.default_payment_method === 4 ? 'Package (4)' : 'Wallet (0)')
-                    : 'Not set'}
-                </Text>
-
-                <Text style={styles.label}>Delivery Report Webhook</Text>
-                <Text style={styles.configValueText} numberOfLines={2}>
-                  {dialogSMSSettings?.push_notification_url || 'Not set'}
-                </Text>
-
-                {(smsApiUrl && smsApiKey) && (
-                  <>
-                    <Text style={styles.label}>Legacy Fallback</Text>
-                    <Text style={styles.configValueText}>Configured (hidden fields retained for fallback only)</Text>
-                  </>
+                {!!dialogCreditError && (
+                  <Text style={styles.dialogCreditErrorText}>{dialogCreditError}</Text>
                 )}
 
                 <View style={styles.buttonRow}>
                   <TouchableOpacity
                     style={[styles.actionButton, styles.testButton]}
-                    onPress={testSMSConnection}
-                    disabled={testingSMS}
+                    onPress={() => refreshDialogCredit(true)}
+                    disabled={loadingDialogCredit}
                   >
-                    {testingSMS ? (
+                    {loadingDialogCredit ? (
                       <ActivityIndicator size="small" color={Colors.light.tint} />
                     ) : (
-                      <Text style={styles.testButtonText}>Test Connection</Text>
+                      <Text style={styles.testButtonText}>Refresh Credit</Text>
                     )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton]}
+                    onPress={openDialogTopUp}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>Top Up in Dialog</Text>
                   </TouchableOpacity>
                 </View>
               </View>
-            )}
+            </View>
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>SMS Message</Text>
@@ -3081,8 +4349,209 @@ export default function CampaignsScreen() {
           )}
         </TouchableOpacity>
 
+        {campaignType === 'email' && pendingEmailCampaign && pendingEmailCampaign.recipients.length > 0 && (
+          <>
+            <TouchableOpacity
+              style={[
+                styles.sendRemainingButton,
+                (!canSendEmailRemaining || isSending) && styles.sendButtonDisabled,
+              ]}
+              onPress={sendRemainingEmailCampaign}
+              disabled={!canSendEmailRemaining || isSending}
+            >
+              <Text style={styles.sendRemainingButtonText}>
+                Send Remaining ({Math.min(pendingEmailCampaign.maxPerWindow, pendingEmailCampaign.recipients.length)})
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.remainingInfoText}>
+              Queued: {pendingEmailCampaign.recipients.length} email(s) | Max per 24h: {pendingEmailCampaign.maxPerWindow}
+            </Text>
+            {!canSendEmailRemaining && (
+              <Text style={styles.remainingWaitText}>
+                Available in: {formatWaitDuration(emailRemainingWaitMs)}
+              </Text>
+            )}
+          </>
+        )}
+
+        {campaignType === 'email' && (
+          <View style={styles.serverQueueCard}>
+            <View style={styles.serverQueueHeader}>
+              <Text style={styles.serverQueueTitle}>Server Auto Queue</Text>
+              <TouchableOpacity
+                style={[styles.serverQueueRefreshButton, loadingServerEmailQueue && styles.sendButtonDisabled]}
+                onPress={() => refreshServerEmailQueueStatus(true)}
+                disabled={loadingServerEmailQueue || isSending}
+              >
+                {loadingServerEmailQueue ? (
+                  <ActivityIndicator size="small" color={Colors.light.tint} />
+                ) : (
+                  <Text style={styles.serverQueueRefreshButtonText}>Refresh</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.serverQueueSummary}>
+              Jobs: {serverEmailQueueLength} | Due now: {serverEmailQueueDueJobs}
+            </Text>
+
+            {serverEmailQueueJobs.length === 0 ? (
+              <Text style={styles.serverQueueEmptyText}>No server queued recipients.</Text>
+            ) : (
+              serverEmailQueueJobs.map((job) => (
+                <View key={job.id} style={styles.serverQueueJobCard}>
+                  <Text style={styles.serverQueueJobTitle}>
+                    {job.campaignKey ? `Campaign: ${job.campaignKey}` : `Job: ${job.id}`}
+                  </Text>
+                  <Text style={styles.serverQueueJobMeta}>
+                    Next send: {job.waitUntil > 0 ? new Date(job.waitUntil).toLocaleString() : 'Now'}
+                  </Text>
+                  <Text style={styles.serverQueueJobMeta}>
+                    Remaining: {job.remainingRecipients} | Max per 24h: {job.maxPerWindow}
+                  </Text>
+                  {job.lastRunAt > 0 && (
+                    <Text style={styles.serverQueueJobMeta}>
+                      Last run: {new Date(job.lastRunAt).toLocaleString()} (Success {job.lastRunSuccess}, Failed {job.lastRunFailed})
+                    </Text>
+                  )}
+                  <Text style={styles.serverQueueRecipientsTitle}>Recipients</Text>
+                  {job.recipients.length === 0 ? (
+                    <Text style={styles.serverQueueRecipientText}>No recipient preview available.</Text>
+                  ) : (
+                    job.recipients.map((recipient, idx) => (
+                      <Text key={`${job.id}-${recipient.email}-${idx}`} style={styles.serverQueueRecipientText}>
+                        {idx + 1}. {recipient.name || 'Unknown'} - {recipient.email}
+                      </Text>
+                    ))
+                  )}
+                  {job.recipientsPreviewTruncated && (
+                    <Text style={styles.serverQueueTruncatedText}>
+                      Showing first {job.recipients.length} recipients for this job.
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        )}
+
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <Modal
+        visible={showAdvancedSettingsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAdvancedSettingsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {campaignType === 'email' ? 'Email Advanced Settings' : 'SMS Settings'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowAdvancedSettingsModal(false)}>
+                <X size={20} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {campaignType === 'email' && (
+                <>
+                  <Text style={styles.label}>Email Batch Size</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={emailBatchSize}
+                    onChangeText={setEmailBatchSize}
+                    placeholder="25"
+                    keyboardType="number-pad"
+                  />
+                  <Text style={styles.helpText}>
+                    Number of emails sent per batch request (1-100). Smaller is slower but more reliable on shared hosting.
+                  </Text>
+
+                  <Text style={styles.label}>Email Batch Delay (ms)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={emailBatchDelayMs}
+                    onChangeText={setEmailBatchDelayMs}
+                    placeholder="1500"
+                    keyboardType="number-pad"
+                  />
+                  <Text style={styles.helpText}>
+                    Delay between email batches to reduce SMTP/server overload.
+                  </Text>
+
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.saveSettingsButton, { marginTop: 12 }]}
+                    onPress={saveCampaignSettings}
+                  >
+                    <Text style={styles.saveSettingsButtonText}>Save Settings</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {campaignType === 'sms' && (
+                <>
+                  <Text style={styles.sectionTitle}>Dialog eSMS Configuration</Text>
+                  <View style={styles.infoBox}>
+                    <Text style={styles.infoText}>
+                      {dialogSMSSettings?.esms_username
+                        ? 'SMS campaigns use Dialog eSMS settings from the Settings page. These details show the active configuration.'
+                        : 'Dialog eSMS is not configured yet. Configure it in Settings > Dialog eSMS Settings. Legacy SMS settings are retained as fallback.'}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.label}>Provider</Text>
+                  <Text style={styles.configValueText}>
+                    {dialogSMSSettings?.esms_username ? 'Dialog eSMS (Active)' : (smsApiUrl && smsApiKey ? 'Legacy SMS API (Fallback only)' : 'Not configured')}
+                  </Text>
+
+                  <Text style={styles.label}>Dialog Username</Text>
+                  <Text style={styles.configValueText}>
+                    {dialogSMSSettings?.esms_username || 'Not set'}
+                  </Text>
+
+                  <Text style={styles.label}>Source Address / Mask</Text>
+                  <Text style={styles.configValueText}>
+                    {dialogSMSSettings?.default_source_address || 'Not set'}
+                  </Text>
+
+                  <Text style={styles.label}>Payment Method</Text>
+                  <Text style={styles.configValueText}>
+                    {dialogSMSSettings
+                      ? (dialogSMSSettings.default_payment_method === 4 ? 'Package (4)' : 'Wallet (0)')
+                      : 'Not set'}
+                  </Text>
+
+                  <Text style={styles.label}>Delivery Report Webhook</Text>
+                  <Text style={styles.configValueText} numberOfLines={2}>
+                    {dialogSMSSettings?.push_notification_url || 'Not set'}
+                  </Text>
+
+                  {(smsApiUrl && smsApiKey) && (
+                    <>
+                      <Text style={styles.label}>Legacy Fallback</Text>
+                      <Text style={styles.configValueText}>Configured (hidden fields retained for fallback only)</Text>
+                    </>
+                  )}
+
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.testButton, { marginTop: 12 }]}
+                    onPress={testSMSConnection}
+                    disabled={testingSMS}
+                  >
+                    {testingSMS ? (
+                      <ActivityIndicator size="small" color={Colors.light.tint} />
+                    ) : (
+                      <Text style={styles.testButtonText}>Test Connection</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <ConfirmDialog
         visible={confirmVisible}
@@ -3120,6 +4589,23 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap' as const,
     gap: 12,
     marginBottom: 20,
+  },
+  advancedSettingsTrigger: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    marginBottom: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  advancedSettingsTriggerText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
   },
   typeButton: {
     flex: 1,
@@ -3201,6 +4687,181 @@ const styles = StyleSheet.create({
   },
   formatButtonTextActive: {
     color: Colors.light.tint,
+  },
+  newsletterBuilderCard: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    gap: 10,
+  },
+  newsletterBuilderActions: {
+    flexDirection: 'row' as const,
+    gap: 10,
+  },
+  newsletterActionButton: {
+    flex: 1,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+  },
+  newsletterActionButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  newsletterBlockCard: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: Colors.light.background,
+  },
+  newsletterBlockHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 8,
+    gap: 8,
+  },
+  newsletterBlockTitle: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  newsletterBlockHeaderActions: {
+    flexDirection: 'row' as const,
+    gap: 6,
+  },
+  newsletterMiniButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  newsletterMiniButtonText: {
+    fontSize: 12,
+    color: Colors.light.text,
+  },
+  newsletterMiniDeleteButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  newsletterMiniDeleteButtonText: {
+    fontSize: 12,
+    color: '#B91C1C',
+    fontWeight: '600' as const,
+  },
+  newsletterTextArea: {
+    minHeight: 90,
+  },
+  newsletterPickerWrap: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: Colors.light.card,
+    overflow: 'hidden' as const,
+  },
+  newsletterPicker: {
+    height: 48,
+    color: Colors.light.text,
+  },
+  newsletterColorRow: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+    marginBottom: 8,
+  },
+  newsletterColorSwatch: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  newsletterColorSwatchActive: {
+    borderColor: Colors.light.tint,
+    borderWidth: 3,
+  },
+  newsletterColorSwatchWhite: {
+    borderColor: '#CBD5E1',
+  },
+  newsletterAttachButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.secondary,
+  },
+  newsletterAttachButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  newsletterImagePreviewWrap: {
+    marginTop: 10,
+    borderRadius: 8,
+    overflow: 'hidden' as const,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  newsletterImagePreview: {
+    width: '100%',
+    height: 180,
+    backgroundColor: Colors.light.background,
+    alignSelf: 'center' as const,
+  },
+  newsletterImagePlaceholder: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderStyle: 'dashed' as const,
+    borderRadius: 8,
+    paddingVertical: 24,
+    alignItems: 'center' as const,
+    gap: 6,
+  },
+  newsletterImagePlaceholderText: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  newsletterPreview: {
+    minHeight: 130,
+    color: Colors.light.tabIconDefault,
+  },
+  newsletterLivePreview: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+  },
+  newsletterLivePreviewImageWrap: {
+    marginVertical: 8,
+    alignItems: 'center' as const,
+  },
+  newsletterPreviewCaption: {
+    marginTop: 6,
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+    textAlign: 'center' as const,
   },
   attachmentButton: {
     flexDirection: 'row' as const,
@@ -3361,6 +5022,143 @@ const styles = StyleSheet.create({
     fontWeight: '700' as const,
     color: '#FFFFFF',
   },
+  sendRemainingButton: {
+    paddingVertical: 14,
+    borderRadius: 8,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    marginTop: 12,
+  },
+  sendRemainingButtonText: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  remainingInfoText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+    textAlign: 'center' as const,
+  },
+  remainingWaitText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: Colors.light.danger,
+    textAlign: 'center' as const,
+  },
+  serverQueueCard: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.card,
+    gap: 8,
+  },
+  serverQueueHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    gap: 12,
+  },
+  serverQueueTitle: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  serverQueueRefreshButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.secondary,
+    minWidth: 90,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  serverQueueRefreshButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  serverQueueSummary: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  serverQueueEmptyText: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  serverQueueJobCard: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    gap: 3,
+  },
+  serverQueueJobTitle: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  serverQueueJobMeta: {
+    fontSize: 12,
+    color: Colors.light.tabIconDefault,
+  },
+  serverQueueRecipientsTitle: {
+    marginTop: 5,
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  serverQueueRecipientText: {
+    fontSize: 12,
+    color: Colors.light.text,
+  },
+  serverQueueTruncatedText: {
+    marginTop: 4,
+    fontSize: 11,
+    color: Colors.light.tabIconDefault,
+    fontStyle: 'italic' as const,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center' as const,
+    padding: 16,
+  },
+  modalCard: {
+    maxHeight: '85%',
+    backgroundColor: Colors.light.background,
+    borderRadius: 12,
+    overflow: 'hidden' as const,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  modalHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: Colors.light.card,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  modalBody: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
   settingsToggle: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
@@ -3431,6 +5229,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#92400E',
     lineHeight: 18,
+  },
+  dialogCreditErrorText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: Colors.light.danger,
+    lineHeight: 16,
   },
   configValueText: {
     fontSize: 14,

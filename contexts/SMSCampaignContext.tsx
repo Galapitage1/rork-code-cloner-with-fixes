@@ -10,6 +10,15 @@ const SMS_RECIPIENTS_KEY = '@sms_recipients';
 const SMS_DELIVERY_EVENTS_KEY = '@sms_delivery_events';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_RORK_API_BASE_URL || '';
+type SMSLoginTestResult = {
+  success: boolean;
+  message?: string;
+  error?: string;
+  comment?: string;
+  remainingCount?: number | null;
+  walletBalance?: number | null;
+  [key: string]: any;
+};
 
 const getSMSBackendBase = (): string => {
   if (BACKEND_URL) return BACKEND_URL;
@@ -108,7 +117,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
     }
   };
 
-  const testLogin = async (username: string, password: string): Promise<{ success: boolean; message?: string; error?: string }> => {
+  const testLogin = async (username: string, password: string): Promise<SMSLoginTestResult> => {
     try {
       const response = await fetch(getSMSApiEndpoint('test-login'), {
         // On tracker.tecclk.com, use PHP endpoints (shared hosting). Else use Hono endpoints.
