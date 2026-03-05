@@ -133,6 +133,7 @@ export default function CampaignsScreen() {
   const { currentUser } = useAuth();
   const {
     settings: dialogSMSSettings,
+    campaigns: smsCampaigns,
     sendCampaign: sendDialogSMSCampaign,
     testLogin: testDialogSMSLogin,
   } = useSMSCampaign();
@@ -161,6 +162,7 @@ export default function CampaignsScreen() {
   const [testingSMS, setTestingSMS] = useState(false);
   const [loadingDialogCredit, setLoadingDialogCredit] = useState(false);
   const [dialogCreditRemaining, setDialogCreditRemaining] = useState<number | string | null>(null);
+  const [dialogCreditSource, setDialogCreditSource] = useState<'live' | 'last_known' | null>(null);
   const [dialogCreditError, setDialogCreditError] = useState<string>('');
   const [dialogCreditUpdatedAt, setDialogCreditUpdatedAt] = useState<number | null>(null);
   const [loadingFailedSmsBatches, setLoadingFailedSmsBatches] = useState(false);
@@ -238,6 +240,26 @@ export default function CampaignsScreen() {
   const [whatsappCampaignTemplateHeaderMediaUrl, setWhatsappCampaignTemplateHeaderMediaUrl] = useState<string>('');
   const [whatsappCampaignTemplateHeaderMediaType, setWhatsappCampaignTemplateHeaderMediaType] = useState<'image' | 'video' | 'document'>('image');
   const [whatsappCampaignTemplateButtonParamsText, setWhatsappCampaignTemplateButtonParamsText] = useState<string>('');
+
+  const lastKnownDialogBalance = React.useMemo(() => {
+    const withBalance = [...smsCampaigns]
+      .filter((campaign) => campaign.wallet_balance !== null && campaign.wallet_balance !== undefined && String(campaign.wallet_balance).trim() !== '')
+      .sort((a, b) => {
+        const timeA = a.updatedAt || a.createdAt || 0;
+        const timeB = b.updatedAt || b.createdAt || 0;
+        return timeB - timeA;
+      });
+
+    if (withBalance.length === 0) {
+      return null;
+    }
+
+    const latest = withBalance[0];
+    return {
+      value: latest.wallet_balance as number | string,
+      timestamp: latest.updatedAt || latest.createdAt || Date.now(),
+    };
+  }, [smsCampaigns]);
 
   const loadCampaignSettings = async () => {
     try {
@@ -1362,6 +1384,7 @@ export default function CampaignsScreen() {
 
     if (!hasDialogSMSConfig) {
       setDialogCreditRemaining(null);
+      setDialogCreditSource(null);
       setDialogCreditError('Dialog eSMS is not configured');
       setDialogCreditUpdatedAt(null);
       if (showAlert) {
@@ -1384,12 +1407,26 @@ export default function CampaignsScreen() {
       }
 
       const credit = extractDialogCreditValue(result);
-      setDialogCreditRemaining(credit);
-      setDialogCreditUpdatedAt(Date.now());
 
       if (credit === null) {
-        const noBalanceMsg = result?.comment || 'Login successful, but Dialog did not return a credit value.';
-        setDialogCreditError(noBalanceMsg);
+        if (lastKnownDialogBalance) {
+          setDialogCreditRemaining(lastKnownDialogBalance.value);
+          setDialogCreditSource('last_known');
+          setDialogCreditUpdatedAt(lastKnownDialogBalance.timestamp);
+          setDialogCreditError(
+            result?.comment || 'Dialog login works, but current balance is not returned by the API. Showing last known balance from recent campaign activity.'
+          );
+        } else {
+          setDialogCreditRemaining(null);
+          setDialogCreditSource(null);
+          setDialogCreditUpdatedAt(Date.now());
+          const noBalanceMsg = result?.comment || 'Login successful, but Dialog did not return a credit value.';
+          setDialogCreditError(noBalanceMsg);
+        }
+      } else {
+        setDialogCreditRemaining(credit);
+        setDialogCreditSource('live');
+        setDialogCreditUpdatedAt(Date.now());
       }
 
       if (showAlert) {
@@ -1402,14 +1439,23 @@ export default function CampaignsScreen() {
       }
     } catch (error) {
       const message = (error as Error).message || 'Failed to fetch Dialog credit';
-      setDialogCreditError(message);
+      if (lastKnownDialogBalance) {
+        setDialogCreditRemaining(lastKnownDialogBalance.value);
+        setDialogCreditSource('last_known');
+        setDialogCreditUpdatedAt(lastKnownDialogBalance.timestamp);
+        setDialogCreditError(`${message} Showing last known balance from recent campaign activity.`);
+      } else {
+        setDialogCreditRemaining(null);
+        setDialogCreditSource(null);
+        setDialogCreditError(message);
+      }
       if (showAlert) {
         Alert.alert('Failed to Refresh Credit', message);
       }
     } finally {
       setLoadingDialogCredit(false);
     }
-  }, [dialogSMSSettings, testDialogSMSLogin]);
+  }, [dialogSMSSettings, testDialogSMSLogin, lastKnownDialogBalance]);
 
   const openDialogTopUp = React.useCallback(async () => {
     try {
@@ -1465,14 +1511,24 @@ export default function CampaignsScreen() {
         }
 
         const credit = extractDialogCreditValue(result);
-        setDialogCreditRemaining(credit);
-        setDialogCreditUpdatedAt(Date.now());
-        setDialogCreditError('');
+        if (credit === null && lastKnownDialogBalance) {
+          setDialogCreditRemaining(lastKnownDialogBalance.value);
+          setDialogCreditSource('last_known');
+          setDialogCreditUpdatedAt(lastKnownDialogBalance.timestamp);
+          setDialogCreditError('Dialog login succeeded, but current balance is not returned by the API. Showing last known balance.');
+        } else {
+          setDialogCreditRemaining(credit);
+          setDialogCreditSource(credit === null ? null : 'live');
+          setDialogCreditUpdatedAt(Date.now());
+          setDialogCreditError('');
+        }
 
         Alert.alert(
           'Connection Test Successful',
           credit === null
-            ? 'Dialog eSMS login is configured correctly'
+            ? (lastKnownDialogBalance
+              ? `Dialog eSMS login is configured correctly.\nCurrent balance is unavailable from API.\nLast known balance: ${lastKnownDialogBalance.value}`
+              : 'Dialog eSMS login is configured correctly')
             : `Dialog eSMS login is configured correctly.\nCredit remaining: ${credit}`
         );
         return;
@@ -3447,12 +3503,13 @@ export default function CampaignsScreen() {
                 <Text style={styles.infoText}>
                   {loadingDialogCredit
                     ? 'Checking Dialog eSMS credit...'
-                    : `Credit remaining: ${dialogCreditRemaining !== null ? dialogCreditRemaining : 'Not available'}`}
+                    : `Credit remaining${dialogCreditSource === 'last_known' ? ' (last known)' : ''}: ${dialogCreditRemaining !== null ? dialogCreditRemaining : 'Not available'}`}
                 </Text>
 
                 {dialogCreditUpdatedAt ? (
                   <Text style={styles.helpText}>
-                    Last checked: {new Date(dialogCreditUpdatedAt).toLocaleString()}
+                    {dialogCreditSource === 'last_known' ? 'Last known from campaign: ' : 'Last checked: '}
+                    {new Date(dialogCreditUpdatedAt).toLocaleString()}
                   </Text>
                 ) : null}
 
