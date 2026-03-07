@@ -27,6 +27,7 @@ export interface Recipe {
   components: RecipeComponent[];
   updatedAt?: number;
   deviceId?: string;
+  deleted?: boolean;
 }
 
 export interface LinkedProductComponent {
@@ -151,6 +152,10 @@ export interface ProductConversion {
   id: string;
   fromProductId: string;
   toProductId: string;
+  fromProductName?: string;
+  fromProductUnit?: string;
+  toProductName?: string;
+  toProductUnit?: string;
   conversionFactor: number;
   createdAt: number;
   updatedAt?: number;
@@ -473,6 +478,7 @@ export interface SMSProviderSettings {
   provider: 'dialog_esms';
   esms_username: string;
   esms_password_encrypted: string;
+  esms_url_key?: string;
   default_source_address?: string;
   default_payment_method: 0 | 4;
   push_notification_url?: string;

@@ -7,6 +7,7 @@ interface SMSProviderSettingsProps {
   settings: {
     esms_username: string;
     esms_password_encrypted: string;
+    esms_url_key?: string;
     default_source_address?: string;
     default_payment_method: 0 | 4;
     push_notification_url?: string;
@@ -15,11 +16,12 @@ interface SMSProviderSettingsProps {
     provider: 'dialog_esms';
     esms_username: string;
     esms_password_encrypted: string;
+    esms_url_key?: string;
     default_source_address?: string;
     default_payment_method: 0 | 4;
     push_notification_url?: string;
   }) => Promise<{ success: boolean; error?: string }>;
-  onTestLogin: (username: string, password: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  onTestLogin: (username: string, password: string, urlKey?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   onSendTest: (mobile: string, message: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   isSaving: boolean;
 }
@@ -27,6 +29,7 @@ interface SMSProviderSettingsProps {
 export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest, isSaving }: SMSProviderSettingsProps) {
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [urlKey, setUrlKey] = useState<string>('');
   const [sourceAddress, setSourceAddress] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<0 | 4>(0);
   const [pushNotificationUrl, setPushNotificationUrl] = useState<string>('');
@@ -35,11 +38,15 @@ export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest,
   const [isTestingLogin, setIsTestingLogin] = useState<boolean>(false);
   const [isSendingTest, setIsSendingTest] = useState<boolean>(false);
   const [loginTestResult, setLoginTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const existingSavedPassword = settings?.esms_password_encrypted || '';
+  const hasEncryptedStoredPassword = existingSavedPassword.startsWith('enc:v1:');
 
   useEffect(() => {
     if (settings) {
       setUsername(settings.esms_username || '');
-      setPassword(settings.esms_password_encrypted || '');
+      const incomingPassword = settings.esms_password_encrypted || '';
+      setPassword(incomingPassword.startsWith('enc:v1:') ? '' : incomingPassword);
+      setUrlKey(settings.esms_url_key || '');
       setSourceAddress(settings.default_source_address || '');
       setPaymentMethod(settings.default_payment_method);
       setPushNotificationUrl(settings.push_notification_url || '');
@@ -47,19 +54,33 @@ export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest,
   }, [settings]);
 
   const handleTestLogin = async () => {
-    if (!username || !password) {
-      Alert.alert('Error', 'Please enter username and password');
+    if (!urlKey && (!username || !password)) {
+      Alert.alert('Error', hasEncryptedStoredPassword ? 'Please enter password to validate login.' : 'Please enter username and password');
       return;
     }
 
     setIsTestingLogin(true);
     setLoginTestResult(null);
 
-    const result = await onTestLogin(username, password);
+    const result = await onTestLogin(username, password, urlKey || undefined);
     setIsTestingLogin(false);
 
     if (result.success) {
-      setLoginTestResult({ success: true, message: result.message || 'Login successful!' });
+      const passwordToSave = password || existingSavedPassword;
+      const saveResult = await onSave({
+        provider: 'dialog_esms',
+        esms_username: username,
+        esms_password_encrypted: passwordToSave,
+        esms_url_key: urlKey || undefined,
+        default_source_address: sourceAddress || undefined,
+        default_payment_method: paymentMethod,
+        push_notification_url: pushNotificationUrl || undefined,
+      });
+      if (saveResult.success) {
+        setLoginTestResult({ success: true, message: `${result.message || 'Login successful!'} Settings auto-saved.` });
+      } else {
+        setLoginTestResult({ success: false, message: `Login OK, but save failed: ${saveResult.error || 'Unknown error'}` });
+      }
     } else {
       setLoginTestResult({ success: false, message: result.error || 'Login failed' });
     }
@@ -89,7 +110,8 @@ export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest,
   };
 
   const handleSave = async () => {
-    if (!username || !password) {
+    const passwordToSave = password || existingSavedPassword;
+    if (!username || !passwordToSave) {
       Alert.alert('Error', 'Username and password are required');
       return;
     }
@@ -97,7 +119,8 @@ export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest,
     const result = await onSave({
       provider: 'dialog_esms',
       esms_username: username,
-      esms_password_encrypted: password,
+      esms_password_encrypted: passwordToSave,
+      esms_url_key: urlKey || undefined,
       default_source_address: sourceAddress || undefined,
       default_payment_method: paymentMethod,
       push_notification_url: pushNotificationUrl || undefined,
@@ -141,6 +164,22 @@ export function SMSProviderSettings({ settings, onSave, onTestLogin, onSendTest,
           secureTextEntry
           autoCapitalize="none"
         />
+        {hasEncryptedStoredPassword && password === '' && (
+          <Text style={styles.hint}>A saved password already exists on server. Enter a new password only if you want to replace it.</Text>
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>URL Key (eSMSQK)</Text>
+        <TextInput
+          style={styles.input}
+          value={urlKey}
+          onChangeText={setUrlKey}
+          placeholder="Paste URL key for balance API"
+          placeholderTextColor="#999"
+          autoCapitalize="none"
+        />
+        <Text style={styles.hint}>Optional - Used to fetch live credit via URL API if dashboard login requires OTP.</Text>
       </View>
 
       <View style={styles.section}>

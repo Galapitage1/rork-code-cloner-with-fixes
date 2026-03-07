@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { SMSProviderSettings, SMSCampaign, SMSRecipient, SMSDeliveryEvent } from '@/types';
 import { useAuth } from './AuthContext';
+import { getFromServer, saveDeltaToServer } from '@/utils/directSync';
 
 const SMS_SETTINGS_KEY = '@sms_provider_settings';
 const SMS_CAMPAIGNS_KEY = '@sms_campaigns';
@@ -65,7 +66,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [currentUser?.id]);
 
   const loadData = async () => {
     try {
@@ -89,6 +90,29 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
       if (eventsData) {
         setDeliveryEvents(JSON.parse(eventsData));
       }
+
+      {
+        try {
+          const remoteSettings = await getFromServer<SMSProviderSettings>({
+            userId: currentUser?.id || 'bootstrap',
+            dataType: 'sms_provider_settings',
+            includeDeleted: true,
+            minDays: 3650,
+          });
+
+          const activeSettings = remoteSettings
+            .filter((item: any) => item && item.deleted !== true)
+            .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
+
+          if (activeSettings.length > 0) {
+            const latest = activeSettings[0];
+            await AsyncStorage.setItem(SMS_SETTINGS_KEY, JSON.stringify(latest));
+            setSettings(latest);
+          }
+        } catch (remoteError) {
+          console.warn('[SMS Context] Could not load sms_provider_settings from server:', remoteError);
+        }
+      }
     } catch (error) {
       console.error('[SMS Context] Load error:', error);
     } finally {
@@ -108,6 +132,20 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
 
       await AsyncStorage.setItem(SMS_SETTINGS_KEY, JSON.stringify(settingsToSave));
       setSettings(settingsToSave);
+
+      try {
+        await saveDeltaToServer<SMSProviderSettings>(
+          [settingsToSave],
+          { userId: currentUser?.id || 'bootstrap', dataType: 'sms_provider_settings' }
+        );
+      } catch (syncError: any) {
+        console.error('[SMS Context] Failed to sync sms_provider_settings:', syncError);
+        return {
+          success: false,
+          error: 'Saved locally, but failed to sync eSMS settings to server. Quick Feedback SMS alerts will not send until sync succeeds.',
+        };
+      }
+
       return { success: true };
     } catch (error: any) {
       console.error('[SMS Context] Save settings error:', error);
@@ -117,7 +155,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
     }
   };
 
-  const testLogin = async (username: string, password: string): Promise<SMSLoginTestResult> => {
+  const testLogin = async (username: string, password: string, urlKey?: string): Promise<SMSLoginTestResult> => {
     try {
       const response = await fetch(getSMSApiEndpoint('test-login'), {
         // On tracker.tecclk.com, use PHP endpoints (shared hosting). Else use Hono endpoints.
@@ -127,6 +165,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
         body: JSON.stringify({
           esms_username: username,
           esms_password: password,
+          esms_url_key: urlKey || '',
         }),
       });
 
@@ -151,6 +190,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
           settings: {
             esms_username: settings.esms_username,
             esms_password: settings.esms_password_encrypted,
+            esms_url_key: settings.esms_url_key,
             default_source_address: settings.default_source_address,
             default_payment_method: settings.default_payment_method,
           },
@@ -189,6 +229,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
           settings: {
             esms_username: settings.esms_username,
             esms_password: settings.esms_password_encrypted,
+            esms_url_key: settings.esms_url_key,
             default_source_address: settings.default_source_address,
             default_payment_method: settings.default_payment_method,
             push_notification_url: settings.push_notification_url,
@@ -266,6 +307,7 @@ export const [SMSCampaignContext, useSMSCampaign] = createContextHook(() => {
           settings: {
             esms_username: settings.esms_username,
             esms_password: settings.esms_password_encrypted,
+            esms_url_key: settings.esms_url_key,
           },
           transaction_id: transactionId,
         }),

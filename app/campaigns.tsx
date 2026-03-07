@@ -402,6 +402,7 @@ export default function CampaignsScreen() {
               provider: 'dialog_esms',
               esms_username: dialogSMSSettings.esms_username || '',
               esms_password_encrypted: dialogSMSSettings.esms_password_encrypted || '',
+              esms_url_key: dialogSMSSettings.esms_url_key || '',
               default_source_address: dialogSMSSettings.default_source_address || '',
               default_payment_method: dialogSMSSettings.default_payment_method ?? 0,
               push_notification_url: dialogSMSSettings.push_notification_url || '',
@@ -409,6 +410,7 @@ export default function CampaignsScreen() {
           : null,
         esms_username: dialogSMSSettings?.esms_username || '',
         esms_password: dialogSMSSettings?.esms_password_encrypted || '',
+        esms_url_key: dialogSMSSettings?.esms_url_key || '',
         default_source_address: dialogSMSSettings?.default_source_address || '',
         default_payment_method: dialogSMSSettings?.default_payment_method ?? 0,
         push_notification_url: dialogSMSSettings?.push_notification_url || '',
@@ -1441,18 +1443,20 @@ export default function CampaignsScreen() {
   };
 
   const refreshDialogCredit = React.useCallback(async (showAlert: boolean = false) => {
-    const hasDialogSMSConfig = !!(
+    const hasDialogSMSLoginConfig = !!(
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
+    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogCreditConfig = hasDialogSMSLoginConfig || hasDialogURLKey;
 
-    if (!hasDialogSMSConfig) {
+    if (!hasDialogCreditConfig) {
       setDialogCreditRemaining(null);
       setDialogCreditSource(null);
       setDialogCreditError('Dialog eSMS is not configured');
       setDialogCreditUpdatedAt(null);
       if (showAlert) {
-        Alert.alert('Dialog eSMS Not Configured', 'Please save Dialog eSMS username/password in Settings first.');
+        Alert.alert('Dialog eSMS Not Configured', 'Please save Dialog eSMS settings or URL key in Settings first.');
       }
       return;
     }
@@ -1462,8 +1466,9 @@ export default function CampaignsScreen() {
       setDialogCreditError('');
 
       const result: any = await testDialogSMSLogin(
-        dialogSMSSettings!.esms_username,
-        dialogSMSSettings!.esms_password_encrypted
+        dialogSMSSettings?.esms_username || '',
+        dialogSMSSettings?.esms_password_encrypted || '',
+        dialogSMSSettings?.esms_url_key || ''
       );
 
       if (!result?.success) {
@@ -1538,22 +1543,27 @@ export default function CampaignsScreen() {
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
+    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogCreditConfig = hasDialogSMSConfig || hasDialogURLKey;
 
-    if (campaignType === 'sms' && hasDialogSMSConfig && !loadingDialogCredit) {
+    if (campaignType === 'sms' && hasDialogCreditConfig && !loadingDialogCredit) {
       refreshDialogCredit(false);
     }
   }, [
     campaignType,
     dialogSMSSettings?.esms_username,
     dialogSMSSettings?.esms_password_encrypted,
+    dialogSMSSettings?.esms_url_key,
     refreshDialogCredit,
   ]);
 
   const testSMSConnection = async () => {
-    const hasDialogSMSConfig = !!(
+    const hasDialogSMSLoginConfig = !!(
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
+    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogSMSConfig = hasDialogSMSLoginConfig || hasDialogURLKey;
 
     if (!hasDialogSMSConfig && (!smsApiUrl || !smsApiKey)) {
       Alert.alert('Configuration Missing', 'Please configure Dialog eSMS settings (preferred) or legacy SMS API settings before testing.');
@@ -1566,8 +1576,9 @@ export default function CampaignsScreen() {
 
       if (hasDialogSMSConfig) {
         const result: any = await testDialogSMSLogin(
-          dialogSMSSettings!.esms_username,
-          dialogSMSSettings!.esms_password_encrypted
+          dialogSMSSettings?.esms_username || '',
+          dialogSMSSettings?.esms_password_encrypted || '',
+          dialogSMSSettings?.esms_url_key || ''
         );
 
         if (!result.success) {
@@ -4630,6 +4641,11 @@ export default function CampaignsScreen() {
                   <Text style={styles.label}>Dialog Username</Text>
                   <Text style={styles.configValueText}>
                     {dialogSMSSettings?.esms_username || 'Not set'}
+                  </Text>
+
+                  <Text style={styles.label}>URL Key (eSMSQK)</Text>
+                  <Text style={styles.configValueText}>
+                    {dialogSMSSettings?.esms_url_key ? 'Configured' : 'Not set'}
                   </Text>
 
                   <Text style={styles.label}>Source Address / Mask</Text>

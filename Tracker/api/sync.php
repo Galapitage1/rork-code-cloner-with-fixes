@@ -19,6 +19,72 @@ function respond($data, $status = 200) {
 $endpoint = isset($_GET['endpoint']) ? preg_replace('/[^a-zA-Z0-9_-]/', '', $_GET['endpoint']) : '';
 if ($endpoint === '') { respond([ 'error' => 'Missing endpoint' ], 400); }
 
+require_once __DIR__ . '/dialog_esms_service.php';
+
+function encrypt_esms_fields_in_record($endpoint, $item) {
+  if (!is_array($item)) {
+    return $item;
+  }
+
+  $encryptValue = function($value) {
+    $raw = is_string($value) ? trim($value) : '';
+    if ($raw === '') {
+      return '';
+    }
+    if (function_exists('dialog_esms_encrypt_secret')) {
+      return dialog_esms_encrypt_secret($raw);
+    }
+    return $raw;
+  };
+
+  if ($endpoint === 'sms_provider_settings') {
+    if (isset($item['esms_password']) && is_string($item['esms_password']) && trim($item['esms_password']) !== '') {
+      $item['esms_password_encrypted'] = $encryptValue($item['esms_password']);
+    }
+    if (isset($item['esms_password_encrypted']) && is_string($item['esms_password_encrypted'])) {
+      $item['esms_password_encrypted'] = $encryptValue($item['esms_password_encrypted']);
+    }
+    if (isset($item['esms_url_key']) && is_string($item['esms_url_key']) && trim($item['esms_url_key']) !== '') {
+      $item['esms_url_key'] = $encryptValue($item['esms_url_key']);
+    }
+    if (isset($item['esms_password'])) {
+      unset($item['esms_password']);
+    }
+  }
+
+  if ($endpoint === 'campaign_settings') {
+    if (isset($item['esms_password']) && is_string($item['esms_password']) && trim($item['esms_password']) !== '') {
+      $item['esms_password_encrypted'] = $encryptValue($item['esms_password']);
+    }
+    if (isset($item['esms_password_encrypted']) && is_string($item['esms_password_encrypted'])) {
+      $item['esms_password_encrypted'] = $encryptValue($item['esms_password_encrypted']);
+    }
+    if (isset($item['esms_url_key']) && is_string($item['esms_url_key']) && trim($item['esms_url_key']) !== '') {
+      $item['esms_url_key'] = $encryptValue($item['esms_url_key']);
+    }
+    if (isset($item['esms_password'])) {
+      unset($item['esms_password']);
+    }
+
+    if (isset($item['dialogSMSSettings']) && is_array($item['dialogSMSSettings'])) {
+      if (isset($item['dialogSMSSettings']['esms_password']) && is_string($item['dialogSMSSettings']['esms_password']) && trim($item['dialogSMSSettings']['esms_password']) !== '') {
+        $item['dialogSMSSettings']['esms_password_encrypted'] = $encryptValue($item['dialogSMSSettings']['esms_password']);
+      }
+      if (isset($item['dialogSMSSettings']['esms_password_encrypted']) && is_string($item['dialogSMSSettings']['esms_password_encrypted'])) {
+        $item['dialogSMSSettings']['esms_password_encrypted'] = $encryptValue($item['dialogSMSSettings']['esms_password_encrypted']);
+      }
+      if (isset($item['dialogSMSSettings']['esms_url_key']) && is_string($item['dialogSMSSettings']['esms_url_key']) && trim($item['dialogSMSSettings']['esms_url_key']) !== '') {
+        $item['dialogSMSSettings']['esms_url_key'] = $encryptValue($item['dialogSMSSettings']['esms_url_key']);
+      }
+      if (isset($item['dialogSMSSettings']['esms_password'])) {
+        unset($item['dialogSMSSettings']['esms_password']);
+      }
+    }
+  }
+
+  return $item;
+}
+
 // Check if this is a delta sync (only updating changed items)
 $isDelta = isset($_GET['delta']) && $_GET['delta'] === 'true';
 
@@ -32,9 +98,24 @@ $dataDir = __DIR__ . '/../data';
 if (!is_dir($dataDir)) { @mkdir($dataDir, 0755, true); }
 $filePath = $dataDir . '/' . $endpoint . '.json';
 
+// Open and lock BEFORE reading to prevent concurrent sync requests from overwriting each other.
+$fp = @fopen($filePath, 'c+');
+if ($fp === false) {
+  $fp = @fopen($filePath, 'w+');
+  if ($fp === false) {
+    respond([ 'error' => 'Failed to open file for writing' ], 500);
+  }
+}
+
+if (!@flock($fp, LOCK_EX)) {
+  @fclose($fp);
+  respond([ 'error' => 'Failed to acquire file lock' ], 500);
+}
+
+@rewind($fp);
+$contents = stream_get_contents($fp);
 $existing = [];
-if (file_exists($filePath)) {
-  $contents = file_get_contents($filePath);
+if ($contents !== false && $contents !== '') {
   $decoded = json_decode($contents, true);
   if (is_array($decoded)) { $existing = $decoded; }
 }
@@ -56,11 +137,17 @@ foreach ($existing as $item) {
 
 // For delta sync, only merge the incoming items (don't send back all data)
 if ($isDelta) {
+  $serverNow = intval(microtime(true) * 1000);
   // Just update the changed items in the existing data
   foreach ($payload as $item) {
     if (!is_array($item) || !isset($item['id'])) { continue; }
+    $item = encrypt_esms_fields_in_record($endpoint, $item);
     $id = $item['id'];
     $incomingUpdatedAt = isset($item['updatedAt']) && is_numeric($item['updatedAt']) ? intval($item['updatedAt']) : 0;
+    if ($incomingUpdatedAt <= 0) {
+      $incomingUpdatedAt = $serverNow;
+      $item['updatedAt'] = $incomingUpdatedAt;
+    }
     
     // For products: Check for duplicates by name+unit and automatically mark as deleted
     if ($endpoint === 'products' && isset($item['name']) && isset($item['unit'])) {
@@ -93,15 +180,23 @@ if ($isDelta) {
       $byId[$id] = $item;
     } else {
       $existingUpdatedAt = isset($byId[$id]['updatedAt']) && is_numeric($byId[$id]['updatedAt']) ? intval($byId[$id]['updatedAt']) : 0;
-      if ($incomingUpdatedAt >= $existingUpdatedAt) {
-        $byId[$id] = $item;
+
+      // Delta payloads are explicit user edits from client-side changedItems.
+      // Accept them even if client clock is behind; normalize timestamp forward so
+      // other devices receive this update on their next delta pull.
+      if ($incomingUpdatedAt <= $existingUpdatedAt) {
+        $incomingUpdatedAt = max($serverNow, $existingUpdatedAt + 1);
+        $item['updatedAt'] = $incomingUpdatedAt;
       }
+
+      $byId[$id] = $item;
     }
   }
 } else {
   // Full sync: merge all items
   foreach ($payload as $item) {
     if (!is_array($item) || !isset($item['id'])) { continue; }
+    $item = encrypt_esms_fields_in_record($endpoint, $item);
     $id = $item['id'];
     $incomingUpdatedAt = isset($item['updatedAt']) && is_numeric($item['updatedAt']) ? intval($item['updatedAt']) : 0;
     
@@ -168,23 +263,11 @@ if (!is_writable($dataDir)) {
   @chmod($dataDir, 0755);
 }
 
-// Write directly to the file with proper locking
-$fp = @fopen($filePath, 'c+');
-if ($fp === false) {
-  // Try to create with proper permissions
-  $fp = @fopen($filePath, 'w');
-  if ($fp === false) {
-    respond([ 'error' => 'Failed to open file for writing' ], 500);
-  }
-}
-
-if (@flock($fp, LOCK_EX)) {
-  @ftruncate($fp, 0);
-  @rewind($fp);
-  @fwrite($fp, json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-  @fflush($fp);
-  @flock($fp, LOCK_UN);
-}
+@ftruncate($fp, 0);
+@rewind($fp);
+@fwrite($fp, json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+@fflush($fp);
+@flock($fp, LOCK_UN);
 @fclose($fp);
 
 // Set file permissions

@@ -78,7 +78,7 @@ function dialog_esms_decrypt_secret($storedValue) {
     return is_string($plain) ? $plain : '';
 }
 
-function dialog_esms_resolve_password($value) {
+function dialog_esms_resolve_secret($value) {
     $raw = (string)$value;
     if ($raw === '') {
         return '';
@@ -87,6 +87,14 @@ function dialog_esms_resolve_password($value) {
         return dialog_esms_decrypt_secret($raw);
     }
     return $raw;
+}
+
+function dialog_esms_resolve_password($value) {
+    return dialog_esms_resolve_secret($value);
+}
+
+function dialog_esms_resolve_url_key($value) {
+    return dialog_esms_resolve_secret($value);
 }
 
 function dialog_esms_http_post_json($url, $payload, $bearerToken = null) {
@@ -271,6 +279,87 @@ function dialog_esms_fetch_dashboard_wallet_balance($username, $password) {
     }
 
     throw new Exception(implode(' | ', $errors));
+}
+
+function dialog_esms_extract_balance_value($data) {
+    if (!is_array($data)) {
+        return null;
+    }
+
+    $directKeys = [
+        'walletBalance',
+        'remainingCount',
+        'wallet_balance',
+        'remaining_count',
+        'balance',
+        'balanceAmount',
+        'wallet',
+    ];
+
+    foreach ($directKeys as $key) {
+        if (isset($data[$key]) && $data[$key] !== null && trim((string)$data[$key]) !== '') {
+            return $data[$key];
+        }
+    }
+
+    foreach ($data as $value) {
+        if (is_array($value)) {
+            $nested = dialog_esms_extract_balance_value($value);
+            if ($nested !== null && trim((string)$nested) !== '') {
+                return $nested;
+            }
+        }
+    }
+
+    return null;
+}
+
+function dialog_esms_fetch_url_wallet_balance($urlKey) {
+    $resolvedKey = trim(dialog_esms_resolve_url_key($urlKey));
+    if ($resolvedKey === '') {
+        throw new Exception('Missing eSMS URL key');
+    }
+
+    $endpoint = 'https://e-sms.dialog.lk/api/v1/message-via-url/check/balance?esmsqk=' . rawurlencode($resolvedKey);
+    $response = dialog_esms_http_get_json($endpoint, null);
+
+    if (!empty($response['curlError'])) {
+        throw new Exception('URL balance connection error: ' . $response['curlError']);
+    }
+
+    $data = is_array($response['data']) ? $response['data'] : [];
+    $balance = dialog_esms_extract_balance_value($data);
+
+    // URL API may return plain text like: "1|1732.18" (not JSON).
+    if (($balance === null || trim((string)$balance) === '') && isset($response['raw'])) {
+        $raw = trim((string)$response['raw']);
+        if ($raw !== '') {
+            $parts = explode('|', $raw);
+            if (count($parts) >= 2) {
+                $statusToken = trim((string)$parts[0]);
+                $balanceToken = trim((string)$parts[1]);
+                if (($statusToken === '1' || strcasecmp($statusToken, 'success') === 0) && $balanceToken !== '') {
+                    $balance = $balanceToken;
+                }
+            } elseif (is_numeric($raw)) {
+                $balance = $raw;
+            }
+        }
+    }
+
+    if ($response['httpCode'] >= 200 && $response['httpCode'] < 300 && $balance !== null && trim((string)$balance) !== '') {
+        return [
+            'walletBalance' => $balance,
+            'remainingCount' => $balance,
+            'raw' => $data,
+        ];
+    }
+
+    $comment = isset($data['comment']) ? trim((string)$data['comment']) : '';
+    $message = isset($data['message']) ? trim((string)$data['message']) : '';
+    $rawPreview = isset($response['raw']) ? trim((string)$response['raw']) : '';
+    $errorMsg = $comment !== '' ? $comment : ($message !== '' ? $message : ($rawPreview !== '' ? ('Unexpected balance API response: ' . $rawPreview) : 'No balance returned from URL balance API'));
+    throw new Exception($errorMsg);
 }
 
 function dialog_esms_normalize_mobile($mobile) {
