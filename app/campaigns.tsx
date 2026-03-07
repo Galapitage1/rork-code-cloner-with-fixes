@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useRouter } from 'expo-router';
 import {
   View,
   Text,
@@ -15,7 +16,7 @@ import {
 } from 'react-native';
 
 
-import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox, Image as ImageIcon, FileText, Video, Music } from 'lucide-react-native';
+import { Mail, MessageSquare, Send, ChevronDown, ChevronUp, X, CheckSquare, Square, Paperclip, Settings, Phone, Inbox, Image as ImageIcon, FileText, Video, Music, Gift } from 'lucide-react-native';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -130,6 +131,7 @@ type ServerQueuedEmailJob = {
 };
 
 export default function CampaignsScreen() {
+  const router = useRouter();
   const { customers } = useCustomers();
   const { currentUser } = useAuth();
   const {
@@ -261,6 +263,18 @@ export default function CampaignsScreen() {
       timestamp: latest.updatedAt || latest.createdAt || Date.now(),
     };
   }, [smsCampaigns]);
+
+  const effectiveDialogURLKey = React.useMemo(() => {
+    const explicitKey = String(dialogSMSSettings?.esms_url_key || '').trim();
+    if (explicitKey) return explicitKey;
+
+    // Backward compatibility: some existing setups stored Dialog URL key in legacy smsApiKey.
+    const legacyKey = String(smsApiKey || '').trim();
+    const looksLikeJwt = legacyKey.split('.').length === 3;
+    if (looksLikeJwt) return legacyKey;
+
+    return '';
+  }, [dialogSMSSettings?.esms_url_key, smsApiKey]);
 
   const applyCampaignSettings = (parsed: any) => {
     setSmtpHost(parsed.smtpHost || '');
@@ -1447,7 +1461,7 @@ export default function CampaignsScreen() {
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
-    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogURLKey = !!effectiveDialogURLKey;
     const hasDialogCreditConfig = hasDialogSMSLoginConfig || hasDialogURLKey;
 
     if (!hasDialogCreditConfig) {
@@ -1468,7 +1482,7 @@ export default function CampaignsScreen() {
       const result: any = await testDialogSMSLogin(
         dialogSMSSettings?.esms_username || '',
         dialogSMSSettings?.esms_password_encrypted || '',
-        dialogSMSSettings?.esms_url_key || ''
+        effectiveDialogURLKey
       );
 
       if (!result?.success) {
@@ -1524,7 +1538,7 @@ export default function CampaignsScreen() {
     } finally {
       setLoadingDialogCredit(false);
     }
-  }, [dialogSMSSettings, testDialogSMSLogin, lastKnownDialogBalance]);
+  }, [dialogSMSSettings, effectiveDialogURLKey, testDialogSMSLogin, lastKnownDialogBalance]);
 
   const openDialogTopUp = React.useCallback(async () => {
     try {
@@ -1543,7 +1557,7 @@ export default function CampaignsScreen() {
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
-    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogURLKey = !!effectiveDialogURLKey;
     const hasDialogCreditConfig = hasDialogSMSConfig || hasDialogURLKey;
 
     if (campaignType === 'sms' && hasDialogCreditConfig && !loadingDialogCredit) {
@@ -1553,7 +1567,7 @@ export default function CampaignsScreen() {
     campaignType,
     dialogSMSSettings?.esms_username,
     dialogSMSSettings?.esms_password_encrypted,
-    dialogSMSSettings?.esms_url_key,
+    effectiveDialogURLKey,
     refreshDialogCredit,
   ]);
 
@@ -1562,7 +1576,7 @@ export default function CampaignsScreen() {
       dialogSMSSettings?.esms_username &&
       dialogSMSSettings?.esms_password_encrypted
     );
-    const hasDialogURLKey = !!dialogSMSSettings?.esms_url_key;
+    const hasDialogURLKey = !!effectiveDialogURLKey;
     const hasDialogSMSConfig = hasDialogSMSLoginConfig || hasDialogURLKey;
 
     if (!hasDialogSMSConfig && (!smsApiUrl || !smsApiKey)) {
@@ -1578,7 +1592,7 @@ export default function CampaignsScreen() {
         const result: any = await testDialogSMSLogin(
           dialogSMSSettings?.esms_username || '',
           dialogSMSSettings?.esms_password_encrypted || '',
-          dialogSMSSettings?.esms_url_key || ''
+          effectiveDialogURLKey
         );
 
         if (!result.success) {
@@ -3009,6 +3023,14 @@ export default function CampaignsScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        <TouchableOpacity
+          style={styles.advancedSettingsTrigger}
+          onPress={() => router.push('/discounts-vouchers' as any)}
+        >
+          <Gift size={18} color={Colors.light.tint} />
+          <Text style={styles.advancedSettingsTriggerText}>Discounts & Vouchers</Text>
+        </TouchableOpacity>
 
         {(campaignType === 'email' || campaignType === 'sms') && (
           <TouchableOpacity
@@ -4645,7 +4667,7 @@ export default function CampaignsScreen() {
 
                   <Text style={styles.label}>URL Key (eSMSQK)</Text>
                   <Text style={styles.configValueText}>
-                    {dialogSMSSettings?.esms_url_key ? 'Configured' : 'Not set'}
+                    {effectiveDialogURLKey ? 'Configured' : 'Not set'}
                   </Text>
 
                   <Text style={styles.label}>Source Address / Mask</Text>
