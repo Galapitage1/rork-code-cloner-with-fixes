@@ -26,6 +26,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getFromServer, saveDeltaToServer } from '@/utils/directSync';
 
 
 type CampaignType = 'email' | 'sms' | 'whatsapp';
@@ -261,56 +262,92 @@ export default function CampaignsScreen() {
     };
   }, [smsCampaigns]);
 
+  const applyCampaignSettings = (parsed: any) => {
+    setSmtpHost(parsed.smtpHost || '');
+    setSmtpPort(parsed.smtpPort || '587');
+    setSmtpUsername(parsed.smtpUsername || '');
+    setSmtpPassword(parsed.smtpPassword || '');
+    setImapHost(parsed.imapHost || '');
+    setImapPort(parsed.imapPort || '993');
+    setImapUsername(parsed.imapUsername || '');
+    setImapPassword(parsed.imapPassword || '');
+    setSmsApiUrl(parsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
+    setSmsApiKey(parsed.smsApiKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
+    setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
+    setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
+    setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
+    setWhatsappTestUseTemplate(!!parsed.whatsappTestUseTemplate);
+    setWhatsappTestTemplateName(parsed.whatsappTestTemplateName || '');
+    setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
+    setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
+    setWhatsappTestTemplateHeaderParamsText(parsed.whatsappTestTemplateHeaderParamsText || '');
+    setWhatsappTestTemplateHeaderMediaUrl(parsed.whatsappTestTemplateHeaderMediaUrl || '');
+    setWhatsappTestTemplateHeaderMediaType((parsed.whatsappTestTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
+    setWhatsappTestTemplateButtonParamsText(parsed.whatsappTestTemplateButtonParamsText || '');
+    setWhatsappCampaignUseTemplate(parsed.whatsappCampaignUseTemplate !== false);
+    setWhatsappLinkCampaignTemplateToTest(parsed.whatsappLinkCampaignTemplateToTest !== false);
+    setWhatsappCampaignTemplateName(parsed.whatsappCampaignTemplateName || '');
+    setWhatsappCampaignTemplateLanguage(parsed.whatsappCampaignTemplateLanguage || 'en_US');
+    setWhatsappCampaignTemplateParamsText(parsed.whatsappCampaignTemplateParamsText || '');
+    setWhatsappCampaignTemplateHeaderParamsText(parsed.whatsappCampaignTemplateHeaderParamsText || '');
+    setWhatsappCampaignTemplateHeaderMediaUrl(parsed.whatsappCampaignTemplateHeaderMediaUrl || '');
+    setWhatsappCampaignTemplateHeaderMediaType((parsed.whatsappCampaignTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
+    setWhatsappCampaignTemplateButtonParamsText(parsed.whatsappCampaignTemplateButtonParamsText || '');
+    setEmailNoReplyMode(!!parsed.emailNoReplyMode);
+    setEmailBatchSize(String(parsed.emailBatchSize ?? '25'));
+    setEmailBatchDelayMs(String(parsed.emailBatchDelayMs ?? '1500'));
+    setEmailDailyLimitEnabled(!!parsed.emailDailyLimitEnabled);
+    setEmailDailyLimitMax(String(parsed.emailDailyLimitMax ?? '500'));
+    setSenderEmail(parsed.senderEmail || '');
+    setSenderName(parsed.senderName || '');
+  };
+
   const loadCampaignSettings = async () => {
     try {
-      console.log('[CAMPAIGNS] Loading campaign settings from AsyncStorage...');
-      const settings = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
-      if (settings) {
-        const parsed = JSON.parse(settings);
-        console.log('[CAMPAIGNS] Settings loaded:', { 
-          hasSmtp: !!parsed.smtpHost, 
-          hasWhatsApp: !!parsed.whatsappAccessToken,
-          hasSms: !!parsed.smsApiKey 
+      console.log('[CAMPAIGNS] Loading campaign settings from AsyncStorage + server...');
+      let activeSettings: any | null = null;
+
+      const localSettingsRaw = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
+      if (localSettingsRaw) {
+        const localParsed = JSON.parse(localSettingsRaw);
+        activeSettings = localParsed;
+        applyCampaignSettings(localParsed);
+      }
+
+      if (currentUser) {
+        try {
+          const remoteRecords = await getFromServer<any>({
+            userId: currentUser.id,
+            dataType: 'campaign_settings',
+            includeDeleted: true,
+            minDays: 3650,
+          });
+          const latestRemote = remoteRecords
+            .filter((item: any) => item && item.deleted !== true)
+            .sort((a: any, b: any) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))[0];
+
+          if (latestRemote) {
+            const localUpdatedAt = Number(activeSettings?.updatedAt) || 0;
+            const remoteUpdatedAt = Number(latestRemote.updatedAt) || 0;
+            if (!activeSettings || remoteUpdatedAt >= localUpdatedAt) {
+              activeSettings = latestRemote;
+              applyCampaignSettings(latestRemote);
+              await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(latestRemote));
+            }
+          }
+        } catch (remoteError) {
+          console.warn('[CAMPAIGNS] Failed to load campaign_settings from server:', remoteError);
+        }
+      }
+
+      if (activeSettings) {
+        console.log('[CAMPAIGNS] Settings loaded:', {
+          hasSmtp: !!activeSettings.smtpHost,
+          hasWhatsApp: !!activeSettings.whatsappAccessToken,
+          hasSms: !!activeSettings.smsApiKey,
         });
-        setSmtpHost(parsed.smtpHost || '');
-        setSmtpPort(parsed.smtpPort || '587');
-        setSmtpUsername(parsed.smtpUsername || '');
-        setSmtpPassword(parsed.smtpPassword || '');
-        setImapHost(parsed.imapHost || '');
-        setImapPort(parsed.imapPort || '993');
-        setImapUsername(parsed.imapUsername || '');
-        setImapPassword(parsed.imapPassword || '');
-        setSmsApiUrl(parsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
-        setSmsApiKey(parsed.smsApiKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTEyMTcsImlhdCI6MTY4MDA4NDgxMywiZXhwIjo0ODA0Mjg3MjEzfQ.KUbNVxzp2U7lx6ChLMLbMQ3ht0iClOFHowcd52QXLEs');
-        setWhatsappAccessToken(parsed.whatsappAccessToken || 'EAAMu0FWFiRgBQOiKZCI05pdADdVTYhCRmjq2mRhpOGd9CkeOEd5AumZCvPZC6fe7wD9svBkGSf2Hf0VzlF8bQ7ME3Q1JIMweLU1hkLV2CSEXhT8MzOBFx2BsXIFkh64B3N5T2xy0LWDoCNtHttmMCPNS17yLnmmgOQ0WJKEy690yOf6tKVDncQK3KPiw6O7VuFfC3ZCFWYfUC67SwIZCpCTk7e4TGZCqHP66EQZBiVMjHUSR338wZATo39HiNhOlcxjXkfpESlfpnccANLY4mGXTxboGZCPbZC5aoZD');
-        setWhatsappPhoneNumberId(parsed.whatsappPhoneNumberId || '1790691781257415');
-        setWhatsappBusinessId(parsed.whatsappBusinessId || '895897253021976');
-        setWhatsappTestUseTemplate(!!parsed.whatsappTestUseTemplate);
-        setWhatsappTestTemplateName(parsed.whatsappTestTemplateName || '');
-        setWhatsappTestTemplateLanguage(parsed.whatsappTestTemplateLanguage || 'en_US');
-        setWhatsappTestTemplateParamsText(parsed.whatsappTestTemplateParamsText || '');
-        setWhatsappTestTemplateHeaderParamsText(parsed.whatsappTestTemplateHeaderParamsText || '');
-        setWhatsappTestTemplateHeaderMediaUrl(parsed.whatsappTestTemplateHeaderMediaUrl || '');
-        setWhatsappTestTemplateHeaderMediaType((parsed.whatsappTestTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
-        setWhatsappTestTemplateButtonParamsText(parsed.whatsappTestTemplateButtonParamsText || '');
-        setWhatsappCampaignUseTemplate(parsed.whatsappCampaignUseTemplate !== false);
-        setWhatsappLinkCampaignTemplateToTest(parsed.whatsappLinkCampaignTemplateToTest !== false);
-        setWhatsappCampaignTemplateName(parsed.whatsappCampaignTemplateName || '');
-        setWhatsappCampaignTemplateLanguage(parsed.whatsappCampaignTemplateLanguage || 'en_US');
-        setWhatsappCampaignTemplateParamsText(parsed.whatsappCampaignTemplateParamsText || '');
-        setWhatsappCampaignTemplateHeaderParamsText(parsed.whatsappCampaignTemplateHeaderParamsText || '');
-        setWhatsappCampaignTemplateHeaderMediaUrl(parsed.whatsappCampaignTemplateHeaderMediaUrl || '');
-        setWhatsappCampaignTemplateHeaderMediaType((parsed.whatsappCampaignTemplateHeaderMediaType as 'image' | 'video' | 'document') || 'image');
-        setWhatsappCampaignTemplateButtonParamsText(parsed.whatsappCampaignTemplateButtonParamsText || '');
-        setEmailNoReplyMode(!!parsed.emailNoReplyMode);
-        setEmailBatchSize(String(parsed.emailBatchSize ?? '25'));
-        setEmailBatchDelayMs(String(parsed.emailBatchDelayMs ?? '1500'));
-        setEmailDailyLimitEnabled(!!parsed.emailDailyLimitEnabled);
-        setEmailDailyLimitMax(String(parsed.emailDailyLimitMax ?? '500'));
-        setSenderEmail(parsed.senderEmail || '');
-        setSenderName(parsed.senderName || '');
       } else {
-        console.log('[CAMPAIGNS] No settings found in AsyncStorage, using defaults');
+        console.log('[CAMPAIGNS] No settings found in AsyncStorage/server, using defaults');
       }
       await loadPendingEmailCampaign();
     } catch (error) {
@@ -360,6 +397,21 @@ export default function CampaignsScreen() {
         emailDailyLimitMax: getEffectiveEmailWindowMax(),
         senderEmail,
         senderName,
+        dialogSMSSettings: dialogSMSSettings
+          ? {
+              provider: 'dialog_esms',
+              esms_username: dialogSMSSettings.esms_username || '',
+              esms_password_encrypted: dialogSMSSettings.esms_password_encrypted || '',
+              default_source_address: dialogSMSSettings.default_source_address || '',
+              default_payment_method: dialogSMSSettings.default_payment_method ?? 0,
+              push_notification_url: dialogSMSSettings.push_notification_url || '',
+            }
+          : null,
+        esms_username: dialogSMSSettings?.esms_username || '',
+        esms_password: dialogSMSSettings?.esms_password_encrypted || '',
+        default_source_address: dialogSMSSettings?.default_source_address || '',
+        default_payment_method: dialogSMSSettings?.default_payment_method ?? 0,
+        push_notification_url: dialogSMSSettings?.push_notification_url || '',
         updatedAt: Date.now(),
       };
       
@@ -372,6 +424,18 @@ export default function CampaignsScreen() {
       });
       
       await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
+      if (currentUser) {
+        try {
+          await saveDeltaToServer<any>(
+            [settings],
+            { userId: currentUser.id, dataType: 'campaign_settings' }
+          );
+        } catch (syncError) {
+          console.error('[CAMPAIGNS] Failed to sync campaign settings to server:', syncError);
+          Alert.alert('Warning', 'Settings saved locally, but server sync failed. Run manual sync in Settings.');
+          return;
+        }
+      }
       console.log('[CAMPAIGNS] Settings saved to AsyncStorage successfully');
       console.log('[CAMPAIGNS] Saved WhatsApp credentials:', {
         tokenLength: whatsappAccessToken?.length || 0,
@@ -1414,13 +1478,13 @@ export default function CampaignsScreen() {
           setDialogCreditSource('last_known');
           setDialogCreditUpdatedAt(lastKnownDialogBalance.timestamp);
           setDialogCreditError(
-            result?.comment || 'Dialog login works, but current balance is not returned by the API. Showing last known balance from recent campaign activity.'
+            result?.dashboardError || result?.comment || 'Dialog login works, but current balance is not returned by the API. Showing last known balance from recent campaign activity.'
           );
         } else {
           setDialogCreditRemaining(null);
           setDialogCreditSource(null);
           setDialogCreditUpdatedAt(Date.now());
-          const noBalanceMsg = result?.comment || 'Login successful, but Dialog did not return a credit value.';
+          const noBalanceMsg = result?.dashboardError || result?.comment || 'Login successful, but Dialog did not return a credit value.';
           setDialogCreditError(noBalanceMsg);
         }
       } else {

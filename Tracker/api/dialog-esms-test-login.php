@@ -32,6 +32,7 @@ if (!is_array($body)) {
 
 $username = isset($body['esms_username']) ? trim($body['esms_username']) : '';
 $password = isset($body['esms_password']) ? trim($body['esms_password']) : '';
+$password = dialog_esms_resolve_password($password);
 
 if ($username === '' || $password === '') {
     respond(['success' => false, 'error' => 'Missing username or password'], 400);
@@ -40,10 +41,38 @@ if ($username === '' || $password === '') {
 try {
     $login = dialog_esms_login($username, $password);
     $remainingCount = null;
-    if (isset($login['remainingCount']) && $login['remainingCount'] !== '') {
-        $remainingCount = is_numeric($login['remainingCount']) ? floatval($login['remainingCount']) : $login['remainingCount'];
-    } elseif (isset($login['walletBalance']) && $login['walletBalance'] !== '') {
-        $remainingCount = is_numeric($login['walletBalance']) ? floatval($login['walletBalance']) : $login['walletBalance'];
+    $walletBalance = null;
+    $balanceSource = null;
+    $dashboardUsername = null;
+    $dashboardError = null;
+
+    // Prefer live balance from dashboard API (v3 auth), fallback to v2 login fields.
+    try {
+        $dashboard = dialog_esms_fetch_dashboard_wallet_balance($username, $password);
+        if (isset($dashboard['walletBalance']) && $dashboard['walletBalance'] !== '') {
+            $walletBalance = $dashboard['walletBalance'];
+            $remainingCount = $dashboard['walletBalance'];
+            $balanceSource = 'dashboard_v1';
+            $dashboardUsername = isset($dashboard['username']) ? $dashboard['username'] : null;
+        }
+    } catch (Exception $e) {
+        $dashboardError = $e->getMessage();
+    }
+
+    if ($walletBalance === null) {
+        $walletBalance = isset($login['walletBalance']) ? $login['walletBalance'] : null;
+    }
+
+    if ($balanceSource !== 'dashboard_v1') {
+        if (isset($login['remainingCount']) && $login['remainingCount'] !== '') {
+            $remainingCount = is_numeric($login['remainingCount']) ? floatval($login['remainingCount']) : $login['remainingCount'];
+        } elseif (isset($login['walletBalance']) && $login['walletBalance'] !== '') {
+            $remainingCount = is_numeric($login['walletBalance']) ? floatval($login['walletBalance']) : $login['walletBalance'];
+        }
+    }
+
+    if ($balanceSource === null && $remainingCount !== null) {
+        $balanceSource = 'login_v2';
     }
 
     respond([
@@ -51,7 +80,10 @@ try {
         'message' => 'Login successful',
         'comment' => isset($login['comment']) ? $login['comment'] : null,
         'remainingCount' => $remainingCount,
-        'walletBalance' => isset($login['walletBalance']) ? $login['walletBalance'] : null,
+        'walletBalance' => $walletBalance,
+        'balanceSource' => $balanceSource,
+        'dashboardUsername' => $dashboardUsername,
+        'dashboardError' => $dashboardError,
         'expiration' => isset($login['expiration']) ? $login['expiration'] : null,
         'token_length' => isset($login['token']) ? strlen($login['token']) : 0,
     ]);
