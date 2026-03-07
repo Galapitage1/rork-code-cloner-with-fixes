@@ -50,17 +50,6 @@ try {
     $dashboardError = null;
     $urlKeyError = null;
 
-    if ($username !== '' && $password !== '') {
-        try {
-            $login = dialog_esms_login($username, $password);
-        } catch (Exception $e) {
-            $loginError = $e->getMessage();
-            if ($urlKey === '') {
-                throw $e;
-            }
-        }
-    }
-
     // Prefer URL key balance because it does not depend on dashboard OTP/session state.
     if ($urlKey !== '') {
         try {
@@ -72,6 +61,18 @@ try {
             }
         } catch (Exception $e) {
             $urlKeyError = $e->getMessage();
+        }
+    }
+
+    // If URL key is present, do not perform username/password login to avoid OTP prompts.
+    $shouldTryLoginFlow = ($urlKey === '');
+
+    if ($shouldTryLoginFlow && $username !== '' && $password !== '') {
+        try {
+            $login = dialog_esms_login($username, $password);
+        } catch (Exception $e) {
+            $loginError = $e->getMessage();
+            throw $e;
         }
     }
 
