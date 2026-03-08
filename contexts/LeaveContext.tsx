@@ -415,18 +415,17 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
 
     if (status === 'approved') {
       const staffId = String(existing.staffId || '').trim();
-      if (!staffId) {
-        throw new Error('This request is not linked to a staff member. Please create a new linked request.');
-      }
-      const availability = checkLeaveAvailability({
-        staffId,
-        leaveTypeId: existing.leaveTypeId,
-        startDate: existing.startDate,
-        endDate: existing.endDate,
-        excludeRequestId: existing.id,
-      });
-      if (!availability.isEnough) {
-        throw new Error(availability.message || 'Not enough leave balance to approve this request.');
+      if (staffId) {
+        const availability = checkLeaveAvailability({
+          staffId,
+          leaveTypeId: existing.leaveTypeId,
+          startDate: existing.startDate,
+          endDate: existing.endDate,
+          excludeRequestId: existing.id,
+        });
+        if (!availability.isEnough) {
+          throw new Error(availability.message || 'Not enough leave balance to approve this request.');
+        }
       }
     }
 
