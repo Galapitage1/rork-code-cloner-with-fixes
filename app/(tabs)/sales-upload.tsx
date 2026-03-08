@@ -2341,20 +2341,40 @@ export default function SalesUploadScreen() {
                 console.log('\n=== SYNCING PRODS.REQ UPDATES TO SERVER (IMMEDIATE) ===');
                 console.log('⚠️ This sync must complete to share Prods.Req with other devices');
                 console.log('⚠️ This includes both kitchen stock reports AND inventory Prods.Req values');
-                try {
-                  // First sync the kitchen stock reports
-                  await syncAllReconciliationData();
-                  await refreshPendingUploadCounts();
-                  console.log('✓ Kitchen stock reports synced to server');
-                  
-                  // Then sync inventory stocks with updated Prods.Req values
-                  await syncAll(false);
-                  console.log('✓ Inventory Prods.Req updates synced to server successfully');
+                let syncSucceeded = false;
+                let syncError: unknown = null;
+
+                for (let attempt = 1; attempt <= 2; attempt += 1) {
+                  try {
+                    if (attempt === 2) {
+                      console.log('Retrying deferred reconciliation uploads before final sync attempt...');
+                      await flushPendingReconciliationUploads();
+                    }
+
+                    // First sync reconciliation reports (sales/kitchen queues).
+                    await syncAllReconciliationData();
+                    console.log(`✓ Kitchen/Sales reconciliation sync succeeded (attempt ${attempt})`);
+
+                    // Then sync inventory stocks with updated Prods.Req values.
+                    await syncAll(false);
+                    console.log(`✓ Inventory Prods.Req sync succeeded (attempt ${attempt})`);
+                    syncSucceeded = true;
+                    break;
+                  } catch (attemptError) {
+                    syncError = attemptError;
+                    console.error(`❌ Sync attempt ${attempt} failed:`, attemptError);
+                  }
+                }
+
+                const pendingAfterSync = await getPendingReconciliationUploadCounts().catch(() => ({ sales: 1, kitchen: 1, total: 2 }));
+                await refreshPendingUploadCounts();
+
+                if (syncSucceeded || pendingAfterSync.total === 0) {
+                  console.log('✓ Prods.Req sync settled without pending reconciliation queue');
                   console.log('✓ Other devices will see Prods.Req updates on their next sync');
                   console.log('✓ Live Inventory will display updated Prods.Req values');
-                } catch (syncError) {
-                  console.error('❌ Failed to sync Prods.Req updates to server:', syncError);
-                  await refreshPendingUploadCounts();
+                } else {
+                  console.error('❌ Failed to sync Prods.Req updates after retry:', syncError);
                   Alert.alert('Sync Deferred', 'Prods.Req was saved locally. Kitchen/Sales reconciliation reports remain queued and will retry when the connection is stable.');
                 }
                 console.log('=== SYNC COMPLETE ===\n');
