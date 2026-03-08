@@ -415,10 +415,10 @@ export default function LeaveScreen() {
             {canManageBalances && (
               <TouchableOpacity
                 style={styles.balanceLinkButton}
-                onPress={openBalanceEditor}
+                onPress={() => router.push('/staff-leave' as any)}
               >
                 <ShieldCheck size={16} color={Colors.light.tint} />
-                <Text style={styles.balanceLinkButtonText}>Staff Leave Amounts</Text>
+                <Text style={styles.balanceLinkButtonText}>Staff Leave Page</Text>
               </TouchableOpacity>
             )}
           </View>

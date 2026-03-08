@@ -32,8 +32,12 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof window !== 'undefined' && currentUser && pathname && pathname !== '/' && pathname !== '/login') {
-      localStorage.setItem('app-reload-path', pathname);
-      console.log('[RootLayoutNav] Saved path for reload:', pathname);
+      try {
+        window.localStorage?.setItem('app-reload-path', pathname);
+        console.log('[RootLayoutNav] Saved path for reload:', pathname);
+      } catch {
+        // Ignore storage failures in privacy-restricted contexts.
+      }
     }
   }, [pathname, currentUser]);
 
@@ -48,7 +52,9 @@ function RootLayoutNav() {
       <Stack.Screen name="campaigns" options={{ title: 'Campaign Manager' }} />
       <Stack.Screen name="hr" options={{ headerShown: false }} />
       <Stack.Screen name="products" options={{ title: 'Products Management' }} />
+      <Stack.Screen name="discounts-vouchers" options={{ title: 'Discounts & Vouchers' }} />
       <Stack.Screen name="leave" options={{ headerShown: false }} />
+      <Stack.Screen name="staff-leave" options={{ headerShown: false }} />
     </Stack>
   );
 }
