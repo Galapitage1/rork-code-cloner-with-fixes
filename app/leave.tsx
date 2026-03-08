@@ -2,9 +2,10 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
 import { useState, useMemo } from 'react';
-import { Calendar, Plus, Check, X, Clock, ChevronDown, Filter, ArrowLeft } from 'lucide-react-native';
+import { Calendar, Plus, Check, X, Clock, ChevronDown, Filter, ArrowLeft, KeyRound, ShieldCheck, Pencil, Trash2 } from 'lucide-react-native';
 import { useLeave } from '@/contexts/LeaveContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useHR } from '@/contexts/HRContext';
 import { CalendarModal } from '@/components/CalendarModal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import Colors from '@/constants/colors';
@@ -14,18 +15,27 @@ type FilterStatus = 'all' | 'pending' | 'approved' | 'rejected';
 
 export default function LeaveScreen() {
   const router = useRouter();
-  const { currentUser, isSuperAdmin } = useAuth();
+  const { currentUser, isSuperAdmin, isAdmin } = useAuth();
+  const { staffMembers } = useHR();
   const { 
     leaveTypes, 
     leaveRequests, 
+    staffLeaveBalances,
+    hasLeaveBalancePassword,
     isLoading, 
     addLeaveRequest, 
     updateLeaveRequestStatus,
+    setLeaveBalancePassword,
+    verifyLeaveBalancePassword,
+    upsertStaffLeaveBalance,
+    deleteStaffLeaveBalance,
+    checkLeaveAvailability,
     getLeaveTypeById,
   } = useLeave();
 
   const [showRequestModal, setShowRequestModal] = useState(false);
-  const [employeeName, setEmployeeName] = useState('');
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [showStaffPicker, setShowStaffPicker] = useState(false);
   const [selectedLeaveType, setSelectedLeaveType] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -47,6 +57,60 @@ export default function LeaveScreen() {
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject'>('approve');
+  const [showBalanceModal, setShowBalanceModal] = useState(false);
+  const [leaveBalanceUnlocked, setLeaveBalanceUnlocked] = useState(false);
+  const [leaveBalancePasswordInput, setLeaveBalancePasswordInput] = useState('');
+  const [newLeaveBalancePassword, setNewLeaveBalancePassword] = useState('');
+  const [confirmLeaveBalancePassword, setConfirmLeaveBalancePassword] = useState('');
+  const [balanceStaffId, setBalanceStaffId] = useState('');
+  const [balanceLeaveTypeId, setBalanceLeaveTypeId] = useState('');
+  const [balanceYear, setBalanceYear] = useState(String(new Date().getFullYear()));
+  const [balanceTotalDays, setBalanceTotalDays] = useState('');
+  const [showBalanceStaffPicker, setShowBalanceStaffPicker] = useState(false);
+  const [showBalanceLeaveTypePicker, setShowBalanceLeaveTypePicker] = useState(false);
+
+  const canManageBalances = isAdmin || isSuperAdmin;
+  const activeStaffMembers = useMemo(
+    () => staffMembers
+      .filter((row) => !row.deleted && row.active !== false)
+      .slice()
+      .sort((a, b) => a.fullName.localeCompare(b.fullName)),
+    [staffMembers]
+  );
+
+  const selectedRequestStaff = useMemo(
+    () => activeStaffMembers.find((row) => row.id === selectedStaffId),
+    [activeStaffMembers, selectedStaffId]
+  );
+
+  const leaveAvailabilityPreview = useMemo(() => {
+    if (!selectedStaffId || !selectedLeaveType || !startDate || !endDate) return null;
+    return checkLeaveAvailability({
+      staffId: selectedStaffId,
+      leaveTypeId: selectedLeaveType,
+      startDate,
+      endDate,
+    });
+  }, [selectedStaffId, selectedLeaveType, startDate, endDate, checkLeaveAvailability]);
+
+  const selectedBalanceYear = useMemo(() => {
+    const parsed = parseInt(balanceYear, 10);
+    if (!Number.isInteger(parsed)) return new Date().getFullYear();
+    return Math.max(2000, Math.min(2100, parsed));
+  }, [balanceYear]);
+
+  const balancesForYear = useMemo(
+    () => staffLeaveBalances
+      .filter((row) => !row.deleted && Number(row.year) === selectedBalanceYear)
+      .slice()
+      .sort((a, b) => {
+        if (a.staffName !== b.staffName) return a.staffName.localeCompare(b.staffName);
+        const leaveA = getLeaveTypeById(a.leaveTypeId)?.name || a.leaveTypeId;
+        const leaveB = getLeaveTypeById(b.leaveTypeId)?.name || b.leaveTypeId;
+        return leaveA.localeCompare(leaveB);
+      }),
+    [staffLeaveBalances, selectedBalanceYear, getLeaveTypeById]
+  );
 
   const filteredRequests = useMemo(() => {
     let requests = isSuperAdmin ? leaveRequests : leaveRequests.filter(r => r.createdBy === currentUser?.id);
@@ -64,7 +128,7 @@ export default function LeaveScreen() {
   }, [leaveRequests, isSuperAdmin, currentUser]);
 
   const resetForm = () => {
-    setEmployeeName('');
+    setSelectedStaffId('');
     setSelectedLeaveType('');
     setStartDate('');
     setEndDate('');
@@ -72,8 +136,8 @@ export default function LeaveScreen() {
   };
 
   const handleSubmitRequest = async () => {
-    if (!employeeName.trim()) {
-      Alert.alert('Error', 'Please enter your name');
+    if (!selectedStaffId) {
+      Alert.alert('Error', 'Please select a staff member');
       return;
     }
     if (!selectedLeaveType) {
@@ -92,11 +156,16 @@ export default function LeaveScreen() {
       Alert.alert('Error', 'End date cannot be before start date');
       return;
     }
+    if (!selectedRequestStaff) {
+      Alert.alert('Error', 'Selected staff member is no longer active');
+      return;
+    }
 
     try {
       setIsSubmitting(true);
       await addLeaveRequest({
-        employeeName: employeeName.trim(),
+        staffId: selectedRequestStaff.id,
+        employeeName: selectedRequestStaff.fullName,
         leaveTypeId: selectedLeaveType,
         startDate,
         endDate,
@@ -105,8 +174,9 @@ export default function LeaveScreen() {
       Alert.alert('Success', 'Leave request submitted successfully');
       setShowRequestModal(false);
       resetForm();
-    } catch {
-      Alert.alert('Error', 'Failed to submit leave request');
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'Failed to submit leave request';
+      Alert.alert('Error', message);
     } finally {
       setIsSubmitting(false);
     }
@@ -131,8 +201,106 @@ export default function LeaveScreen() {
       Alert.alert('Success', `Leave request ${reviewAction === 'approve' ? 'approved' : 'rejected'}`);
       setShowReviewModal(false);
       setSelectedRequest(null);
-    } catch {
-      Alert.alert('Error', 'Failed to update leave request');
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'Failed to update leave request';
+      Alert.alert('Error', message);
+    }
+  };
+
+  const resetBalanceEditorForm = () => {
+    setBalanceStaffId('');
+    setBalanceLeaveTypeId('');
+    setBalanceTotalDays('');
+  };
+
+  const openBalanceEditor = () => {
+    if (!canManageBalances) return;
+    setShowBalanceModal(true);
+    setLeaveBalanceUnlocked(false);
+    setLeaveBalancePasswordInput('');
+    setNewLeaveBalancePassword('');
+    setConfirmLeaveBalancePassword('');
+    resetBalanceEditorForm();
+  };
+
+  const closeBalanceEditor = () => {
+    setShowBalanceModal(false);
+    setLeaveBalanceUnlocked(false);
+    setLeaveBalancePasswordInput('');
+    setNewLeaveBalancePassword('');
+    setConfirmLeaveBalancePassword('');
+    resetBalanceEditorForm();
+  };
+
+  const handleUnlockBalanceEditor = async () => {
+    if (!canManageBalances) return;
+
+    if (!hasLeaveBalancePassword) {
+      if (!newLeaveBalancePassword.trim() || !confirmLeaveBalancePassword.trim()) {
+        Alert.alert('Error', 'Set and confirm the leave balance password');
+        return;
+      }
+      if (newLeaveBalancePassword.trim() !== confirmLeaveBalancePassword.trim()) {
+        Alert.alert('Error', 'Passwords do not match');
+        return;
+      }
+      try {
+        await setLeaveBalancePassword(newLeaveBalancePassword.trim());
+        setLeaveBalanceUnlocked(true);
+        setNewLeaveBalancePassword('');
+        setConfirmLeaveBalancePassword('');
+        Alert.alert('Saved', 'Leave balance password set successfully');
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : 'Failed to set password';
+        Alert.alert('Error', message);
+      }
+      return;
+    }
+
+    if (!leaveBalancePasswordInput.trim()) {
+      Alert.alert('Error', 'Enter password to continue');
+      return;
+    }
+    if (!verifyLeaveBalancePassword(leaveBalancePasswordInput.trim())) {
+      Alert.alert('Error', 'Invalid password');
+      return;
+    }
+    setLeaveBalanceUnlocked(true);
+    setLeaveBalancePasswordInput('');
+  };
+
+  const handleSaveStaffLeaveBalance = async () => {
+    if (!leaveBalanceUnlocked) {
+      Alert.alert('Locked', 'Unlock leave balance editor first');
+      return;
+    }
+    const staff = activeStaffMembers.find((row) => row.id === balanceStaffId);
+    if (!staff) {
+      Alert.alert('Error', 'Please select an active staff member');
+      return;
+    }
+    if (!balanceLeaveTypeId) {
+      Alert.alert('Error', 'Please select a leave type');
+      return;
+    }
+    const total = Number(balanceTotalDays);
+    if (!Number.isFinite(total) || total < 0) {
+      Alert.alert('Error', 'Enter a valid leave amount (0 or more)');
+      return;
+    }
+    try {
+      await upsertStaffLeaveBalance({
+        staffId: staff.id,
+        staffName: staff.fullName,
+        leaveTypeId: balanceLeaveTypeId,
+        year: selectedBalanceYear,
+        totalDays: total,
+      });
+      Alert.alert('Saved', 'Staff leave balance saved');
+      resetBalanceEditorForm();
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'Failed to save leave balance';
+      Alert.alert('Error', message);
     }
   };
 
@@ -229,11 +397,30 @@ export default function LeaveScreen() {
 
             <TouchableOpacity
               style={styles.newRequestButton}
-              onPress={() => setShowRequestModal(true)}
+              onPress={() => {
+                if (activeStaffMembers.length === 0) {
+                  Alert.alert('No Active Staff', 'No active staff members found in HR module. Please add staff details in HR first.');
+                  return;
+                }
+                if (!selectedStaffId) {
+                  setSelectedStaffId(activeStaffMembers[0].id);
+                }
+                setShowRequestModal(true);
+              }}
             >
               <Plus size={20} color="#FFFFFF" />
               <Text style={styles.newRequestButtonText}>New Request</Text>
             </TouchableOpacity>
+
+            {canManageBalances && (
+              <TouchableOpacity
+                style={styles.balanceLinkButton}
+                onPress={openBalanceEditor}
+              >
+                <ShieldCheck size={16} color={Colors.light.tint} />
+                <Text style={styles.balanceLinkButtonText}>Staff Leave Amounts</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
@@ -342,14 +529,16 @@ export default function LeaveScreen() {
 
             <ScrollView style={styles.modalScroll}>
               <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Your Name *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={employeeName}
-                  onChangeText={setEmployeeName}
-                  placeholder="Enter your full name"
-                  placeholderTextColor={Colors.light.muted}
-                />
+                <Text style={styles.inputLabel}>Staff Member *</Text>
+                <TouchableOpacity
+                  style={styles.selectButton}
+                  onPress={() => setShowStaffPicker(true)}
+                >
+                  <Text style={[styles.selectButtonText, !selectedRequestStaff && { color: Colors.light.muted }]}>
+                    {selectedRequestStaff?.fullName || 'Select active staff'}
+                  </Text>
+                  <ChevronDown size={20} color={Colors.light.muted} />
+                </TouchableOpacity>
               </View>
 
               <View style={styles.inputGroup}>
@@ -406,6 +595,24 @@ export default function LeaveScreen() {
                 </View>
               )}
 
+              {leaveAvailabilityPreview && selectedLeaveType && (
+                <View style={[styles.durationInfo, !leaveAvailabilityPreview.isEnough && styles.balanceWarningBox]}>
+                  <Text style={[styles.durationText, !leaveAvailabilityPreview.isEnough && styles.balanceWarningText]}>
+                    {leaveAvailabilityPreview.isEnough
+                      ? 'Leave balance check passed.'
+                      : (leaveAvailabilityPreview.message || 'Not enough leave balance')}
+                  </Text>
+                  {leaveAvailabilityPreview.yearly.map((row) => (
+                    <Text
+                      key={`availability-${row.year}`}
+                      style={[styles.balanceYearText, !row.isEnough && styles.balanceWarningText]}
+                    >
+                      {row.year}: total {row.totalDays}, used {row.usedApprovedDays + row.usedPendingDays}, remaining {row.remainingDaysBeforeRequest}, request {row.requestedDays}
+                    </Text>
+                  ))}
+                </View>
+              )}
+
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Reason (Optional)</Text>
                 <TextInput
@@ -448,6 +655,43 @@ export default function LeaveScreen() {
       </Modal>
 
       <Modal
+        visible={showStaffPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowStaffPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowStaffPicker(false)}
+        >
+          <View style={styles.pickerContent}>
+            <Text style={styles.pickerTitle}>Select Staff</Text>
+            {activeStaffMembers.length === 0 ? (
+              <Text style={styles.emptyPickerText}>No active staff found in HR.</Text>
+            ) : (
+              activeStaffMembers.map((staff) => (
+                <TouchableOpacity
+                  key={staff.id}
+                  style={[
+                    styles.pickerOption,
+                    selectedStaffId === staff.id && styles.pickerOptionSelected
+                  ]}
+                  onPress={() => {
+                    setSelectedStaffId(staff.id);
+                    setShowStaffPicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
+                  {selectedStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
         visible={showLeaveTypePicker}
         transparent
         animationType="fade"
@@ -475,6 +719,231 @@ export default function LeaveScreen() {
                 <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
                 <Text style={styles.pickerOptionText}>{type.name}</Text>
                 {selectedLeaveType === type.id && <Check size={20} color={Colors.light.tint} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={showBalanceModal}
+        transparent
+        animationType="slide"
+        onRequestClose={closeBalanceEditor}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Staff Leave Amounts</Text>
+              <TouchableOpacity onPress={closeBalanceEditor}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalScroll}>
+              {!leaveBalanceUnlocked ? (
+                <View style={styles.lockedSection}>
+                  <Text style={styles.inputLabel}>Access Control</Text>
+                  {!hasLeaveBalancePassword ? (
+                    <>
+                      <Text style={styles.inputHint}>
+                        Set a password for admins to access staff leave amount editing.
+                      </Text>
+                      <TextInput
+                        style={styles.input}
+                        value={newLeaveBalancePassword}
+                        onChangeText={setNewLeaveBalancePassword}
+                        placeholder="New password"
+                        placeholderTextColor={Colors.light.muted}
+                        secureTextEntry
+                      />
+                      <TextInput
+                        style={styles.input}
+                        value={confirmLeaveBalancePassword}
+                        onChangeText={setConfirmLeaveBalancePassword}
+                        placeholder="Confirm password"
+                        placeholderTextColor={Colors.light.muted}
+                        secureTextEntry
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.inputHint}>
+                        Enter leave balance password to add or edit staff leave amounts.
+                      </Text>
+                      <TextInput
+                        style={styles.input}
+                        value={leaveBalancePasswordInput}
+                        onChangeText={setLeaveBalancePasswordInput}
+                        placeholder="Password"
+                        placeholderTextColor={Colors.light.muted}
+                        secureTextEntry
+                      />
+                    </>
+                  )}
+
+                  <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleUnlockBalanceEditor}>
+                    <KeyRound size={16} color="#FFFFFF" />
+                    <Text style={styles.buttonText}>{hasLeaveBalancePassword ? 'Unlock' : 'Set Password & Unlock'}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.inputLabel}>Year (starting from January)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={balanceYear}
+                    onChangeText={setBalanceYear}
+                    placeholder="2026"
+                    placeholderTextColor={Colors.light.muted}
+                    keyboardType="numeric"
+                  />
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Staff *</Text>
+                    <TouchableOpacity
+                      style={styles.selectButton}
+                      onPress={() => setShowBalanceStaffPicker(true)}
+                    >
+                      <Text style={[styles.selectButtonText, !balanceStaffId && { color: Colors.light.muted }]}>
+                        {activeStaffMembers.find((row) => row.id === balanceStaffId)?.fullName || 'Select active staff'}
+                      </Text>
+                      <ChevronDown size={20} color={Colors.light.muted} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Leave Type *</Text>
+                    <TouchableOpacity
+                      style={styles.selectButton}
+                      onPress={() => setShowBalanceLeaveTypePicker(true)}
+                    >
+                      <Text style={[styles.selectButtonText, !balanceLeaveTypeId && { color: Colors.light.muted }]}>
+                        {getLeaveTypeById(balanceLeaveTypeId)?.name || 'Select leave type'}
+                      </Text>
+                      <ChevronDown size={20} color={Colors.light.muted} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Total Leave Amount (days) *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={balanceTotalDays}
+                      onChangeText={setBalanceTotalDays}
+                      placeholder="e.g. 14"
+                      placeholderTextColor={Colors.light.muted}
+                      keyboardType="numeric"
+                    />
+                  </View>
+
+                  <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={handleSaveStaffLeaveBalance}>
+                    <Text style={styles.buttonText}>Save Leave Amount</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.sectionMiniTitle}>Saved Leave Amounts - {selectedBalanceYear}</Text>
+                  {balancesForYear.length === 0 ? (
+                    <Text style={styles.emptyPickerText}>No staff leave amounts set for this year.</Text>
+                  ) : (
+                    balancesForYear.map((row) => {
+                      const leaveType = getLeaveTypeById(row.leaveTypeId);
+                      return (
+                        <View key={row.id} style={styles.balanceRowCard}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.balanceRowTitle}>{row.staffName}</Text>
+                            <Text style={styles.balanceRowMeta}>
+                              {leaveType?.name || row.leaveTypeId} - {row.totalDays} day(s)
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.miniIconButton}
+                            onPress={() => {
+                              setBalanceStaffId(row.staffId);
+                              setBalanceLeaveTypeId(row.leaveTypeId);
+                              setBalanceTotalDays(String(row.totalDays));
+                            }}
+                          >
+                            <Pencil size={16} color={Colors.light.tint} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.miniIconButton}
+                            onPress={async () => {
+                              try {
+                                await deleteStaffLeaveBalance(row.id);
+                              } catch (error) {
+                                const message = error instanceof Error && error.message ? error.message : 'Failed to delete leave amount';
+                                Alert.alert('Error', message);
+                              }
+                            }}
+                          >
+                            <Trash2 size={16} color={Colors.light.danger} />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })
+                  )}
+                </>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showBalanceStaffPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBalanceStaffPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowBalanceStaffPicker(false)}
+        >
+          <View style={styles.pickerContent}>
+            <Text style={styles.pickerTitle}>Select Staff</Text>
+            {activeStaffMembers.map((staff) => (
+              <TouchableOpacity
+                key={staff.id}
+                style={[styles.pickerOption, balanceStaffId === staff.id && styles.pickerOptionSelected]}
+                onPress={() => {
+                  setBalanceStaffId(staff.id);
+                  setShowBalanceStaffPicker(false);
+                }}
+              >
+                <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
+                {balanceStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={showBalanceLeaveTypePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBalanceLeaveTypePicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowBalanceLeaveTypePicker(false)}
+        >
+          <View style={styles.pickerContent}>
+            <Text style={styles.pickerTitle}>Select Leave Type</Text>
+            {leaveTypes.map((type) => (
+              <TouchableOpacity
+                key={type.id}
+                style={[styles.pickerOption, balanceLeaveTypeId === type.id && styles.pickerOptionSelected]}
+                onPress={() => {
+                  setBalanceLeaveTypeId(type.id);
+                  setShowBalanceLeaveTypePicker(false);
+                }}
+              >
+                <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
+                <Text style={styles.pickerOptionText}>{type.name}</Text>
+                {balanceLeaveTypeId === type.id && <Check size={20} color={Colors.light.tint} />}
               </TouchableOpacity>
             ))}
           </View>
@@ -662,6 +1131,7 @@ const styles = StyleSheet.create({
   },
   actionsRow: {
     flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
     paddingHorizontal: 16,
     paddingBottom: 12,
     gap: 12,
@@ -697,6 +1167,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600' as const,
     color: '#FFFFFF',
+  },
+  balanceLinkButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: Colors.light.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  balanceLinkButtonText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
   },
   scrollView: {
     flex: 1,
@@ -960,6 +1446,17 @@ const styles = StyleSheet.create({
     fontWeight: '600' as const,
     color: Colors.light.tint,
   },
+  balanceWarningBox: {
+    backgroundColor: '#FEF2F2',
+  },
+  balanceWarningText: {
+    color: '#B91C1C',
+  },
+  balanceYearText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#1E3A8A',
+  },
   modalActions: {
     flexDirection: 'row' as const,
     gap: 12,
@@ -988,6 +1485,54 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: Colors.light.tint,
+  },
+  lockedSection: {
+    gap: 10,
+  },
+  inputHint: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    marginBottom: 2,
+  },
+  sectionMiniTitle: {
+    marginTop: 12,
+    marginBottom: 8,
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  emptyPickerText: {
+    paddingVertical: 8,
+    fontSize: 13,
+    color: Colors.light.muted,
+  },
+  balanceRowCard: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  balanceRowTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  balanceRowMeta: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    marginTop: 2,
+  },
+  miniIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: Colors.light.background,
   },
   pickerOverlay: {
     flex: 1,

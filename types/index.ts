@@ -561,6 +561,7 @@ export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface LeaveRequest {
   id: string;
+  staffId?: string;
   employeeName: string;
   leaveTypeId: string;
   startDate: string;
@@ -573,6 +574,32 @@ export interface LeaveRequest {
   createdAt: number;
   updatedAt: number;
   createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface StaffLeaveBalance {
+  id: string;
+  staffId: string;
+  staffName: string;
+  leaveTypeId: string;
+  year: number;
+  totalDays: number;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface LeaveBalanceSecuritySettings {
+  id: string;
+  accessPasswordHash: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
   deleted?: boolean;
   deviceId?: string;
 }
@@ -625,6 +652,53 @@ export interface HRAttendanceImport {
   createdAt: number;
   updatedAt: number;
   createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRPayrollMonthSheet {
+  id: string;
+  monthKey: string;
+  rowOverrides?: Record<string, Record<string, string | number | null>>;
+  manualEdits?: HRPayrollManualEdit[];
+  processedAt?: number;
+  processedBy?: string;
+  approvedAt?: number;
+  approvedBy?: string;
+  lockedAt?: number;
+  lockedBy?: string;
+  isLocked?: boolean;
+  unlockedAt?: number;
+  unlockedBy?: string;
+  // When unlocked, only this user can edit until it is locked again.
+  editingRestrictedToUserId?: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRPayrollManualEdit {
+  id: string;
+  monthKey: string;
+  rowId: string;
+  columnKey: string;
+  previousValue: string | number | null;
+  nextValue: string | number | null;
+  comment?: string;
+  editedAt: number;
+  editedBy: string;
+}
+
+export interface HRSecuritySettings {
+  id: string;
+  hrModulePasswordHash: string;
+  hrAuthorizerPasswordHash: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
   deleted?: boolean;
   deviceId?: string;
 }
