@@ -403,19 +403,21 @@ export default function StaffLeaveScreen() {
         <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setShowStaffPicker(false)}>
           <View style={styles.pickerCard}>
             <Text style={styles.pickerTitle}>Select Staff</Text>
-            {activeStaff.map((staff) => (
-              <TouchableOpacity
-                key={staff.id}
-                style={styles.pickerItem}
-                onPress={() => {
-                  setEditorStaffId(staff.id);
-                  setShowStaffPicker(false);
-                }}
-              >
-                <Text style={styles.pickerText}>{staff.fullName}</Text>
-                {editorStaffId === staff.id && <Check size={16} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {activeStaff.map((staff) => (
+                <TouchableOpacity
+                  key={staff.id}
+                  style={styles.pickerItem}
+                  onPress={() => {
+                    setEditorStaffId(staff.id);
+                    setShowStaffPicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerText}>{staff.fullName}</Text>
+                  {editorStaffId === staff.id && <Check size={16} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -424,19 +426,21 @@ export default function StaffLeaveScreen() {
         <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setShowLeaveTypePicker(false)}>
           <View style={styles.pickerCard}>
             <Text style={styles.pickerTitle}>Select Leave Type</Text>
-            {leaveTypes.map((leaveType) => (
-              <TouchableOpacity
-                key={leaveType.id}
-                style={styles.pickerItem}
-                onPress={() => {
-                  setEditorLeaveTypeId(leaveType.id);
-                  setShowLeaveTypePicker(false);
-                }}
-              >
-                <Text style={styles.pickerText}>{leaveType.name}</Text>
-                {editorLeaveTypeId === leaveType.id && <Check size={16} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {leaveTypes.map((leaveType) => (
+                <TouchableOpacity
+                  key={leaveType.id}
+                  style={styles.pickerItem}
+                  onPress={() => {
+                    setEditorLeaveTypeId(leaveType.id);
+                    setShowLeaveTypePicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerText}>{leaveType.name}</Text>
+                  {editorLeaveTypeId === leaveType.id && <Check size={16} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -715,6 +719,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.card,
     borderRadius: 12,
     padding: 12,
+  },
+  pickerList: {
+    maxHeight: 340,
   },
   pickerTitle: {
     textAlign: 'center',

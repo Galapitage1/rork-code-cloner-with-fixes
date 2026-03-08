@@ -670,22 +670,24 @@ export default function LeaveScreen() {
             {activeStaffMembers.length === 0 ? (
               <Text style={styles.emptyPickerText}>No active staff found in HR.</Text>
             ) : (
-              activeStaffMembers.map((staff) => (
-                <TouchableOpacity
-                  key={staff.id}
-                  style={[
-                    styles.pickerOption,
-                    selectedStaffId === staff.id && styles.pickerOptionSelected
-                  ]}
-                  onPress={() => {
-                    setSelectedStaffId(staff.id);
-                    setShowStaffPicker(false);
-                  }}
-                >
-                  <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
-                  {selectedStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
-                </TouchableOpacity>
-              ))
+              <ScrollView style={styles.pickerList}>
+                {activeStaffMembers.map((staff) => (
+                  <TouchableOpacity
+                    key={staff.id}
+                    style={[
+                      styles.pickerOption,
+                      selectedStaffId === staff.id && styles.pickerOptionSelected
+                    ]}
+                    onPress={() => {
+                      setSelectedStaffId(staff.id);
+                      setShowStaffPicker(false);
+                    }}
+                  >
+                    <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
+                    {selectedStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
             )}
           </View>
         </TouchableOpacity>
@@ -704,23 +706,25 @@ export default function LeaveScreen() {
         >
           <View style={styles.pickerContent}>
             <Text style={styles.pickerTitle}>Select Leave Type</Text>
-            {leaveTypes.map((type) => (
-              <TouchableOpacity
-                key={type.id}
-                style={[
-                  styles.pickerOption,
-                  selectedLeaveType === type.id && styles.pickerOptionSelected
-                ]}
-                onPress={() => {
-                  setSelectedLeaveType(type.id);
-                  setShowLeaveTypePicker(false);
-                }}
-              >
-                <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
-                <Text style={styles.pickerOptionText}>{type.name}</Text>
-                {selectedLeaveType === type.id && <Check size={20} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {leaveTypes.map((type) => (
+                <TouchableOpacity
+                  key={type.id}
+                  style={[
+                    styles.pickerOption,
+                    selectedLeaveType === type.id && styles.pickerOptionSelected
+                  ]}
+                  onPress={() => {
+                    setSelectedLeaveType(type.id);
+                    setShowLeaveTypePicker(false);
+                  }}
+                >
+                  <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
+                  <Text style={styles.pickerOptionText}>{type.name}</Text>
+                  {selectedLeaveType === type.id && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -902,19 +906,21 @@ export default function LeaveScreen() {
         >
           <View style={styles.pickerContent}>
             <Text style={styles.pickerTitle}>Select Staff</Text>
-            {activeStaffMembers.map((staff) => (
-              <TouchableOpacity
-                key={staff.id}
-                style={[styles.pickerOption, balanceStaffId === staff.id && styles.pickerOptionSelected]}
-                onPress={() => {
-                  setBalanceStaffId(staff.id);
-                  setShowBalanceStaffPicker(false);
-                }}
-              >
-                <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
-                {balanceStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {activeStaffMembers.map((staff) => (
+                <TouchableOpacity
+                  key={staff.id}
+                  style={[styles.pickerOption, balanceStaffId === staff.id && styles.pickerOptionSelected]}
+                  onPress={() => {
+                    setBalanceStaffId(staff.id);
+                    setShowBalanceStaffPicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
+                  {balanceStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -932,20 +938,22 @@ export default function LeaveScreen() {
         >
           <View style={styles.pickerContent}>
             <Text style={styles.pickerTitle}>Select Leave Type</Text>
-            {leaveTypes.map((type) => (
-              <TouchableOpacity
-                key={type.id}
-                style={[styles.pickerOption, balanceLeaveTypeId === type.id && styles.pickerOptionSelected]}
-                onPress={() => {
-                  setBalanceLeaveTypeId(type.id);
-                  setShowBalanceLeaveTypePicker(false);
-                }}
-              >
-                <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
-                <Text style={styles.pickerOptionText}>{type.name}</Text>
-                {balanceLeaveTypeId === type.id && <Check size={20} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {leaveTypes.map((type) => (
+                <TouchableOpacity
+                  key={type.id}
+                  style={[styles.pickerOption, balanceLeaveTypeId === type.id && styles.pickerOptionSelected]}
+                  onPress={() => {
+                    setBalanceLeaveTypeId(type.id);
+                    setShowBalanceLeaveTypePicker(false);
+                  }}
+                >
+                  <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
+                  <Text style={styles.pickerOptionText}>{type.name}</Text>
+                  {balanceLeaveTypeId === type.id && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -963,24 +971,26 @@ export default function LeaveScreen() {
         >
           <View style={styles.pickerContent}>
             <Text style={styles.pickerTitle}>Filter by Status</Text>
-            {(['all', 'pending', 'approved', 'rejected'] as FilterStatus[]).map((status) => (
-              <TouchableOpacity
-                key={status}
-                style={[
-                  styles.pickerOption,
-                  filterStatus === status && styles.pickerOptionSelected
-                ]}
-                onPress={() => {
-                  setFilterStatus(status);
-                  setShowFilterPicker(false);
-                }}
-              >
-                <Text style={styles.pickerOptionText}>
-                  {status === 'all' ? 'All Requests' : status.charAt(0).toUpperCase() + status.slice(1)}
-                </Text>
-                {filterStatus === status && <Check size={20} color={Colors.light.tint} />}
-              </TouchableOpacity>
-            ))}
+            <ScrollView style={styles.pickerList}>
+              {(['all', 'pending', 'approved', 'rejected'] as FilterStatus[]).map((status) => (
+                <TouchableOpacity
+                  key={status}
+                  style={[
+                    styles.pickerOption,
+                    filterStatus === status && styles.pickerOptionSelected
+                  ]}
+                  onPress={() => {
+                    setFilterStatus(status);
+                    setShowFilterPicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerOptionText}>
+                    {status === 'all' ? 'All Requests' : status.charAt(0).toUpperCase() + status.slice(1)}
+                  </Text>
+                  {filterStatus === status && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1547,6 +1557,9 @@ const styles = StyleSheet.create({
     padding: 16,
     width: '100%',
     maxWidth: 340,
+  },
+  pickerList: {
+    maxHeight: 340,
   },
   pickerTitle: {
     fontSize: 18,
