@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, FlatList, ActivityIndicator, Alert, Switch, Modal, ScrollView, Dimensions, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry, getPendingReconciliationUploadCounts, retryPendingReconciliationUploadsNow, flushPendingReconciliationUploads } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry, getPendingReconciliationUploadCounts, retryPendingReconciliationUploadsNow, flushPendingReconciliationUploads, getKitchenStockReportsByOutletAndDateRange } from '@/utils/reconciliationSync';
 import { CalendarModal } from '@/components/CalendarModal';
 
 
@@ -42,6 +42,8 @@ type ReconciliationHistory = {
 const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 const CLEAR_SCOPE_ALL_OUTLETS = '__ALL_OUTLETS__';
 const MAX_BULK_RECONCILE_FILES = 31;
+const KITCHEN_PRE_SYNC_COOLDOWN_MS = 2 * 60 * 1000;
+const KITCHEN_PRE_SYNC_TIMEOUT_MS = 3000;
 
 function isStorageQuotaExceeded(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -219,6 +221,7 @@ export default function SalesUploadScreen() {
   const [pendingUploadCounts, setPendingUploadCounts] = useState<{ sales: number; kitchen: number; total: number }>({ sales: 0, kitchen: 0, total: 0 });
   const [loadingPendingUploads, setLoadingPendingUploads] = useState<boolean>(false);
   const [retryingPendingUploads, setRetryingPendingUploads] = useState<boolean>(false);
+  const lastKitchenPreSyncAtRef = useRef<number>(0);
 
   const refreshPendingUploadCounts = useCallback(async () => {
     try {
@@ -1918,19 +1921,28 @@ export default function SalesUploadScreen() {
       console.log('KitchenStock: base64 length', base64.length);
       updateStep(1, 'complete');
       
-      // CRITICAL FIX: Sync BEFORE reconciliation to get latest kitchen stock reports AND inventory from server
+      // FAST PATH: keep pre-sync lightweight so reconciliation starts quickly.
       updateStep(2, 'active');
-      console.log('\n=== SYNCING BEFORE KITCHEN RECONCILIATION ===');
-      console.log('Pulling latest data from server (kitchen reports + inventory)...');
-      try {
-        await syncAllReconciliationData();
-        await refreshPendingUploadCounts();
-        console.log('✓ Reconciliation sync complete');
-        await syncAll(true);
-        console.log('✓ StockContext sync complete - inventory and kitchen reports are fresh');
-      } catch (syncError) {
-        console.error('Sync failed, proceeding with cached data:', syncError);
-        await refreshPendingUploadCounts();
+      console.log('\n=== QUICK PRE-SYNC BEFORE KITCHEN RECONCILIATION ===');
+      const shouldRunPreSync = Date.now() - lastKitchenPreSyncAtRef.current >= KITCHEN_PRE_SYNC_COOLDOWN_MS;
+      if (shouldRunPreSync) {
+        try {
+          await Promise.race([
+            (async () => {
+              await syncAllReconciliationData();
+              lastKitchenPreSyncAtRef.current = Date.now();
+            })(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`Kitchen pre-sync timed out after ${KITCHEN_PRE_SYNC_TIMEOUT_MS}ms`)), KITCHEN_PRE_SYNC_TIMEOUT_MS)
+            ),
+          ]);
+          console.log('✓ Quick reconciliation pre-sync complete');
+          void refreshPendingUploadCounts();
+        } catch (syncError) {
+          console.warn('Quick pre-sync skipped/timed out; proceeding with local cached data:', syncError);
+        }
+      } else {
+        console.log('Skipping pre-sync (recently synced).');
       }
       updateStep(2, 'complete');
       
@@ -1964,7 +1976,9 @@ export default function SalesUploadScreen() {
         console.log('Outlet:', outletName, 'Date:', date);
         
         try {
-          const existingReports = await getLocalKitchenStockReports();
+          const existingReports = await getKitchenStockReportsByOutletAndDateRange(outletName, date, date, {
+            allowServerFetch: false,
+          });
           existingServerReport = existingReports.find(r => r.outlet === outletName && r.date === date && !r.deleted);
           
           if (existingServerReport) {
@@ -2029,29 +2043,43 @@ export default function SalesUploadScreen() {
               .replace(/\s+/g, ' ')
               .trim();
 
+          const productsByExactNameAndUnit = new Map<string, Product[]>();
+          const productsByLooseNameAndUnit = new Map<string, Product[]>();
+          const productsByLooseName = new Map<string, Product[]>();
+          const pushIndexed = (map: Map<string, Product[]>, key: string, product: Product) => {
+            const existing = map.get(key);
+            if (existing) {
+              existing.push(product);
+            } else {
+              map.set(key, [product]);
+            }
+          };
+          products.forEach((product) => {
+            const exactName = normalizeToken(product.name);
+            const looseName = normalizeNameToken(product.name);
+            const unit = normalizeUnitToken(product.unit);
+            pushIndexed(productsByExactNameAndUnit, `${exactName}__${unit}`, product);
+            pushIndexed(productsByLooseNameAndUnit, `${looseName}__${unit}`, product);
+            pushIndexed(productsByLooseName, looseName, product);
+          });
+
+          const pickBestProductCandidate = (candidates: Product[] | undefined): Product | undefined => {
+            if (!candidates || candidates.length === 0) return undefined;
+            if (candidates.length === 1) return candidates[0];
+            const byType = candidates.find((p) => p.type === 'kitchen' || p.type === 'menu');
+            return byType || candidates[0];
+          };
+
           const findProductForKitchenRow = (name: string, unit: string): Product | undefined => {
             const exactName = normalizeToken(name);
             const looseName = normalizeNameToken(name);
             const normalizedUnit = normalizeUnitToken(unit);
 
-            let candidates = products.filter((p: Product) =>
-              normalizeToken(p.name) === exactName && normalizeUnitToken(p.unit) === normalizedUnit
+            return (
+              pickBestProductCandidate(productsByExactNameAndUnit.get(`${exactName}__${normalizedUnit}`)) ||
+              pickBestProductCandidate(productsByLooseNameAndUnit.get(`${looseName}__${normalizedUnit}`)) ||
+              pickBestProductCandidate(productsByLooseName.get(looseName))
             );
-            if (candidates.length > 0) return candidates[0];
-
-            candidates = products.filter((p: Product) =>
-              normalizeNameToken(p.name) === looseName && normalizeUnitToken(p.unit) === normalizedUnit
-            );
-            if (candidates.length > 0) return candidates[0];
-
-            candidates = products.filter((p: Product) => normalizeNameToken(p.name) === looseName);
-            if (candidates.length === 1) return candidates[0];
-            if (candidates.length > 1) {
-              const byType = candidates.find((p) => p.type === 'kitchen' || p.type === 'menu');
-              return byType || candidates[0];
-            }
-
-            return undefined;
           };
 
           // Build products array from discrepancies
@@ -2114,6 +2142,11 @@ export default function SalesUploadScreen() {
             quantityWhole: number;
             quantitySlices: number;
           }>();
+          const conversionFactorByProductId = new Map<string, number>();
+          productConversions.forEach((conversion) => {
+            conversionFactorByProductId.set(conversion.fromProductId, conversion.conversionFactor);
+            conversionFactorByProductId.set(conversion.toProductId, conversion.conversionFactor);
+          });
           
           reportProductsRaw.forEach(p => {
             const existing = productMap.get(p.productId);
@@ -2128,12 +2161,8 @@ export default function SalesUploadScreen() {
               let totalSlices = existing.quantitySlices + p.quantitySlices;
               
               // Normalize slices to whole if needed
-              const productConversion = productConversions.find(c => 
-                c.fromProductId === p.productId || c.toProductId === p.productId
-              );
-              
-              if (productConversion) {
-                const factor = productConversion.conversionFactor;
+              const factor = conversionFactorByProductId.get(p.productId);
+              if (factor) {
                 if (totalSlices >= factor) {
                   const extraWhole = Math.floor(totalSlices / factor);
                   totalWhole += extraWhole;
@@ -2230,14 +2259,20 @@ export default function SalesUploadScreen() {
               }
               
               const inventoryUpdates: Array<{ productId: string; updates: Partial<InventoryStock> }> = [];
+              const productById = new Map(products.map((product) => [product.id, product] as const));
+              const inventoryByProductId = new Map(freshInventory.map((stock) => [stock.productId, stock] as const));
+              const previousReportByProductId = new Map(
+                ((existingReport?.products as Array<{ productId: string; quantityWhole: number; quantitySlices: number }> | undefined) || [])
+                  .map((product) => [product.productId, product] as const)
+              );
               
               for (const reportProduct of reportProducts) {
                 if (!reportProduct.productId) continue;
                 
-                const product = products.find(p => p.id === reportProduct.productId);
+                const product = productById.get(reportProduct.productId);
                 if (!product) continue;
                 
-                const invStock = freshInventory.find(s => s.productId === reportProduct.productId);
+                const invStock = inventoryByProductId.get(reportProduct.productId);
                 if (!invStock) {
                   console.log(`No inventory stock found for ${reportProduct.productName}, skipping`);
                   continue;
@@ -2251,7 +2286,7 @@ export default function SalesUploadScreen() {
                 
                 if (previousReport) {
                   // Find the previous quantity for this product
-                  const prevProduct = previousReport.products.find((p: any) => p.productId === reportProduct.productId);
+                  const prevProduct = previousReportByProductId.get(reportProduct.productId);
                   
                   if (prevProduct) {
                     const quantitiesChanged = 
@@ -2311,15 +2346,18 @@ export default function SalesUploadScreen() {
                 if (currentInventoryData) {
                   currentInventory = JSON.parse(currentInventoryData).filter((i: any) => !i?.deleted);
                 }
+                const updatesByProductId = new Map(
+                  inventoryUpdates.map((update) => [update.productId, update.updates] as const)
+                );
                 
                 // Apply updates to fresh inventory data
                 const updatedInventory = currentInventory.map((inv: InventoryStock) => {
-                  const update = inventoryUpdates.find((u: { productId: string; updates: Partial<InventoryStock> }) => u.productId === inv.productId);
+                  const update = updatesByProductId.get(inv.productId);
                   if (update) {
-                    console.log(`Applying update to ${inv.productId}: prodsReqWhole=${update.updates.prodsReqWhole}, prodsReqSlices=${update.updates.prodsReqSlices}`);
+                    console.log(`Applying update to ${inv.productId}: prodsReqWhole=${update.prodsReqWhole}, prodsReqSlices=${update.prodsReqSlices}`);
                     return {
                       ...inv,
-                      ...update.updates,
+                      ...update,
                       updatedAt: Date.now(),
                     };
                   }
