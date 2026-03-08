@@ -10,7 +10,7 @@ import { Product, StockCheck, SalesDeduction, InventoryStock } from '@/types';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { exportSalesDiscrepanciesToExcel, reconcileSalesFromExcelBase64, SalesReconcileResult, computeRawConsumptionFromSales, RawConsumptionResult, parseRequestsReceivedFromExcelBase64, reconcileKitchenStockFromExcelBase64, KitchenStockCheckResult, exportKitchenStockDiscrepanciesToExcel } from '@/utils/salesReconciler';
-import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry, getPendingReconciliationUploadCounts, retryPendingReconciliationUploadsNow } from '@/utils/reconciliationSync';
+import { saveKitchenStockReportLocally, saveKitchenStockReportToServer, getLocalKitchenStockReports, KitchenStockReport, saveSalesReportLocally, saveSalesReportToServer, getLocalSalesReports, SalesReport, syncAllReconciliationData, queueSalesReportForRetry, queueKitchenStockReportForRetry, getPendingReconciliationUploadCounts, retryPendingReconciliationUploadsNow, flushPendingReconciliationUploads } from '@/utils/reconciliationSync';
 import { CalendarModal } from '@/components/CalendarModal';
 
 
@@ -41,6 +41,139 @@ type ReconciliationHistory = {
 
 const RECONCILIATION_HISTORY_KEY = '@sales_reconciliation_history';
 const CLEAR_SCOPE_ALL_OUTLETS = '__ALL_OUTLETS__';
+const MAX_BULK_RECONCILE_FILES = 31;
+
+function isStorageQuotaExceeded(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  return lower.includes('quota') || lower.includes('exceeded');
+}
+
+function normalizeHistoryOutletName(outlet: string | undefined | null): string {
+  return String(outlet || '').trim().toLowerCase();
+}
+
+function normalizedHistoryDate(value: string | undefined | null, fallbackTs: number): string {
+  const raw = String(value || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (fallbackTs > 0) {
+    try {
+      return new Date(fallbackTs).toISOString().slice(0, 10);
+    } catch {
+      return '1970-01-01';
+    }
+  }
+  return '1970-01-01';
+}
+
+function dedupeReconciliationHistory(history: ReconciliationHistory[]): ReconciliationHistory[] {
+  const latestByDateOutlet = new Map<string, ReconciliationHistory>();
+  for (const item of history) {
+    const key = `${normalizedHistoryDate(item.date, item.timestamp)}__${normalizeHistoryOutletName(item.outlet)}`;
+    const existing = latestByDateOutlet.get(key);
+    if (!existing || (item.timestamp || 0) >= (existing.timestamp || 0)) {
+      latestByDateOutlet.set(key, item);
+    }
+  }
+  return Array.from(latestByDateOutlet.values());
+}
+
+function sortReconciliationHistory(history: ReconciliationHistory[]): ReconciliationHistory[] {
+  return [...history].sort((a, b) => {
+    const timeCompare = (b.timestamp || 0) - (a.timestamp || 0);
+    if (timeCompare !== 0) return timeCompare;
+    return normalizedHistoryDate(b.date, b.timestamp).localeCompare(normalizedHistoryDate(a.date, a.timestamp));
+  });
+}
+
+function buildHistoryCandidate(
+  history: ReconciliationHistory[],
+  daysToKeep: number | null,
+  maxItems: number | null,
+): ReconciliationHistory[] {
+  const deduped = sortReconciliationHistory(dedupeReconciliationHistory(history));
+
+  const cutoffDate = new Date();
+  if (daysToKeep !== null) {
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  }
+  const cutoffKey = cutoffDate.toISOString().slice(0, 10);
+
+  const filtered = deduped.filter((entry) => {
+    if (daysToKeep === null) return true;
+    return normalizedHistoryDate(entry.date, entry.timestamp) >= cutoffKey;
+  });
+
+  if (maxItems !== null && filtered.length > maxItems) {
+    return filtered.slice(0, maxItems);
+  }
+  return filtered;
+}
+
+async function persistReconciliationHistoryWithQuotaGuard(
+  history: ReconciliationHistory[],
+  contextLabel: string,
+): Promise<ReconciliationHistory[]> {
+  const full = buildHistoryCandidate(history, null, null);
+
+  if (full.length === 0) {
+    try {
+      await AsyncStorage.removeItem(RECONCILIATION_HISTORY_KEY);
+      return [];
+    } catch (error) {
+      if (!isStorageQuotaExceeded(error)) throw error;
+      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify([]));
+      return [];
+    }
+  }
+
+  const attempts: Array<{ daysToKeep: number | null; maxItems: number | null; label: string }> = [
+    { daysToKeep: null, maxItems: null, label: 'full' },
+    { daysToKeep: 365, maxItems: 1200, label: '365d/1200' },
+    { daysToKeep: 240, maxItems: 900, label: '240d/900' },
+    { daysToKeep: 180, maxItems: 700, label: '180d/700' },
+    { daysToKeep: 120, maxItems: 500, label: '120d/500' },
+    { daysToKeep: 90, maxItems: 380, label: '90d/380' },
+    { daysToKeep: 60, maxItems: 260, label: '60d/260' },
+    { daysToKeep: 45, maxItems: 200, label: '45d/200' },
+    { daysToKeep: 30, maxItems: 150, label: '30d/150' },
+    { daysToKeep: 21, maxItems: 120, label: '21d/120' },
+    { daysToKeep: 14, maxItems: 100, label: '14d/100' },
+    { daysToKeep: 7, maxItems: 80, label: '7d/80' },
+  ];
+
+  let lastQuotaError: unknown = null;
+  for (const attempt of attempts) {
+    const candidate = buildHistoryCandidate(full, attempt.daysToKeep, attempt.maxItems);
+    try {
+      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(candidate));
+      if (attempt.label !== 'full') {
+        console.warn(
+          `[SalesUpload] ${contextLabel}: Reconciliation history exceeded quota, persisted reduced local cache (${attempt.label}) with ${candidate.length} rows.`,
+        );
+      }
+      return candidate;
+    } catch (error) {
+      if (!isStorageQuotaExceeded(error)) {
+        throw error;
+      }
+      lastQuotaError = error;
+    }
+  }
+
+  const emergency = full.slice(0, 40);
+  try {
+    await AsyncStorage.removeItem(RECONCILIATION_HISTORY_KEY);
+    await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(emergency));
+    console.warn(`[SalesUpload] ${contextLabel}: Persisted emergency minimal reconciliation history cache (${emergency.length} rows).`);
+    return emergency;
+  } catch (error) {
+    if (!isStorageQuotaExceeded(error)) {
+      throw error;
+    }
+    throw lastQuotaError || new Error('Unable to save reconciliation history due to storage quota.');
+  }
+}
 
 export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: Rendering');
@@ -53,6 +186,7 @@ export default function SalesUploadScreen() {
   console.log('SalesUploadScreen: outlets.length:', outlets.length);
   console.log('SalesUploadScreen: stockChecks.length:', stockChecks.length);
   const [isPicking, setIsPicking] = useState<boolean>(false);
+  const [enableSalesBulkImport, setEnableSalesBulkImport] = useState<boolean>(false);
   const [isPickingRequests, setIsPickingRequests] = useState<boolean>(false);
   const [manualMode, setManualMode] = useState<boolean>(false);
   const [requestBase64, setRequestBase64] = useState<string | null>(null);
@@ -113,6 +247,20 @@ export default function SalesUploadScreen() {
     } finally {
       setRetryingPendingUploads(false);
       refreshPendingUploadCounts();
+    }
+  }, [refreshPendingUploadCounts]);
+
+  const runPostReconciliationSync = useCallback(async (contextLabel: string) => {
+    console.log(`[SalesUpload] Starting post-reconciliation sync (${contextLabel})`);
+    try {
+      await flushPendingReconciliationUploads();
+      await refreshPendingUploadCounts();
+      console.log(`[SalesUpload] Post-reconciliation sync complete (${contextLabel})`);
+      return true;
+    } catch (error) {
+      console.error(`[SalesUpload] Post-reconciliation sync failed (${contextLabel}):`, error);
+      await refreshPendingUploadCounts();
+      return false;
     }
   }, [refreshPendingUploadCounts]);
 
@@ -718,9 +866,15 @@ export default function SalesUploadScreen() {
         }
 
         updatedHistory.sort((a, b) => b.timestamp - a.timestamp);
-        AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(updatedHistory)).catch(err => {
-          console.error('Failed to save reconciliation history:', err);
-        });
+        void persistReconciliationHistoryWithQuotaGuard(updatedHistory, 'saveReconciliationToHistory')
+          .then((persistedHistory) => {
+            if (persistedHistory.length !== updatedHistory.length) {
+              setReconciliationHistory(persistedHistory);
+            }
+          })
+          .catch(err => {
+            console.error('Failed to save reconciliation history:', err);
+          });
         return updatedHistory;
       });
     } catch (error) {
@@ -743,25 +897,61 @@ export default function SalesUploadScreen() {
       setIsPicking(true);
       setResult(null);
       setShowProcessingModal(true);
-      
-      const steps = [
-        { text: 'Selecting Excel file...', status: 'active' as const },
-        { text: 'Reading file contents...', status: 'pending' as const },
-        { text: 'Syncing latest data from server...', status: 'pending' as const },
-        { text: 'Parsing sales data...', status: 'pending' as const },
-        { text: 'Matching with stock checks...', status: 'pending' as const },
-        { text: 'Checking for existing reconciliation...', status: 'pending' as const },
-        { text: 'Processing inventory deductions...', status: 'pending' as const },
-        { text: 'Finalizing results...', status: 'pending' as const },
-      ];
-      setProcessingSteps(steps);
-      
-      const res = await DocumentPicker.getDocumentAsync({ type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'], multiple: false, copyToCacheDirectory: true });
+
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'],
+        multiple: enableSalesBulkImport,
+        copyToCacheDirectory: true
+      });
       if (res.canceled || !res.assets || res.assets.length === 0) {
-        updateStep(0, 'error');
+        setProcessingSteps([{ text: 'File selection cancelled', status: 'error' as const }]);
         return;
       }
-      const file = res.assets[0];
+
+      if (enableSalesBulkImport && res.assets.length > MAX_BULK_RECONCILE_FILES) {
+        Alert.alert(
+          'Bulk limit applied',
+          `Selected ${res.assets.length} files. Processing first ${MAX_BULK_RECONCILE_FILES} files only.`
+        );
+      }
+
+      const selectedFiles = (enableSalesBulkImport ? res.assets.slice(0, MAX_BULK_RECONCILE_FILES) : [res.assets[0]]).filter(Boolean);
+      let successCount = 0;
+      let failedCount = 0;
+      let needsBulkPostSync = false;
+      const skippedDetails: Array<{ file: string; date: string; outlet: string; reason: string }> = [];
+
+      if (enableSalesBulkImport) {
+        setProcessingSteps([
+          { text: 'Preparing bulk reconciliation...', status: 'active' as const },
+          { text: 'Syncing latest data once before bulk run...', status: 'pending' as const },
+        ]);
+        updateStep(1, 'active');
+        try {
+          await syncAll(true);
+          updateStep(1, 'complete');
+        } catch (syncError) {
+          console.error('Bulk pre-sync failed, continuing with cached data:', syncError);
+          updateStep(1, 'error');
+        }
+      }
+
+      for (let fileIndex = 0; fileIndex < selectedFiles.length; fileIndex++) {
+        const file = selectedFiles[fileIndex];
+        setProcessingSteps([
+          { text: `Selecting Excel file (${fileIndex + 1}/${selectedFiles.length})...`, status: 'active' as const },
+          { text: 'Reading file contents...', status: 'pending' as const },
+          { text: 'Syncing latest data from server...', status: 'pending' as const },
+          { text: 'Parsing sales data...', status: 'pending' as const },
+          { text: 'Matching with stock checks...', status: 'pending' as const },
+          { text: 'Checking for existing reconciliation...', status: 'pending' as const },
+          { text: 'Processing inventory deductions...', status: 'pending' as const },
+          { text: 'Finalizing results...', status: 'pending' as const },
+        ]);
+
+        let fileDate = 'Unknown date';
+        let fileOutlet = 'Unknown outlet';
+        try {
       console.log('SalesUpload: picked file', file);
       updateStep(0, 'complete');
       
@@ -774,12 +964,16 @@ export default function SalesUploadScreen() {
       // This ensures we see if reconciliation was already done on another device
       updateStep(2, 'active');
       console.log('\n=== SYNCING BEFORE RECONCILIATION ===');
-      console.log('Pulling latest reconciliation data from server...');
-      try {
-        await syncAll(true); // silent sync
-        console.log('✓ Sync complete - will read fresh data from AsyncStorage');
-      } catch (syncError) {
-        console.error('Sync failed, proceeding with cached data:', syncError);
+      if (enableSalesBulkImport) {
+        console.log('Bulk mode: using pre-run sync for this file');
+      } else {
+        console.log('Pulling latest reconciliation data from server...');
+        try {
+          await syncAll(true); // silent sync
+          console.log('✓ Sync complete - will read fresh data from AsyncStorage');
+        } catch (syncError) {
+          console.error('Sync failed, proceeding with cached data:', syncError);
+        }
       }
       updateStep(2, 'complete');
       
@@ -801,11 +995,14 @@ export default function SalesUploadScreen() {
       const reconciled = await reconcileSalesFromExcelBase64(base64, stockChecks, products, { requestsReceivedByProductId: requestsMap, productConversions });
       console.log('SalesUpload: reconciled', reconciled);
       updateStep(4, 'complete');
+      fileDate = reconciled.sheetDate || 'Unknown date';
+      fileOutlet = reconciled.matchedOutletName || reconciled.outletFromSheet || 'Unknown outlet';
       
       // CRITICAL FIX: Check if reconciliation already exists BEFORE making any deductions
       updateStep(5, 'active');
       const outlet = reconciled.matchedOutletName || reconciled.outletFromSheet;
       const date = reconciled.sheetDate;
+      let hasExistingReconciliation = false;
       
       if (outlet && date) {
         console.log('\n=== CHECKING FOR EXISTING RECONCILIATION ===');
@@ -834,6 +1031,7 @@ export default function SalesUploadScreen() {
         );
         
         if (existingReconciliation) {
+          hasExistingReconciliation = true;
           console.log('✓ FOUND EXISTING RECONCILIATION - Skipping inventory deductions');
           console.log('  This reconciliation was already processed before');
           console.log('  Reconciliation ID:', existingReconciliation.id);
@@ -879,25 +1077,38 @@ export default function SalesUploadScreen() {
         updateStep(6, 'complete');
       }
       
+      if (hasExistingReconciliation) {
+        updateStep(7, 'complete');
+        setProcessingSteps(prev => [
+          ...prev,
+          {
+            text: `✓ Already reconciled for ${date || 'unknown date'} (${outlet || 'unknown outlet'}) - skipped duplicate`,
+            status: 'complete'
+          }
+        ]);
+        successCount++;
+        continue;
+      }
+
       updateStep(7, 'active');
       
       if (reconciled.errors.length > 0 && reconciled.rows.length === 0) {
         updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: `Error: ${reconciled.errors.join(', ')}`, status: 'error' }]);
-        return;
+        throw new Error(reconciled.errors.join(', ') || 'No valid sales rows found');
       }
       
       if (!reconciled.dateMatched) {
         const msg = reconciled.errors.length > 0 ? reconciled.errors.join('\n') : 'Stock check date does not match sales sheet date (H9). Please ensure dates match and try again.';
         updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: `Error: Date mismatch - ${msg}`, status: 'error' }]);
-        return;
+        throw new Error(msg);
       }
       
       if (reconciled.rows.length === 0) {
         updateStep(7, 'error');
         setProcessingSteps(prev => [...prev, { text: 'Error: No valid sales data found in the uploaded file', status: 'error' }]);
-        return;
+        throw new Error('No valid sales data found in the uploaded file');
       }
       setResult(reconciled);
       await saveReconciliationToHistory(reconciled);
@@ -1319,32 +1530,16 @@ export default function SalesUploadScreen() {
           }
           console.log('=== SALES REPORT SAVE COMPLETE ===\n');
           
-          // CRITICAL FIX: Trigger immediate sync and AWAIT it so reconciliation is on server BEFORE user can navigate away
-          console.log('\n=== SYNCING RECONCILIATION TO SERVER (IMMEDIATE) ===');
-          console.log('Triggering immediate sync to share reconciliation with other devices...');
-          console.log('⚠️ This sync must complete BEFORE any background sync to prevent data conflicts');
-          
-          try {
-            // CRITICAL: First sync the NEW reconciliation system (sales reports)
-            // This must happen BEFORE StockContext sync to ensure fresh data is on server
-            console.log('Step 1: Syncing NEW reconciliation system (sales reports)...');
-            await syncAllReconciliationData();
-            await refreshPendingUploadCounts();
-            console.log('✓ Sales reports synced to server');
-            
-            // Small delay to ensure server processes the sales report
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // Now sync StockContext data
-            console.log('Step 2: Syncing StockContext data...');
-            await syncAll(false); // Use manual sync (not silent) to ensure it completes
-            console.log('✓ StockContext synced to server successfully');
-            console.log('✓ Other devices will receive it on their next sync');
-          } catch (syncError) {
-            console.error('❌ Failed to sync reconciliation to server:', syncError);
-            console.error('Reconciliation is saved locally but may not be available on other devices');
-            await refreshPendingUploadCounts();
-            Alert.alert('Sync Warning', 'Reconciliation saved locally but could not sync to server. Other devices may not see this data.');
+          console.log('\n=== QUEUING RECONCILIATION SYNC ===');
+          if (enableSalesBulkImport && selectedFiles.length > 1) {
+            needsBulkPostSync = true;
+            setProcessingSteps(prev => [...prev, { text: 'Queued server sync (will run once after bulk import)', status: 'complete' }]);
+          } else {
+            const syncOk = await runPostReconciliationSync('single sales reconciliation');
+            if (!syncOk) {
+              setProcessingSteps(prev => [...prev, { text: '⚠️ Sync deferred: saved locally and queued for retry', status: 'error' }]);
+              Alert.alert('Sync Queued', 'Reconciliation is saved locally and queued. It will retry automatically when connection is stable.');
+            }
           }
           console.log('=== RECONCILIATION SAVE COMPLETE ===\n');
         } catch (error) {
@@ -1362,6 +1557,58 @@ export default function SalesUploadScreen() {
       if (reconciled.errors.length > 0) {
         setProcessingSteps(prev => [...prev, { text: `Note: ${reconciled.errors.join(', ')}`, status: 'error' }]);
       }
+      successCount++;
+        } catch (fileError) {
+          failedCount++;
+          console.error(`SalesUpload: failed processing file ${file.name}:`, fileError);
+          skippedDetails.push({
+            file: file.name || `File ${fileIndex + 1}`,
+            date: fileDate,
+            outlet: fileOutlet,
+            reason: fileError instanceof Error ? fileError.message : 'Unknown error',
+          });
+          setProcessingSteps(prev => [
+            ...prev,
+            { text: `Skipped ${fileDate} (${file.name}): ${fileError instanceof Error ? fileError.message : 'Unknown error'}`, status: 'error' }
+          ]);
+        }
+      }
+
+      if (enableSalesBulkImport && needsBulkPostSync && selectedFiles.length > 1) {
+        setProcessingSteps(prev => [
+          ...prev,
+          { text: 'Started final bulk sync to server in background...', status: 'complete' },
+        ]);
+
+        void runPostReconciliationSync('bulk sales reconciliation').then((bulkSyncOk) => {
+          setProcessingSteps(prev => [
+            ...prev,
+            bulkSyncOk
+              ? { text: '✓ Final bulk sync completed', status: 'complete' }
+              : { text: '⚠️ Final bulk sync deferred; pending uploads will retry automatically', status: 'error' }
+          ]);
+        }).catch((syncError) => {
+          console.error('Background bulk sync failed:', syncError);
+          setProcessingSteps(prev => [
+            ...prev,
+            { text: '⚠️ Final bulk sync deferred; pending uploads will retry automatically', status: 'error' }
+          ]);
+        });
+      }
+
+      if (selectedFiles.length > 1) {
+        const skippedPreview = skippedDetails
+          .slice(0, 8)
+          .map(item => `- ${item.date} (${item.file}): ${item.reason}`)
+          .join('\n');
+        const moreSkipped = skippedDetails.length > 8 ? `\n...and ${skippedDetails.length - 8} more skipped file(s).` : '';
+
+        Alert.alert(
+          'Bulk Reconciliation Complete',
+          `Processed: ${selectedFiles.length}\nSuccessful: ${successCount}\nSkipped/Failed: ${failedCount}` +
+            (skippedDetails.length > 0 ? `\n\nSkipped details:\n${skippedPreview}${moreSkipped}` : '')
+        );
+      }
     } catch (e) {
       console.error('SalesUpload: pick error', e);
       setProcessingSteps(prev => [...prev, { text: `Fatal Error: ${e instanceof Error ? e.message : 'Failed to load file'}`, status: 'error' }]);
@@ -1369,7 +1616,7 @@ export default function SalesUploadScreen() {
       await refreshPendingUploadCounts();
       setIsPicking(false);
     }
-  }, [stockChecks, products, recipes, manualMode, requestBase64, productConversions, processSalesInventoryDeductions, processRawMaterialDeductions, saveReconciliationToHistory, addReconcileHistory, syncAll, updateStep, refreshPendingUploadCounts]);
+  }, [stockChecks, products, recipes, manualMode, requestBase64, productConversions, processSalesInventoryDeductions, processRawMaterialDeductions, saveReconciliationToHistory, addReconcileHistory, syncAll, updateStep, refreshPendingUploadCounts, enableSalesBulkImport, runPostReconciliationSync]);
 
   useEffect(() => {
     const loadHistory = async () => {
@@ -1390,8 +1637,8 @@ export default function SalesUploadScreen() {
   const handleDeleteHistory = useCallback(async (index: number) => {
     try {
       const updatedHistory = reconciliationHistory.filter((_, i) => i !== index);
-      setReconciliationHistory(updatedHistory);
-      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(updatedHistory));
+      const persistedHistory = await persistReconciliationHistoryWithQuotaGuard(updatedHistory, 'handleDeleteHistory');
+      setReconciliationHistory(persistedHistory);
       setShowDeleteConfirm(false);
       setDeleteTargetIndex(null);
       Alert.alert('Success', 'Reconciliation record deleted successfully.');
@@ -1404,8 +1651,8 @@ export default function SalesUploadScreen() {
   const handleDeleteAllHistory = useCallback(async () => {
     try {
       console.log('handleDeleteAllHistory: Deleting local reconciliation history (UI view)');
+      await persistReconciliationHistoryWithQuotaGuard([], 'handleDeleteAllHistory');
       setReconciliationHistory([]);
-      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify([]));
       setShowDeleteAllConfirm(false);
       Alert.alert('Success', 'All reconciliation history deleted successfully from this view.');
     } catch (error) {
@@ -1426,8 +1673,8 @@ export default function SalesUploadScreen() {
       
       // Step 1: Clear local reconciliation history (UI view)
       console.log('Step 1: Clearing local reconciliation history...');
+      await persistReconciliationHistoryWithQuotaGuard([], 'handleDeleteAllReconciliationData');
       setReconciliationHistory([]);
-      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify([]));
       console.log('✓ Local reconciliation history cleared');
       
       // Step 2: Clear StockContext reconcileHistory and sync deletion to server
@@ -1482,8 +1729,8 @@ export default function SalesUploadScreen() {
       // STEP 1: Clear local reconciliation history (UI view)
       console.log('Step 1: Clearing local reconciliation history...');
       const updatedHistory = reconciliationHistory.filter(h => !(h.date === clearDateInput && matchesOutlet(h.outlet)));
-      await AsyncStorage.setItem(RECONCILIATION_HISTORY_KEY, JSON.stringify(updatedHistory));
-      setReconciliationHistory(updatedHistory);
+      const persistedHistory = await persistReconciliationHistoryWithQuotaGuard(updatedHistory, 'handleClearReconciliationData');
+      setReconciliationHistory(persistedHistory);
       console.log('✓ Local reconciliation history cleared');
 
       // STEP 2: Mark reconciliation entries for this date as deleted in StockContext
@@ -1761,9 +2008,55 @@ export default function SalesUploadScreen() {
           // Use the existing report we already found (from server sync)
           const existingReport = existingServerReport;
           
+          const normalizeToken = (value: string | number | null | undefined): string =>
+            String(value ?? '')
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .trim();
+
+          const normalizeUnitToken = (value: string | number | null | undefined): string => {
+            let token = normalizeToken(value).replace(/\./g, '');
+            if (token.endsWith('s') && !token.endsWith('ss')) {
+              token = token.slice(0, -1);
+            }
+            return token;
+          };
+
+          const normalizeNameToken = (value: string | number | null | undefined): string =>
+            normalizeToken(value)
+              .replace(/\((whole|slice|slices)\)/g, ' ')
+              .replace(/[^a-z0-9 ]/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+          const findProductForKitchenRow = (name: string, unit: string): Product | undefined => {
+            const exactName = normalizeToken(name);
+            const looseName = normalizeNameToken(name);
+            const normalizedUnit = normalizeUnitToken(unit);
+
+            let candidates = products.filter((p: Product) =>
+              normalizeToken(p.name) === exactName && normalizeUnitToken(p.unit) === normalizedUnit
+            );
+            if (candidates.length > 0) return candidates[0];
+
+            candidates = products.filter((p: Product) =>
+              normalizeNameToken(p.name) === looseName && normalizeUnitToken(p.unit) === normalizedUnit
+            );
+            if (candidates.length > 0) return candidates[0];
+
+            candidates = products.filter((p: Product) => normalizeNameToken(p.name) === looseName);
+            if (candidates.length === 1) return candidates[0];
+            if (candidates.length > 1) {
+              const byType = candidates.find((p) => p.type === 'kitchen' || p.type === 'menu');
+              return byType || candidates[0];
+            }
+
+            return undefined;
+          };
+
           // Build products array from discrepancies
           const reportProductsRaw = reconciled.discrepancies.map(d => {
-            const product = products.find((p: Product) => p.name === d.productName && p.unit === d.unit);
+            const product = findProductForKitchenRow(d.productName, d.unit);
             
             if (!product) {
               console.log(`⚠️ Product not found for kitchen report: ${d.productName} (${d.unit})`);
@@ -2062,7 +2355,7 @@ export default function SalesUploadScreen() {
                 } catch (syncError) {
                   console.error('❌ Failed to sync Prods.Req updates to server:', syncError);
                   await refreshPendingUploadCounts();
-                  Alert.alert('Sync Warning', 'Prods.Req updated locally but could not sync to server. Other devices may not see these updates.');
+                  Alert.alert('Sync Deferred', 'Prods.Req was saved locally. Kitchen/Sales reconciliation reports remain queued and will retry when the connection is stable.');
                 }
                 console.log('=== SYNC COMPLETE ===\n');
                 
@@ -2395,6 +2688,10 @@ export default function SalesUploadScreen() {
         </View>
         <Text style={styles.cardDesc}>Sheet fields used: Outlet J5, Names I14:I500, Units R14:R500, Sold AC14:AC500.</Text>
         <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>Enable Bulk Reconciliation (up to 31 files)</Text>
+          <Switch value={enableSalesBulkImport} onValueChange={setEnableSalesBulkImport} testID="sales-bulk-toggle" />
+        </View>
+        <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Manual upload stock requests</Text>
           <Switch value={manualMode} onValueChange={setManualMode} testID="manual-toggle" />
         </View>
@@ -2430,7 +2727,7 @@ export default function SalesUploadScreen() {
           {isPicking ? <ActivityIndicator color="#fff" /> : (
             <View style={styles.btnInner}>
               <UploadCloud color="#fff" size={18} />
-              <Text style={styles.primaryBtnText}>Choose Excel</Text>
+              <Text style={styles.primaryBtnText}>{enableSalesBulkImport ? 'Choose Excel Files' : 'Choose Excel'}</Text>
             </View>
           )}
         </TouchableOpacity>

@@ -44,15 +44,54 @@ const isUserStockCheck = (check: StockCheck) => {
   return completedBy !== '' && completedBy !== 'AUTO';
 };
 
+const DEBUG_LIVE_INVENTORY = false;
+const debugLog = (...args: any[]) => {
+  if (DEBUG_LIVE_INVENTORY) {
+    console.log(...args);
+  }
+};
+
+const RECONCILIATION_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+function toIsoDate(value: Date): string {
+  return value.toISOString().split('T')[0];
+}
+
+function buildInclusiveDateRange(startDate: string, endDate: string): string[] {
+  if (!startDate || !endDate) return [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+
+  const startTime = Math.min(start.getTime(), end.getTime());
+  const endTime = Math.max(start.getTime(), end.getTime());
+  const dates: string[] = [];
+
+  for (let t = startTime; t <= endTime; t += DAY_IN_MS) {
+    dates.push(toIsoDate(new Date(t)));
+  }
+  return dates;
+}
+
 function LiveInventoryScreen() {
-  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, syncAll, reconcileHistory } = useStock();
+  const { products, outlets, stockChecks, salesDeductions, productConversions, requests, updateStockCheck, saveStockCheck, reconcileHistory } = useStock();
   const { recipes } = useRecipes();
   const { storeProducts } = useStores();
   const [selectedOutlet, setSelectedOutlet] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [customStartDate, setCustomStartDate] = useState<string>(() => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 6);
+    return toIsoDate(start);
+  });
+  const [customEndDate, setCustomEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showOutletModal, setShowOutletModal] = useState<boolean>(false);
   const [showCalendar, setShowCalendar] = useState<boolean>(false);
-  const [dateRange, setDateRange] = useState<'week' | 'month'>('week');
+  const [showStartDateCalendar, setShowStartDateCalendar] = useState<boolean>(false);
+  const [showEndDateCalendar, setShowEndDateCalendar] = useState<boolean>(false);
+  const [dateRange, setDateRange] = useState<'week' | 'month' | 'custom'>('week');
   const [productSearch, setProductSearch] = useState<string>('');
   const [editingCell, setEditingCell] = useState<{productId: string; date: string; field: 'currentWhole' | 'currentSlices'} | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -60,14 +99,10 @@ function LiveInventoryScreen() {
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [kitchenStockReports, setKitchenStockReports] = useState<KitchenStockReport[]>([]);
   const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
-  const syncAllRef = useRef(syncAll);
   const activeLoadKeyRef = useRef<string | null>(null);
+  const lastReconciliationSyncAtRef = useRef<number>(0);
 
-  useEffect(() => {
-    syncAllRef.current = syncAll;
-  }, [syncAll]);
-
-  const getDateRange = useCallback((endDate: string, rangeType: 'week' | 'month'): string[] => {
+  const getPresetDateRange = useCallback((endDate: string, rangeType: 'week' | 'month'): string[] => {
     const end = new Date(endDate);
     const dates: string[] = [];
     const daysBack = rangeType === 'week' ? 7 : 30;
@@ -81,13 +116,39 @@ function LiveInventoryScreen() {
     return dates;
   }, []);
 
-  // CRITICAL: Sync reconciliation data when outlet or date changes
-  // This ensures sold items from other devices are displayed
+  const activeDateWindow = useMemo(() => {
+    if (dateRange === 'custom') {
+      const dates = buildInclusiveDateRange(customStartDate, customEndDate);
+      const startDate = dates[0] || customStartDate;
+      const endDate = dates[dates.length - 1] || customEndDate;
+      return { dates, startDate, endDate };
+    }
+
+    const dates = getPresetDateRange(selectedDate, dateRange);
+    return {
+      dates,
+      startDate: dates[0] || selectedDate,
+      endDate: dates[dates.length - 1] || selectedDate,
+    };
+  }, [customEndDate, customStartDate, dateRange, getPresetDateRange, selectedDate]);
+
+  const normalizeOutletName = useCallback((value?: string | null): string => {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }, []);
+
+  const outletMatches = useCallback((left?: string | null, right?: string | null): boolean => {
+    return normalizeOutletName(left) === normalizeOutletName(right);
+  }, [normalizeOutletName]);
+
+  // Load local reconciliation reports immediately, then sync in background.
   useEffect(() => {
-    if (!selectedOutlet || !selectedDate) return;
+    if (!selectedOutlet || activeDateWindow.dates.length === 0) return;
     
-    console.log('[LIVE INVENTORY] Outlet or date changed, syncing and fetching reconciliation data...');
-    console.log('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date:', selectedDate);
+    debugLog('[LIVE INVENTORY] Outlet or date changed, syncing and fetching reconciliation data...');
+    debugLog('[LIVE INVENTORY] Outlet:', selectedOutlet, 'Date window:', activeDateWindow.startDate, 'to', activeDateWindow.endDate);
     
     const outlet = outlets.find(o => o.name === selectedOutlet);
     if (!outlet) {
@@ -95,72 +156,66 @@ function LiveInventoryScreen() {
       return;
     }
 
-    const loadKey = `${selectedOutlet}|${selectedDate}|${dateRange}|${outlet.outletType}`;
+    const loadKey = `${selectedOutlet}|${dateRange}|${activeDateWindow.startDate}|${activeDateWindow.endDate}|${outlet.outletType}`;
     if (activeLoadKeyRef.current === loadKey) {
-      console.log('[LIVE INVENTORY] Load already in progress for same selection, skipping duplicate run');
+      debugLog('[LIVE INVENTORY] Load already in progress for same selection, skipping duplicate run');
       return;
     }
     activeLoadKeyRef.current = loadKey;
     setIsLoadingData(true);
     
-    const dates = getDateRange(selectedDate, dateRange);
-    const startDate = dates[0];
-    const endDate = dates[dates.length - 1];
+    const startDate = activeDateWindow.startDate;
+    const endDate = activeDateWindow.endDate;
     
-    // CRITICAL: Sync in the correct order to prevent stale data
-    // 1. First sync NEW reconciliation system (sales/kitchen reports) - this is the SOURCE OF TRUTH
-    // 2. Then sync StockContext data (which might have older reconcileHistory)
-    // 3. Then fetch reports from the synced data
+    // Avoid syncing on every date change; this screen can be navigated frequently.
+    // We sync reconciliation reports at most once every few minutes while still loading local data immediately.
     let isCancelled = false;
+
+    const fetchLocalReports = async () => {
+      // Fetch from local cache only to keep this screen fast.
+      if (outlet.outletType === 'production') {
+        const reports = await getKitchenStockReportsByOutletAndDateRange(selectedOutlet, startDate, endDate, {
+          allowServerFetch: false,
+        });
+        debugLog('[LIVE INVENTORY] ✓ Loaded', reports.length, 'kitchen reports (local cache)');
+        if (!isCancelled) {
+          setKitchenStockReports(reports);
+          setSalesReports([]);
+        }
+      } else if (outlet.outletType === 'sales') {
+        const reports = await getSalesReportsByOutletAndDateRange(selectedOutlet, startDate, endDate, {
+          allowServerFetch: false,
+        });
+        debugLog('[LIVE INVENTORY] ✓ Loaded', reports.length, 'sales reports (local cache)');
+        if (!isCancelled) {
+          setSalesReports(reports);
+          setKitchenStockReports([]);
+        }
+      }
+    };
+
     (async () => {
       try {
-        console.log('[LIVE INVENTORY] Step 1: Syncing NEW reconciliation system...');
-        await syncAllReconciliationData();
-        console.log('[LIVE INVENTORY] ✓ NEW reconciliation system synced');
-        
-        console.log('[LIVE INVENTORY] Step 2: Syncing StockContext...');
-        await syncAllRef.current(true);
-        console.log('[LIVE INVENTORY] ✓ StockContext synced');
-        
-        console.log('[LIVE INVENTORY] Step 3: Fetching reconciliation reports...');
-        
-        // Small delay to ensure AsyncStorage has written the data
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Fetch the NEW reconciliation system data based on outlet type
-        if (outlet.outletType === 'production') {
-          const reports = await getKitchenStockReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
-          console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'kitchen stock reports for production outlet');
-          
-          // Log details of what we fetched
-          reports.forEach(r => {
-            console.log(`  - ${r.outlet} ${r.date}: ${r.products.length} products, updated ${new Date(r.updatedAt).toISOString()}`);
-          });
-          
-          if (!isCancelled) {
-            setKitchenStockReports(reports);
-            setSalesReports([]);
-          }
-        } else if (outlet.outletType === 'sales') {
-          const reports = await getSalesReportsByOutletAndDateRange(selectedOutlet, startDate, endDate);
-          console.log('[LIVE INVENTORY] ✓ Fetched', reports.length, 'sales reports for sales outlet');
-          
-          // Log details of what we fetched
-          reports.forEach(r => {
-            console.log(`  - ${r.outlet} ${r.date}: ${r.salesData?.length || 0} products, updated ${new Date(r.updatedAt).toISOString()}`);
-            if (r.salesData && r.salesData.length > 0) {
-              const sample = r.salesData[0];
-              console.log(`    Sample: ${sample.productName} -> ${sample.soldWhole}W/${sample.soldSlices}S`);
-            }
-          });
-          
-          if (!isCancelled) {
-            setSalesReports(reports);
-            setKitchenStockReports([]);
-          }
+        await fetchLocalReports();
+        if (!isCancelled) {
+          setIsLoadingData(false);
         }
-        
-        console.log('[LIVE INVENTORY] ✓ All data loaded and ready');
+
+        const now = Date.now();
+        const shouldSyncReconciliation = (now - lastReconciliationSyncAtRef.current) >= RECONCILIATION_SYNC_COOLDOWN_MS;
+
+        if (shouldSyncReconciliation) {
+          debugLog('[LIVE INVENTORY] Syncing reconciliation reports from server...');
+          await syncAllReconciliationData();
+          lastReconciliationSyncAtRef.current = Date.now();
+          debugLog('[LIVE INVENTORY] ✓ Reconciliation reports synced');
+          // Refresh from local cache after sync.
+          await fetchLocalReports();
+        } else {
+          debugLog('[LIVE INVENTORY] Skipping reconciliation sync (recently synced)');
+        }
+
+        debugLog('[LIVE INVENTORY] ✓ All data loaded and ready');
       } catch (error) {
         console.error('[LIVE INVENTORY] ❌ Sync/fetch failed:', error);
       } finally {
@@ -176,35 +231,98 @@ function LiveInventoryScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [selectedOutlet, selectedDate, dateRange, outlets, getDateRange]);
+  }, [selectedOutlet, dateRange, outlets, activeDateWindow]);
 
   const productInventoryHistory = useMemo((): ProductInventoryHistory[] => {
-    console.log('\n========================================');
-    console.log('[LIVE INVENTORY] Recalculating inventory history at', new Date().toISOString());
-    console.log('[LIVE INVENTORY] Kitchen stock reports:', kitchenStockReports.length);
-    console.log('[LIVE INVENTORY] Sales reports:', salesReports.length);
-    console.log('========================================\n');
+    debugLog('\n========================================');
+    debugLog('[LIVE INVENTORY] Recalculating inventory history at', new Date().toISOString());
+    debugLog('[LIVE INVENTORY] Kitchen stock reports:', kitchenStockReports.length);
+    debugLog('[LIVE INVENTORY] Sales reports:', salesReports.length);
+    debugLog('========================================\n');
     if (!selectedOutlet) return [];
 
-    const dates = getDateRange(selectedDate, dateRange);
+    const dates = activeDateWindow.dates;
     const outlet = outlets.find(o => o.name === selectedOutlet);
     if (!outlet) return [];
 
     // Check if this is a production outlet
     const isProductionOutlet = outlet.outletType === 'production';
 
-    console.log('\n========================================');
-    console.log('=== LIVE INVENTORY CALCULATION (REBUILT) ===');
-    console.log('========================================');
-    console.log('Outlet:', selectedOutlet, '| Type:', outlet.outletType);
-    console.log('Date Range:', dates[0], 'to', dates[dates.length - 1]);
-    console.log('Total Stock Checks:', stockChecks.length);
-    console.log('Total Sales Deductions:', salesDeductions.length);
-    console.log('Total Requests:', requests.length);
-    console.log('========================================\n');
+    debugLog('\n========================================');
+    debugLog('=== LIVE INVENTORY CALCULATION (REBUILT) ===');
+    debugLog('========================================');
+    debugLog('Outlet:', selectedOutlet, '| Type:', outlet.outletType);
+    debugLog('Date Range:', dates[0], 'to', dates[dates.length - 1]);
+    debugLog('Total Stock Checks:', stockChecks.length);
+    debugLog('Total Sales Deductions:', salesDeductions.length);
+    debugLog('Total Requests:', requests.length);
+    debugLog('========================================\n');
 
     const history: ProductInventoryHistory[] = [];
     const processedProducts = new Set<string>();
+    const dateSet = new Set(dates);
+
+    const userChecksByDate = new Map<string, StockCheck[]>();
+    stockChecks.forEach((check) => {
+      if (!check?.date || !dateSet.has(check.date)) return;
+      if (!outletMatches(check.outlet, selectedOutlet) || !isUserStockCheck(check)) return;
+      const existing = userChecksByDate.get(check.date) || [];
+      existing.push(check);
+      userChecksByDate.set(check.date, existing);
+    });
+    userChecksByDate.forEach((checks, date) => {
+      userChecksByDate.set(date, checks.sort((a, b) => b.timestamp - a.timestamp));
+    });
+
+    const approvedToRequestsByDate = new Map<string, Array<typeof requests[number]>>();
+    const approvedFromRequestsByDate = new Map<string, Array<typeof requests[number]>>();
+    requests.forEach((request) => {
+      if (request.status !== 'approved' || !request.requestDate || !dateSet.has(request.requestDate)) return;
+
+      if (outletMatches(request.toOutlet, selectedOutlet)) {
+        const existingTo = approvedToRequestsByDate.get(request.requestDate) || [];
+        existingTo.push(request);
+        approvedToRequestsByDate.set(request.requestDate, existingTo);
+      }
+
+      if (outletMatches(request.fromOutlet, selectedOutlet)) {
+        const existingFrom = approvedFromRequestsByDate.get(request.requestDate) || [];
+        existingFrom.push(request);
+        approvedFromRequestsByDate.set(request.requestDate, existingFrom);
+      }
+    });
+
+    const latestReconcileByDate = new Map<string, typeof reconcileHistory[number]>();
+    reconcileHistory.forEach((entry) => {
+      if (!entry?.date || !dateSet.has(entry.date) || entry.deleted) return;
+      if (!outletMatches(entry.outlet, selectedOutlet)) return;
+      const existing = latestReconcileByDate.get(entry.date);
+      const entryTime = entry.updatedAt || entry.timestamp || 0;
+      const existingTime = existing ? (existing.updatedAt || existing.timestamp || 0) : 0;
+      if (!existing || entryTime >= existingTime) {
+        latestReconcileByDate.set(entry.date, entry);
+      }
+    });
+
+    const latestSalesReportByDate = new Map<string, SalesReport>();
+    salesReports.forEach((report) => {
+      if (!report?.date || !dateSet.has(report.date) || report.deleted) return;
+      if (!outletMatches(report.outlet, selectedOutlet)) return;
+      const existing = latestSalesReportByDate.get(report.date);
+      if (!existing || (report.updatedAt || report.timestamp || 0) >= (existing.updatedAt || existing.timestamp || 0)) {
+        latestSalesReportByDate.set(report.date, report);
+      }
+    });
+
+    const latestKitchenReportByDate = new Map<string, KitchenStockReport>();
+    kitchenStockReports.forEach((report) => {
+      if (!report?.date || !dateSet.has(report.date) || report.deleted) return;
+      if (!outletMatches(report.outlet, selectedOutlet)) return;
+      const existing = latestKitchenReportByDate.get(report.date);
+      if (!existing || (report.updatedAt || report.timestamp || 0) >= (existing.updatedAt || existing.timestamp || 0)) {
+        latestKitchenReportByDate.set(report.date, report);
+      }
+    });
 
     // Separate products into two groups
     const productsWithConversions = new Set<string>();
@@ -231,28 +349,16 @@ function LiveInventoryScreen() {
 
       // Filter: Only show products based on their type and settings
       // Menu/Kitchen products: must have showInStock enabled
-      // Raw materials: show if salesBasedRawCalc enabled OR appears in any reconciliation rawConsumption
+      // Raw materials: only show when salesBasedRawCalc is enabled
       if (wholeProduct.type === 'menu' || wholeProduct.type === 'kitchen') {
         if (!wholeProduct.showInStock) {
-          console.log(`Skipping menu/kitchen product ${wholeProduct.name} - showInStock is disabled`);
+          debugLog(`Skipping menu/kitchen product ${wholeProduct.name} - showInStock is disabled`);
           return;
         }
       } else if (wholeProduct.type === 'raw') {
-        // Check if this raw material appears in any reconciliation data for this outlet
-        const appearsInReconciliation = reconcileHistory.some(
-          r => r.outlet === selectedOutlet && 
-               !r.deleted && 
-               r.rawConsumption && 
-               r.rawConsumption.some(rc => rc.rawProductId === pair.wholeId)
-        );
-        
-        if (!wholeProduct.salesBasedRawCalc && !appearsInReconciliation) {
-          console.log(`Skipping raw material ${wholeProduct.name} - salesBasedRawCalc is disabled and doesn't appear in reconciliation`);
+        if (!wholeProduct.salesBasedRawCalc) {
+          debugLog(`Skipping raw material ${wholeProduct.name} - salesBasedRawCalc is disabled`);
           return;
-        }
-        
-        if (appearsInReconciliation) {
-          console.log(`Including raw material ${wholeProduct.name} - appears in reconciliation rawConsumption`);
         }
       }
 
@@ -274,9 +380,7 @@ function LiveInventoryScreen() {
         const previousCalendarDate = currentDate.toISOString().split('T')[0];
 
         // Find latest stock check from previous calendar day
-        const previousDayChecks = stockChecks
-          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && isUserStockCheck(c))
-          .sort((a, b) => b.timestamp - a.timestamp);
+        const previousDayChecks = userChecksByDate.get(previousCalendarDate) || [];
         
         if (previousDayChecks.length > 0) {
           // Use previous day's closing stock (quantity field) as today's opening
@@ -292,10 +396,10 @@ function LiveInventoryScreen() {
             openingSlices = slicesCount.quantity || 0;
           }
           
-          console.log(`Product ${wholeProduct.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${openingWhole}W/${openingSlices}S`);
+          debugLog(`Product ${wholeProduct.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${openingWhole}W/${openingSlices}S`);
         } else {
           // No previous day stock check - opening is 0
-          console.log(`Product ${wholeProduct.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
+          debugLog(`Product ${wholeProduct.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
         }
 
         // STEP 2: Received calculation depends on outlet type
@@ -303,49 +407,48 @@ function LiveInventoryScreen() {
         let receivedSlices = 0;
 
         if (isProductionOutlet) {
-          console.log(`[PRODUCTION OUTLET] Checking kitchen stock reports for ${wholeProduct.name} on ${date}`);
-          const kitchenReport = kitchenStockReports.find(r => r.date === date && r.outlet === selectedOutlet);
+          debugLog(`[PRODUCTION OUTLET] Checking kitchen stock reports for ${wholeProduct.name} on ${date}`);
+          const kitchenReport = latestKitchenReportByDate.get(date);
           
           if (kitchenReport) {
-            console.log(`[PRODUCTION OUTLET] ✓ Found kitchen stock report for ${date}`);
-            const productEntry = kitchenReport.products.find(p => p.productId === pair.wholeId);
+            debugLog(`[PRODUCTION OUTLET] ✓ Found kitchen stock report for ${date}`);
+            const wholeEntry = kitchenReport.products.find(p => p.productId === pair.wholeId);
+            const slicesEntry = kitchenReport.products.find(p => p.productId === pair.slicesId);
             
-            if (productEntry) {
-              const slicesAsWhole = productEntry.quantitySlices / pair.factor;
-              receivedWhole = productEntry.quantityWhole + slicesAsWhole;
+            if (wholeEntry || slicesEntry) {
+              const wholeQty = (wholeEntry?.quantityWhole || 0) + (slicesEntry?.quantityWhole || 0);
+              const slicesQty = (wholeEntry?.quantitySlices || 0) + (slicesEntry?.quantitySlices || 0);
+              const slicesAsWhole = slicesQty / pair.factor;
+              receivedWhole = wholeQty + slicesAsWhole;
               receivedSlices = 0;
-              console.log(`[PRODUCTION OUTLET] Kitchen reconciliation: ${productEntry.quantityWhole}W + ${productEntry.quantitySlices}S = ${receivedWhole} Whole (displayed in Whole column only)`);
+              debugLog(`[PRODUCTION OUTLET] Kitchen reconciliation: ${wholeQty}W + ${slicesQty}S = ${receivedWhole} Whole (displayed in Whole column only)`);
             } else {
-              console.log(`[PRODUCTION OUTLET] No product entry found for ${wholeProduct.name} in kitchen report`);
+              debugLog(`[PRODUCTION OUTLET] No product entry found for ${wholeProduct.name} in kitchen report`);
             }
           } else {
-            console.log(`[PRODUCTION OUTLET] No kitchen stock report found for ${date}`);
+            debugLog(`[PRODUCTION OUTLET] No kitchen stock report found for ${date}`);
           }
 
-          const reconcileCandidates = reconcileHistory
-            .filter(r => r.date === date && r.outlet === selectedOutlet && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
-            .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
-          const reconcileForDate = reconcileCandidates[0];
-          const prodsReqUpdate = reconcileForDate?.prodsReqUpdates?.find(u => u.productId === pair.wholeId);
+          const reconcileForDate = latestReconcileByDate.get(date);
+          const prodsReqUpdate = reconcileForDate?.prodsReqUpdates?.find(
+            (u) => u.productId === pair.wholeId || u.productId === pair.slicesId
+          );
 
           if (reconcileForDate) {
-            console.log(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
+            debugLog(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
           }
 
-          if (prodsReqUpdate) {
+          // Use reconciliation history only as fallback when no kitchen report value is available.
+          if (receivedWhole === 0 && receivedSlices === 0 && prodsReqUpdate) {
             const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + ((prodsReqUpdate.prodsReqSlices || 0) / pair.factor);
-            receivedWhole += kitchenProductionQty;
-            console.log(`[PRODUCTION OUTLET] Added Prods.Req from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
-          } else {
-            console.log(`[PRODUCTION OUTLET] No Prods.Req reconciliation update found for ${wholeProduct.name}`);
+            receivedWhole = kitchenProductionQty;
+            debugLog(`[PRODUCTION OUTLET] Fallback Prods.Req from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
+          } else if (receivedWhole === 0 && receivedSlices === 0) {
+            debugLog(`[PRODUCTION OUTLET] No Prods.Req reconciliation update found for ${wholeProduct.name}`);
           }
         } else {
           // For sales outlets: Show approved requests TO this outlet
-          const receivedRequests = requests.filter(
-            r => r.status === 'approved' && 
-                 r.toOutlet === selectedOutlet && 
-                 r.requestDate === date
-          );
+          const receivedRequests = approvedToRequestsByDate.get(date) || [];
 
           receivedRequests.forEach(req => {
             if (req.productId === pair.wholeId) {
@@ -375,9 +478,7 @@ function LiveInventoryScreen() {
         let wastageWhole = 0;
         let wastageSlices = 0;
 
-        const todayChecks = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c))
-          .sort((a, b) => b.timestamp - a.timestamp);
+        const todayChecks = userChecksByDate.get(date) || [];
 
         if (todayChecks.length > 0) {
           const latestTodayCheck = todayChecks[0];
@@ -387,14 +488,14 @@ function LiveInventoryScreen() {
           // Wastage entered for the "Whole" product goes to wastageWhole column
           if (wholeCount && wholeCount.wastage) {
             wastageWhole = wholeCount.wastage;
-            console.log(`Wastage for WHOLE product (${wholeProduct.name}): ${wastageWhole}`);
+            debugLog(`Wastage for WHOLE product (${wholeProduct.name}): ${wastageWhole}`);
           }
           
           // Wastage entered for the "Slice" product goes to wastageSlices column
           if (slicesCount && slicesCount.wastage) {
             wastageSlices = slicesCount.wastage;
             const slicesProduct = products.find(p => p.id === pair.slicesId);
-            console.log(`Wastage for SLICES product (${slicesProduct?.name}): ${wastageSlices}`);
+            debugLog(`Wastage for SLICES product (${slicesProduct?.name}): ${wastageSlices}`);
           }
         }
 
@@ -404,11 +505,7 @@ function LiveInventoryScreen() {
 
         if (outlet.outletType === 'production') {
           // Production: Get approved OUT requests FROM this outlet
-          const outRequests = requests.filter(
-            r => r.status === 'approved' && 
-                 r.fromOutlet === selectedOutlet && 
-                 r.requestDate === date
-          );
+          const outRequests = approvedFromRequestsByDate.get(date) || [];
 
           outRequests.forEach(req => {
             if (req.productId === pair.wholeId) {
@@ -426,7 +523,7 @@ function LiveInventoryScreen() {
           // Sales: use NEW sales reports as primary source (fallback to legacy reconcileHistory)
           const productInfo = products.find(p => p.id === pair.wholeId);
           const isRawMaterial = productInfo && productInfo.type === 'raw';
-          const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
+          const salesReport = latestSalesReportByDate.get(date);
           
           if (isRawMaterial) {
             // First try NEW sales report raw consumption
@@ -441,12 +538,10 @@ function LiveInventoryScreen() {
             if (rawConsumptionFromReport) {
               soldWhole = rawConsumptionFromReport.consumedWhole || 0;
               soldSlices = rawConsumptionFromReport.consumedSlices || 0;
-              console.log(`[SALES OUTLET] Raw consumption from sales report for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
+              debugLog(`[SALES OUTLET] Raw consumption from sales report for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
             } else {
               // Fallback to legacy reconciliation history for backward compatibility
-              const reconcileForDate = reconcileHistory.find(
-                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-              );
+              const reconcileForDate = latestReconcileByDate.get(date);
 
               if (reconcileForDate && reconcileForDate.rawConsumption) {
                 const wholeRawConsumption = reconcileForDate.rawConsumption.find(
@@ -466,59 +561,136 @@ function LiveInventoryScreen() {
                     soldWhole = Math.floor(consumedQty);
                     soldSlices = Math.round((consumedQty % 1) * pair.factor);
                   }
-                  console.log(`[SALES OUTLET] Raw consumption from legacy reconciliation for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
+                  debugLog(`[SALES OUTLET] Raw consumption from legacy reconciliation for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`);
                 }
               }
             }
           } else {
             // For menu/kitchen products (not raw materials), get sold data from NEW sales reports
-            console.log(`[SALES OUTLET] Product ${wholeProduct.name} on ${date} - checking NEW sales reports`);
-            console.log('[SALES OUTLET] Total sales reports:', salesReports.length);
+            debugLog(`[SALES OUTLET] Product ${wholeProduct.name} on ${date} - checking NEW sales reports`);
+            debugLog('[SALES OUTLET] Total sales reports:', salesReports.length);
             
-            console.log('[SALES OUTLET] Found sales report for date?', !!salesReport);
+            debugLog('[SALES OUTLET] Found sales report for date?', !!salesReport);
             
+            const getLegacyPairSoldSlices = (): number => {
+              const legacyReconcile = latestReconcileByDate.get(date);
+              if (!legacyReconcile?.salesData || legacyReconcile.salesData.length === 0) {
+                return 0;
+              }
+
+              return legacyReconcile.salesData.reduce((sum, entry) => {
+                if (entry.productId === pair.wholeId) {
+                  return sum + ((entry.sold || 0) * pair.factor);
+                }
+                if (entry.productId === pair.slicesId) {
+                  return sum + (entry.sold || 0);
+                }
+                return sum;
+              }, 0);
+            };
+
             if (salesReport && salesReport.salesData) {
-              console.log('[SALES OUTLET] salesData entries in report:', salesReport.salesData.length);
-              console.log('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
-              console.log('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
+              debugLog('[SALES OUTLET] salesData entries in report:', salesReport.salesData.length);
+              debugLog('[SALES OUTLET] Sales report updatedAt:', new Date(salesReport.updatedAt).toISOString());
+              debugLog('[SALES OUTLET] Sales report reconsolidatedAt:', salesReport.reconsolidatedAt);
 
               const pairSalesEntries = salesReport.salesData.filter(
                 sd => sd.productId === pair.wholeId || sd.productId === pair.slicesId
               );
 
-              console.log('[SALES OUTLET] Found pairSalesEntries:', pairSalesEntries.length);
+              debugLog('[SALES OUTLET] Found pairSalesEntries:', pairSalesEntries.length);
 
               if (pairSalesEntries.length > 0) {
                 const toTotalSlices = (entry: SalesReport['salesData'][number]) =>
                   ((entry.soldWhole || 0) * pair.factor) + (entry.soldSlices || 0);
+                const toTotalSlicesFromAggregate = (entry: SalesReport['salesData'][number]) => {
+                  // Legacy aggregate payloads can store quantity directly in each product's own unit.
+                  // For slices product IDs, treat soldWhole as "slices sold" instead of "whole sold".
+                  if (entry.productId === pair.slicesId) {
+                    return (entry.soldWhole || 0) + (entry.soldSlices || 0);
+                  }
+                  return toTotalSlices(entry);
+                };
+                const toTotalSlicesFromLegacyNoSource = (entry: SalesReport['salesData'][number]) => {
+                  // Old payloads without sourceUnit can still store unit-specific quantity in soldWhole.
+                  // If this is the slices product and soldSlices is empty, treat soldWhole as slice count.
+                  if (entry.productId === pair.slicesId && (entry.soldSlices || 0) === 0) {
+                    return entry.soldWhole || 0;
+                  }
+                  return toTotalSlices(entry);
+                };
 
                 let totalSoldSlices = 0;
                 const entriesWithSource = pairSalesEntries.filter((entry) => !!entry.sourceUnit);
 
-                if (entriesWithSource.length > 0) {
-                  const wholeEntry = entriesWithSource.find(
-                    entry => entry.productId === pair.wholeId && entry.sourceUnit === 'whole'
-                  );
-                  const slicesEntry = entriesWithSource.find(
-                    entry => entry.productId === pair.slicesId && entry.sourceUnit === 'slices'
-                  );
-                  const aggregateEntry = entriesWithSource.find(entry => entry.sourceUnit === 'aggregate');
+	                if (entriesWithSource.length > 0) {
+	                  const wholeEntry = entriesWithSource.find(
+	                    entry => entry.productId === pair.wholeId && entry.sourceUnit === 'whole'
+	                  );
+	                  const slicesEntry = entriesWithSource.find(
+	                    entry => entry.productId === pair.slicesId && entry.sourceUnit === 'slices'
+	                  );
+	                  const aggregateEntries = entriesWithSource.filter(entry => entry.sourceUnit === 'aggregate');
+	                  const hasWholeSource = !!wholeEntry;
+	                  const hasSlicesSource = !!slicesEntry;
+	                  const legacyPairSlices = getLegacyPairSoldSlices();
+	                  const toTotalSlicesFromSlicesSource = (entry: SalesReport['salesData'][number], baseWithoutSlices: number) => {
+	                    const normalizedSlices = toTotalSlices(entry);
+	                    const nativeSlices = (entry.soldWhole || 0) + (entry.soldSlices || 0);
+	                    const hasLegacySignature = (entry.soldSlices || 0) === 0 && (entry.soldWhole || 0) > 0;
+	                    if (!hasLegacySignature) {
+	                      return normalizedSlices;
+	                    }
 
-                  if (wholeEntry) {
-                    totalSoldSlices += toTotalSlices(wholeEntry);
-                  }
-                  if (slicesEntry) {
-                    totalSoldSlices += toTotalSlices(slicesEntry);
-                  }
+	                    const normalizedTotal = baseWithoutSlices + normalizedSlices;
+	                    const nativeTotal = baseWithoutSlices + nativeSlices;
 
-                  // Backward compatibility if only aggregate-format data exists.
-                  if (!wholeEntry && !slicesEntry && aggregateEntry) {
-                    totalSoldSlices += toTotalSlices(aggregateEntry);
+	                    if (legacyPairSlices > 0) {
+	                      const normalizedDiff = Math.abs(normalizedTotal - legacyPairSlices);
+	                      const nativeDiff = Math.abs(nativeTotal - legacyPairSlices);
+	                      if (nativeDiff < normalizedDiff) {
+	                        debugLog(
+	                          `[SALES OUTLET] Using legacy slices-source compatibility for ${wholeProduct.name}: ${normalizedSlices} -> ${nativeSlices} slices`
+	                        );
+	                        return nativeSlices;
+	                      }
+	                      return normalizedSlices;
+	                    }
+
+	                    const unitName = String(entry.unit || '').toLowerCase();
+	                    if (unitName.includes('slice') && (entry.soldWhole || 0) < pair.factor) {
+	                      debugLog(
+	                        `[SALES OUTLET] Using heuristic slices-source compatibility for ${wholeProduct.name}: ${normalizedSlices} -> ${nativeSlices} slices`
+	                      );
+	                      return nativeSlices;
+	                    }
+	                    return normalizedSlices;
+	                  };
+
+	                  if (wholeEntry) {
+	                    totalSoldSlices += toTotalSlices(wholeEntry);
+	                  }
+	                  if (slicesEntry) {
+	                    totalSoldSlices += toTotalSlicesFromSlicesSource(slicesEntry, totalSoldSlices);
+	                  }
+
+                  if (aggregateEntries.length > 0) {
+                    // Include aggregate entries for whichever side is missing from explicit whole/slices entries.
+                    totalSoldSlices += aggregateEntries.reduce((sum, entry) => {
+                      if (entry.productId === pair.wholeId && hasWholeSource) return sum;
+                      if (entry.productId === pair.slicesId && hasSlicesSource) return sum;
+                      return sum + toTotalSlicesFromAggregate(entry);
+                    }, 0);
                   }
 
                   // Safety fallback if sourceUnit exists but doesn't match expected shape.
                   if (totalSoldSlices === 0 && entriesWithSource.some(entry => (entry.soldWhole || 0) > 0 || (entry.soldSlices || 0) > 0)) {
-                    totalSoldSlices = entriesWithSource.reduce((sum, entry) => sum + toTotalSlices(entry), 0);
+                    totalSoldSlices = entriesWithSource.reduce((sum, entry) => {
+                      if (entry.sourceUnit === 'aggregate') {
+                        return sum + toTotalSlicesFromAggregate(entry);
+                      }
+                      return sum + toTotalSlices(entry);
+                    }, 0);
                   }
                 } else {
                   // Legacy format fallback:
@@ -538,33 +710,21 @@ function LiveInventoryScreen() {
                     totalSoldSlices = toTotalSlices(wholeEntry);
                     usedLegacyDuplicate = true;
                   } else {
-                    totalSoldSlices = pairSalesEntries.reduce((sum, entry) => sum + toTotalSlices(entry), 0);
+                    totalSoldSlices = pairSalesEntries.reduce(
+                      (sum, entry) => sum + toTotalSlicesFromLegacyNoSource(entry),
+                      0,
+                    );
                   }
 
                   // Recovery fallback for older reports that stored only one side of whole/slice sales:
                   // Recalculate from reconcileHistory if it provides a richer pair breakdown.
                   if (usedLegacyDuplicate) {
-                    const legacyReconcile = reconcileHistory.find(
-                      r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-                    );
-
-                    if (legacyReconcile?.salesData && legacyReconcile.salesData.length > 0) {
-                      const reconcileTotalSlices = legacyReconcile.salesData.reduce((sum, entry) => {
-                        if (entry.productId === pair.wholeId) {
-                          return sum + ((entry.sold || 0) * pair.factor);
-                        }
-                        if (entry.productId === pair.slicesId) {
-                          return sum + (entry.sold || 0);
-                        }
-                        return sum;
-                      }, 0);
-
-                      if (reconcileTotalSlices > totalSoldSlices) {
-                        console.log(
-                          `[SALES OUTLET] Using reconcileHistory fallback for ${wholeProduct.name}: ${totalSoldSlices} -> ${reconcileTotalSlices} slices`
-                        );
-                        totalSoldSlices = reconcileTotalSlices;
-                      }
+                    const reconcileTotalSlices = getLegacyPairSoldSlices();
+                    if (reconcileTotalSlices > totalSoldSlices) {
+                      debugLog(
+                        `[SALES OUTLET] Using reconcileHistory fallback for ${wholeProduct.name}: ${totalSoldSlices} -> ${reconcileTotalSlices} slices`
+                      );
+                      totalSoldSlices = reconcileTotalSlices;
                     }
                   }
                 }
@@ -572,38 +732,81 @@ function LiveInventoryScreen() {
                 soldWhole = Math.floor(totalSoldSlices / pair.factor);
                 soldSlices = Math.round(totalSoldSlices % pair.factor);
 
-                console.log(`[SALES OUTLET] ✓ Aggregated sales from ${pairSalesEntries.length} entries`);
-                console.log(`[SALES OUTLET]   Total sold: ${soldWhole}W + ${soldSlices}S (factor ${pair.factor})`);
+                debugLog(`[SALES OUTLET] ✓ Aggregated sales from ${pairSalesEntries.length} entries`);
+                debugLog(`[SALES OUTLET]   Total sold: ${soldWhole}W + ${soldSlices}S (factor ${pair.factor})`);
                 pairSalesEntries.forEach((entry) => {
-                  console.log(
+                  debugLog(
                     `[SALES OUTLET]   Entry ${entry.productName} (${entry.unit}) id=${entry.productId} source=${entry.sourceUnit || 'legacy'} -> ${entry.soldWhole}W/${entry.soldSlices}S`
                   );
                 });
               } else {
-                console.log('[SALES OUTLET] ⚠️ No salesData found for either unit');
-                console.log('[SALES OUTLET] Looking for wholeId:', pair.wholeId);
-                console.log('[SALES OUTLET] Looking for slicesId:', pair.slicesId);
-                console.log('[SALES OUTLET] Available products in report:');
+                debugLog('[SALES OUTLET] ⚠️ No salesData found for either unit');
+                debugLog('[SALES OUTLET] Looking for wholeId:', pair.wholeId);
+                debugLog('[SALES OUTLET] Looking for slicesId:', pair.slicesId);
+                debugLog('[SALES OUTLET] Available products in report:');
                 salesReport.salesData.forEach(sd => {
-                  console.log(`  - ${sd.productName} (${sd.unit}): ${sd.productId} -> ${sd.soldWhole}W/${sd.soldSlices}S`);
+                  debugLog(`  - ${sd.productName} (${sd.unit}): ${sd.productId} -> ${sd.soldWhole}W/${sd.soldSlices}S`);
                 });
+
+                const fallbackSlices = getLegacyPairSoldSlices();
+                if (fallbackSlices > 0) {
+                  soldWhole = Math.floor(fallbackSlices / pair.factor);
+                  soldSlices = Math.round(fallbackSlices % pair.factor);
+                  debugLog(
+                    `[SALES OUTLET] ✓ Recovered sales from legacy reconcile history for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`
+                  );
+                }
               }
               
-              console.log(`[SALES OUTLET] FINAL SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
+              debugLog(`[SALES OUTLET] FINAL SOLD for ${wholeProduct.name}: ${soldWhole}W + ${soldSlices}S`);
             } else {
-              console.log(`[SALES OUTLET] ⚠️ No sales report found for ${date}`);
-              console.log(`[SALES OUTLET] Available sales reports:`);
+              debugLog(`[SALES OUTLET] ⚠️ No sales report found for ${date}`);
+              debugLog(`[SALES OUTLET] Available sales reports:`);
               salesReports.forEach(sr => {
-                console.log(`  - ${sr.outlet} ${sr.date} (${sr.salesData?.length || 0} products)`);
+                debugLog(`  - ${sr.outlet} ${sr.date} (${sr.salesData?.length || 0} products)`);
               });
+
+              const fallbackSlices = getLegacyPairSoldSlices();
+              if (fallbackSlices > 0) {
+                soldWhole = Math.floor(fallbackSlices / pair.factor);
+                soldSlices = Math.round(fallbackSlices % pair.factor);
+                debugLog(
+                  `[SALES OUTLET] ✓ Recovered sales from legacy reconcile history for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`
+                );
+              }
+	            }
+	          }
+	        }
+
+          if (outlet?.outletType === 'sales' && soldWhole === 0 && soldSlices === 0) {
+            const fallbackSlicesFromDeductions = salesDeductions
+              .filter(
+                sd =>
+                  !sd.deleted &&
+                  outletMatches(sd.outletName, selectedOutlet) &&
+                  sd.salesDate === date &&
+                  (sd.productId === pair.wholeId || sd.productId === pair.slicesId)
+              )
+              .reduce((sum, entry) => {
+                if (entry.productId === pair.slicesId) {
+                  return sum + (entry.wholeDeducted || 0) + (entry.slicesDeducted || 0);
+                }
+                return sum + ((entry.wholeDeducted || 0) * pair.factor) + (entry.slicesDeducted || 0);
+              }, 0);
+
+            if (fallbackSlicesFromDeductions > 0) {
+              soldWhole = Math.floor(fallbackSlicesFromDeductions / pair.factor);
+              soldSlices = Math.round(fallbackSlicesFromDeductions % pair.factor);
+              debugLog(
+                `[SALES OUTLET] ✓ Recovered sold from sales deductions for ${wholeProduct.name}: ${soldWhole}W/${soldSlices}S`
+              );
             }
           }
-        }
 
-        // Normalize sold
-        if (soldSlices >= pair.factor) {
-          const extraWhole = Math.floor(soldSlices / pair.factor);
-          soldWhole += extraWhole;
+	        // Normalize sold
+	        if (soldSlices >= pair.factor) {
+	          const extraWhole = Math.floor(soldSlices / pair.factor);
+	          soldWhole += extraWhole;
           soldSlices = Math.round(soldSlices % pair.factor);
         }
 
@@ -619,7 +822,7 @@ function LiveInventoryScreen() {
         const todayCheckWithReplace = todayChecks.find(c => c.replaceAllInventory);
         if (todayCheckWithReplace) {
           replaceInventoryDate = date;
-          console.log(`Product ${wholeProduct.name} on ${date} was replaced via Replace All Inventory`);
+          debugLog(`Product ${wholeProduct.name} on ${date} was replaced via Replace All Inventory`);
           
           // Use stock check quantities directly as Current Stock (don't calculate)
           const wholeCount = todayCheckWithReplace.counts.find(c => c.productId === pair.wholeId);
@@ -628,7 +831,7 @@ function LiveInventoryScreen() {
           currentWhole = wholeCount?.quantity || 0;
           currentSlices = slicesCount?.quantity || 0;
           
-          console.log(`Using stock check quantities directly - Whole: ${currentWhole}, Slices: ${currentSlices}`);
+          debugLog(`Using stock check quantities directly - Whole: ${currentWhole}, Slices: ${currentSlices}`);
         } else {
           // Check if stock counts have manuallyEditedDate for THIS SPECIFIC DATE
           const wholeCount = todayChecks.length > 0 ? todayChecks[0].counts.find(c => c.productId === pair.wholeId) : undefined;
@@ -639,23 +842,23 @@ function LiveInventoryScreen() {
           
           if (isManuallyEditedToday) {
             manuallyEditedDate = date;
-            console.log(`Product ${wholeProduct.name} on ${date} was manually edited ON THIS DATE`);
+            debugLog(`Product ${wholeProduct.name} on ${date} was manually edited ON THIS DATE`);
             
             // Use manually edited quantities directly for THIS date only
             currentWhole = wholeCount?.quantity || 0;
             currentSlices = slicesCount?.quantity || 0;
-            console.log(`Using manually edited quantities - Whole: ${currentWhole}, Slices: ${currentSlices}`);
+            debugLog(`Using manually edited quantities - Whole: ${currentWhole}, Slices: ${currentSlices}`);
           } else {
             // ALWAYS use formula for dates that are NOT manually edited:
             // Current = Opening + Received - Sold
             // NOTE: Wastage is NOT subtracted because it's already reflected in the opening stock
-            console.log(`Product ${wholeProduct.name} on ${date} - using formula: Opening(${openingWhole}W/${openingSlices}S) + Received(${receivedWhole}W/${receivedSlices}S) - Sold(${soldWhole}W/${soldSlices}S)`);
+            debugLog(`Product ${wholeProduct.name} on ${date} - using formula: Opening(${openingWhole}W/${openingSlices}S) + Received(${receivedWhole}W/${receivedSlices}S) - Sold(${soldWhole}W/${soldSlices}S)`);
             
             let totalSlices = (openingWhole * pair.factor + openingSlices) +
                               (receivedWhole * pair.factor + receivedSlices) -
                               (soldWhole * pair.factor + soldSlices);
             
-            console.log(`  Total slices calculated: ${totalSlices}`);
+            debugLog(`  Total slices calculated: ${totalSlices}`);
             
             // Handle negative values correctly with unit conversion
             if (totalSlices < 0) {
@@ -676,7 +879,7 @@ function LiveInventoryScreen() {
               }
             }
             
-            console.log(`  Result - Whole: ${currentWhole}, Slices: ${currentSlices}`);
+            debugLog(`  Result - Whole: ${currentWhole}, Slices: ${currentSlices}`);
           }
         }
 
@@ -709,50 +912,32 @@ function LiveInventoryScreen() {
           const currentRecord = records[index];
           const nextIndex = index + 1;
 
-          // CALCULATE DISCREPANCY: Opening (next day) - Current (today)
-          // Formula: Discrepancy = Next Day Opening - Current
-          // This shows how much stock is missing or extra compared to what we expect to carry forward
-          
+          // Discrepancy = Opening (next day) - (Current - abs(Wastage)) (today), with unit conversion
           if (nextIndex < records.length) {
             const nextRecord = records[nextIndex];
-            
-            // Get next day's opening stock (in total slices)
-            const nextOpeningTotalSlices = (nextRecord.openingWhole * pair.factor) + nextRecord.openingSlices;
-            
-            // Get today's current stock (in total slices)
             const currentTotalSlices = (currentRecord.currentWhole * pair.factor) + currentRecord.currentSlices;
-            
-            // Discrepancy = Next Day Opening - Today's Current
-            const discrepancyTotalSlices = nextOpeningTotalSlices - currentTotalSlices;
+            const currentWastageTotalSlices = (Math.abs(currentRecord.wastageWhole) * pair.factor) + Math.abs(currentRecord.wastageSlices);
+            const currentMinusWastageTotalSlices = currentTotalSlices - currentWastageTotalSlices;
+            const nextOpeningTotalSlices = (nextRecord.openingWhole * pair.factor) + nextRecord.openingSlices;
+            const discrepancyTotalSlices = nextOpeningTotalSlices - currentMinusWastageTotalSlices;
+            const absDiscrepancySlices = Math.abs(Math.round(discrepancyTotalSlices));
+            const sign = discrepancyTotalSlices < 0 ? -1 : 1;
+            const wholePart = Math.floor(absDiscrepancySlices / pair.factor);
+            const slicesPart = absDiscrepancySlices % pair.factor;
 
-            // Handle negative discrepancies correctly with unit conversion
-            if (discrepancyTotalSlices < 0) {
-              const absDiscrepancySlices = Math.abs(discrepancyTotalSlices);
-              currentRecord.discrepancyWhole = -Math.ceil(absDiscrepancySlices / pair.factor);
-              const remainder = absDiscrepancySlices % pair.factor;
-              currentRecord.discrepancySlices = remainder > 0 ? -(pair.factor - remainder) : 0;
-              if (currentRecord.discrepancySlices === -pair.factor) {
-                currentRecord.discrepancyWhole -= 1;
-                currentRecord.discrepancySlices = 0;
-              }
-            } else {
-              currentRecord.discrepancyWhole = Math.floor(discrepancyTotalSlices / pair.factor);
-              currentRecord.discrepancySlices = Math.round(discrepancyTotalSlices % pair.factor);
-              if (currentRecord.discrepancySlices >= pair.factor) {
-                currentRecord.discrepancyWhole += Math.floor(currentRecord.discrepancySlices / pair.factor);
-                currentRecord.discrepancySlices = Math.round(currentRecord.discrepancySlices % pair.factor);
-              }
-            }
+            currentRecord.discrepancyWhole = wholePart === 0 ? 0 : sign * wholePart;
+            currentRecord.discrepancySlices = slicesPart === 0 ? 0 : sign * slicesPart;
 
-            console.log(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}:`);
-            console.log(`  Today's Current: ${currentRecord.currentWhole}W/${currentRecord.currentSlices}S`);
-            console.log(`  Next Day Opening: ${nextRecord.openingWhole}W/${nextRecord.openingSlices}S`);
-            console.log(`  Discrepancy (Next Opening - Current): ${currentRecord.discrepancyWhole}W/${currentRecord.discrepancySlices}S`);
+            debugLog(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}:`);
+            debugLog(`  Current: ${currentRecord.currentWhole}W/${currentRecord.currentSlices}S`);
+            debugLog(`  Wastage: ${currentRecord.wastageWhole}W/${currentRecord.wastageSlices}S`);
+            debugLog(`  Wastage used in formula (absolute): ${Math.abs(currentRecord.wastageWhole)}W/${Math.abs(currentRecord.wastageSlices)}S`);
+            debugLog(`  Next Day Opening: ${nextRecord.openingWhole}W/${nextRecord.openingSlices}S`);
+            debugLog(`  Discrepancy (Next Opening - (Current - abs(Wastage))): ${currentRecord.discrepancyWhole}W/${currentRecord.discrepancySlices}S`);
           } else {
-            // Last day - no discrepancy
             currentRecord.discrepancyWhole = 0;
             currentRecord.discrepancySlices = 0;
-            console.log(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}: Last day - no discrepancy`);
+            debugLog(`Discrepancy for ${wholeProduct.name} on ${currentRecord.date}: Last day - no discrepancy`);
           }
         }
 
@@ -772,28 +957,16 @@ function LiveInventoryScreen() {
 
       // Filter: Only show products based on their type and settings
       // Menu/Kitchen products: must have showInStock enabled
-      // Raw materials: show if salesBasedRawCalc enabled OR appears in any reconciliation rawConsumption
+      // Raw materials: only show when salesBasedRawCalc is enabled
       if (product.type === 'menu' || product.type === 'kitchen') {
         if (!product.showInStock) {
-          console.log(`Skipping menu/kitchen product (no conversion) ${product.name} - showInStock is disabled`);
+          debugLog(`Skipping menu/kitchen product (no conversion) ${product.name} - showInStock is disabled`);
           return;
         }
       } else if (product.type === 'raw') {
-        // Check if this raw material appears in any reconciliation data for this outlet
-        const appearsInReconciliation = reconcileHistory.some(
-          r => r.outlet === selectedOutlet && 
-               !r.deleted && 
-               r.rawConsumption && 
-               r.rawConsumption.some(rc => rc.rawProductId === product.id)
-        );
-        
-        if (!product.salesBasedRawCalc && !appearsInReconciliation) {
-          console.log(`Skipping raw material (no conversion) ${product.name} - salesBasedRawCalc is disabled and doesn't appear in reconciliation`);
+        if (!product.salesBasedRawCalc) {
+          debugLog(`Skipping raw material (no conversion) ${product.name} - salesBasedRawCalc is disabled`);
           return;
-        }
-        
-        if (appearsInReconciliation) {
-          console.log(`Including raw material (no conversion) ${product.name} - appears in reconciliation rawConsumption`);
         }
       }
 
@@ -813,9 +986,7 @@ function LiveInventoryScreen() {
         const previousCalendarDate = currentDate.toISOString().split('T')[0];
 
         // Find latest stock check from previous calendar day
-        const previousDayChecks = stockChecks
-          .filter(c => c.date === previousCalendarDate && c.outlet === selectedOutlet && isUserStockCheck(c))
-          .sort((a, b) => b.timestamp - a.timestamp);
+        const previousDayChecks = userChecksByDate.get(previousCalendarDate) || [];
         
         if (previousDayChecks.length > 0) {
           // Use previous day's closing stock (quantity field) as today's opening
@@ -826,54 +997,49 @@ function LiveInventoryScreen() {
             opening = count.quantity || 0;
           }
           
-          console.log(`Product ${product.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${opening}`);
+          debugLog(`Product ${product.name} on ${date} - Opening from ${previousCalendarDate}'s closing: ${opening}`);
         } else {
           // No previous day stock check - opening is 0
-          console.log(`Product ${product.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
+          debugLog(`Product ${product.name} on ${date} - No stock check for ${previousCalendarDate}, opening = 0`);
         }
 
-        // Received from approved requests
+        // Received / Prods.Req
         let received = 0;
-        const receivedRequests = requests.filter(
-          r => r.status === 'approved' && 
-               r.toOutlet === selectedOutlet && 
-               r.requestDate === date && 
-               r.productId === product.id
-        );
-        receivedRequests.forEach(req => { received += req.quantity; });
-        
-        // CRITICAL FIX: For PRODUCTION outlets, ADD Kitchen Production values from reconciliation (Discrepancies sheet)
-        // These are stored as prodsReqUpdates in reconciliation history and should appear in Prods.Req column
         if (outlet?.outletType === 'production') {
-          const reconcileCandidates = reconcileHistory
-            .filter(r => r.date === date && r.outlet === selectedOutlet && !r.deleted && Array.isArray(r.prodsReqUpdates) && r.prodsReqUpdates.length > 0)
-            .sort((a, b) => (b.updatedAt || b.timestamp || 0) - (a.updatedAt || a.timestamp || 0));
-          const reconcileForDate = reconcileCandidates[0];
+          const kitchenReport = latestKitchenReportByDate.get(date);
+          const productEntry = kitchenReport?.products.find((p) => p.productId === product.id);
+          if (productEntry) {
+            received = (productEntry.quantityWhole || 0) + (productEntry.quantitySlices || 0);
+            debugLog(`[PRODUCTION OUTLET] Product ${product.name} on ${date} - Prods.Req from kitchen report: ${received}`);
+          } else {
+            debugLog(`[PRODUCTION OUTLET] Product ${product.name} on ${date} - no kitchen report entry`);
+          }
 
-          if (reconcileForDate && reconcileForDate.prodsReqUpdates) {
-            console.log(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
+          // Fallback to reconciliation history when kitchen report data is unavailable.
+          const reconcileForDate = latestReconcileByDate.get(date);
+
+          if (received === 0 && reconcileForDate && reconcileForDate.prodsReqUpdates) {
+            debugLog(`[PRODUCTION OUTLET] Prods.Req reconciliation source: outlet=${reconcileForDate.outlet}, updatedAt=${reconcileForDate.updatedAt}, entries=${reconcileForDate.prodsReqUpdates?.length || 0}`);
             const prodsReqUpdate = reconcileForDate.prodsReqUpdates.find(
               u => u.productId === product.id
             );
             
             if (prodsReqUpdate) {
-              // Get conversion factor for this product
-              const productPair = productConversions.find(c => c.fromProductId === product.id);
-              const conversionFactor = productPair?.conversionFactor || 10;
-              
-              // Add Kitchen Production values from reconciliation to received/Prods.Req
-              const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + ((prodsReqUpdate.prodsReqSlices || 0) / conversionFactor);
-              console.log(`Product ${product.name} on ${date} - Adding Kitchen Production from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
-              received += kitchenProductionQty;
+              const kitchenProductionQty = (prodsReqUpdate.prodsReqWhole || 0) + (prodsReqUpdate.prodsReqSlices || 0);
+              debugLog(`Product ${product.name} on ${date} - fallback Prods.Req from reconciliation: ${kitchenProductionQty} (W:${prodsReqUpdate.prodsReqWhole}, S:${prodsReqUpdate.prodsReqSlices})`);
+              received = kitchenProductionQty;
             }
           }
+        } else {
+          const receivedRequests = (approvedToRequestsByDate.get(date) || []).filter(
+            r => r.productId === product.id
+          );
+          receivedRequests.forEach(req => { received += req.quantity; });
         }
 
         // Wastage from today's check
         let wastage = 0;
-        const todayChecks = stockChecks
-          .filter(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c))
-          .sort((a, b) => b.timestamp - a.timestamp);
+        const todayChecks = userChecksByDate.get(date) || [];
 
         if (todayChecks.length > 0) {
           const latestTodayCheck = todayChecks[0];
@@ -885,18 +1051,15 @@ function LiveInventoryScreen() {
         let sold = 0;
         
         if (outlet?.outletType === 'production') {
-          const outRequests = requests.filter(
-            r => r.status === 'approved' && 
-                 r.fromOutlet === selectedOutlet && 
-                 r.requestDate === date && 
-                 r.productId === product.id
+          const outRequests = (approvedFromRequestsByDate.get(date) || []).filter(
+            r => r.productId === product.id
           );
           outRequests.forEach(req => { sold += req.quantity; });
         } else {
           // Sales: First check if this is a raw material with consumption data from reconciliation
           // For raw materials, use NEW sales report raw consumption first
           const isRawMaterial = product.type === 'raw';
-          const salesReport = salesReports.find(r => r.date === date && r.outlet === selectedOutlet);
+          const salesReport = latestSalesReportByDate.get(date);
           
           if (isRawMaterial) {
             const rawConsumptionFromReport = salesReport?.rawConsumption?.find(
@@ -905,12 +1068,10 @@ function LiveInventoryScreen() {
 
             if (rawConsumptionFromReport) {
               sold = (rawConsumptionFromReport.consumedWhole || 0) + (rawConsumptionFromReport.consumedSlices || 0);
-              console.log(`Raw consumption from sales report for ${product.name}: ${sold}`);
+              debugLog(`Raw consumption from sales report for ${product.name}: ${sold}`);
             } else {
               // Fallback to legacy reconciliation history
-              const reconcileForDate = reconcileHistory.find(
-                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-              );
+              const reconcileForDate = latestReconcileByDate.get(date);
               const rawConsumption = reconcileForDate?.rawConsumption?.find(
                 rc => rc.rawProductId === product.id
               );
@@ -923,25 +1084,40 @@ function LiveInventoryScreen() {
                 }
               }
             }
-          } else {
-            // For menu/kitchen products, use NEW sales report data first
-            const salesDataFromReport = salesReport?.salesData?.find(sd => sd.productId === product.id);
-            if (salesDataFromReport) {
-              sold = (salesDataFromReport.soldWhole || 0) + (salesDataFromReport.soldSlices || 0);
+	          } else {
+	            // For menu/kitchen products, use NEW sales report data first
+	            const salesDataFromReport = salesReport?.salesData?.find(sd => sd.productId === product.id);
+	            if (salesDataFromReport) {
+	              sold = (salesDataFromReport.soldWhole || 0) + (salesDataFromReport.soldSlices || 0);
             } else {
               // Fallback to legacy reconciliation history
-              const reconcileForDate = reconcileHistory.find(
-                r => r.outlet === selectedOutlet && r.date === date && !r.deleted
-              );
+              const reconcileForDate = latestReconcileByDate.get(date);
               const legacySalesData = reconcileForDate?.salesData?.find(
                 sd => sd.productId === product.id
               );
-              if (legacySalesData) {
-                sold = legacySalesData.sold;
+	              if (legacySalesData) {
+	                sold = legacySalesData.sold;
+	              }
+	            }
+	          }
+
+            if (sold === 0) {
+              const fallbackSoldFromDeductions = salesDeductions
+                .filter(
+                  sd =>
+                    !sd.deleted &&
+                    outletMatches(sd.outletName, selectedOutlet) &&
+                    sd.salesDate === date &&
+                    sd.productId === product.id
+                )
+                .reduce((sum, entry) => sum + (entry.wholeDeducted || 0) + (entry.slicesDeducted || 0), 0);
+
+              if (fallbackSoldFromDeductions > 0) {
+                sold = fallbackSoldFromDeductions;
+                debugLog(`Recovered sold from sales deductions for ${product.name}: ${sold}`);
               }
             }
-          }
-        }
+	        }
 
         // STEP 5: Calculate Current Stock
         // ALWAYS calculate: Current = Opening + Received - Sold
@@ -954,13 +1130,13 @@ function LiveInventoryScreen() {
         const todayCheckWithReplace = todayChecks.find(c => c.replaceAllInventory);
         if (todayCheckWithReplace) {
           replaceInventoryDate = date;
-          console.log(`Product ${product.name} on ${date} was replaced via Replace All Inventory`);
+          debugLog(`Product ${product.name} on ${date} was replaced via Replace All Inventory`);
           
           // Use stock check quantity directly as Current Stock (don't calculate)
           const count = todayCheckWithReplace.counts.find(c => c.productId === product.id);
           current = count?.quantity || 0;
           
-          console.log(`Using stock check quantity directly: ${current}`);
+          debugLog(`Using stock check quantity directly: ${current}`);
         } else {
           // Check if stock count has manuallyEditedDate for THIS SPECIFIC DATE
           if (todayChecks.length > 0) {
@@ -972,22 +1148,25 @@ function LiveInventoryScreen() {
             
             if (isManuallyEditedToday) {
               manuallyEditedDate = date;
-              console.log(`Product ${product.name} on ${date} was manually edited ON THIS DATE`);
+              debugLog(`Product ${product.name} on ${date} was manually edited ON THIS DATE`);
               
               // Use manually edited quantity directly for THIS date only
               current = count.quantity || 0;
-              console.log(`Using manually edited quantity: ${current}`);
+              debugLog(`Using manually edited quantity: ${current}`);
             } else {
               // ALWAYS use formula for dates that are NOT manually edited:
-              // Current = Opening + Received - Wastage - Sold
-              console.log(`Product ${product.name} on ${date} - using formula: Opening(${opening}) + Received(${received}) - Wastage(${wastage}) - Sold(${sold})`);              current = opening + received - wastage - sold;
-              console.log(`  Result: ${current}`);
+              // Current = Opening + Received - Sold
+              // NOTE: Wastage is already reflected in opening stock
+              debugLog(`Product ${product.name} on ${date} - using formula: Opening(${opening}) + Received(${received}) - Sold(${sold})`);
+              current = opening + received - sold;
+              debugLog(`  Result: ${current}`);
             }
           } else {
-            // ALWAYS use formula: Current = Opening + Received - Wastage - Sold
-            console.log(`Product ${product.name} on ${date} - using formula (no check): Opening(${opening}) + Received(${received}) - Wastage(${wastage}) - Sold(${sold})`);
-            current = opening + received - wastage - sold;
-            console.log(`  Result: ${current}`);
+            // ALWAYS use formula: Current = Opening + Received - Sold
+            // NOTE: Wastage is already reflected in opening stock
+            debugLog(`Product ${product.name} on ${date} - using formula (no check): Opening(${opening}) + Received(${received}) - Sold(${sold})`);
+            current = opening + received - sold;
+            debugLog(`  Result: ${current}`);
           }
         }
         
@@ -1020,27 +1199,23 @@ function LiveInventoryScreen() {
           const currentRecord = records[index];
           const nextIndex = index + 1;
 
-          // CALCULATE DISCREPANCY: Opening (next day) - Current (today)
-          // Formula: Discrepancy = Next Day Opening - Current
-          // This shows how much stock is missing or extra compared to what we expect to carry forward
-          
+          // Discrepancy = Opening (next day) - (Current - abs(Wastage)) (today)
           if (nextIndex < records.length) {
             const nextRecord = records[nextIndex];
-            
-            // Discrepancy = Next Day Opening - Today's Current
-            const discrepancy = nextRecord.openingWhole - currentRecord.currentWhole;
+            const discrepancy = nextRecord.openingWhole - (currentRecord.currentWhole - Math.abs(currentRecord.wastageWhole));
             currentRecord.discrepancyWhole = Math.round(discrepancy * 100) / 100;
             currentRecord.discrepancySlices = 0;
 
-            console.log(`Discrepancy for ${product.name} on ${currentRecord.date}:`);
-            console.log(`  Today's Current: ${currentRecord.currentWhole}`);
-            console.log(`  Next Day Opening: ${nextRecord.openingWhole}`);
-            console.log(`  Discrepancy (Next Opening - Current): ${currentRecord.discrepancyWhole}`);
+            debugLog(`Discrepancy for ${product.name} on ${currentRecord.date}:`);
+            debugLog(`  Current: ${currentRecord.currentWhole}`);
+            debugLog(`  Wastage: ${currentRecord.wastageWhole}`);
+            debugLog(`  Wastage used in formula (absolute): ${Math.abs(currentRecord.wastageWhole)}`);
+            debugLog(`  Next Day Opening: ${nextRecord.openingWhole}`);
+            debugLog(`  Discrepancy (Next Opening - (Current - abs(Wastage))): ${currentRecord.discrepancyWhole}`);
           } else {
-            // Last day - no discrepancy
             currentRecord.discrepancyWhole = 0;
             currentRecord.discrepancySlices = 0;
-            console.log(`Discrepancy for ${product.name} on ${currentRecord.date}: Last day - no discrepancy`);
+            debugLog(`Discrepancy for ${product.name} on ${currentRecord.date}: Last day - no discrepancy`);
           }
         }
 
@@ -1054,29 +1229,29 @@ function LiveInventoryScreen() {
       }
     });
 
-    console.log('========================================');
-    console.log('Live Inventory Calculation Complete');
-    console.log('Total Products Processed:', history.length);
-    console.log('========================================\n');
+    debugLog('========================================');
+    debugLog('Live Inventory Calculation Complete');
+    debugLog('Total Products Processed:', history.length);
+    debugLog('========================================\n');
 
     return history.sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [selectedOutlet, selectedDate, dateRange, products, outlets, stockChecks, salesDeductions, productConversions, requests, getDateRange, reconcileHistory, kitchenStockReports, salesReports]);
+  }, [selectedOutlet, activeDateWindow, products, outlets, stockChecks, salesDeductions, productConversions, requests, reconcileHistory, kitchenStockReports, salesReports, outletMatches]);
 
-  console.log('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
-  console.log('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
-  console.log('[LIVE INVENTORY] Sales deductions for selected outlet:', salesDeductions.filter(s => s.outletName === selectedOutlet).length);
+  debugLog('[LIVE INVENTORY] Current inventory history count:', productInventoryHistory.length);
+  debugLog('[LIVE INVENTORY] Dependencies - stockChecks:', stockChecks.length, 'salesDeductions:', salesDeductions.length, 'requests:', requests.length);
+  debugLog('[LIVE INVENTORY] Sales deductions for selected outlet:', salesDeductions.filter(s => outletMatches(s.outletName, selectedOutlet)).length);
   if (salesDeductions.length > 0 && selectedOutlet) {
-    const outletSales = salesDeductions.filter(s => s.outletName === selectedOutlet);
+    const outletSales = salesDeductions.filter(s => outletMatches(s.outletName, selectedOutlet));
     if (outletSales.length > 0) {
-      console.log('[LIVE INVENTORY] Sample sales deductions for', selectedOutlet, ':', outletSales.slice(0, 3).map(s => ({
+      debugLog('[LIVE INVENTORY] Sample sales deductions for', selectedOutlet, ':', outletSales.slice(0, 3).map(s => ({
         date: s.salesDate,
         product: products.find(p => p.id === s.productId)?.name || s.productId,
         whole: s.wholeDeducted,
         slices: s.slicesDeducted
       })));
     } else {
-      console.log('[LIVE INVENTORY] ⚠️ No sales deductions found for outlet:', selectedOutlet);
-      console.log('[LIVE INVENTORY] Available outlets in sales deductions:', [...new Set(salesDeductions.map(s => s.outletName))]);
+      debugLog('[LIVE INVENTORY] ⚠️ No sales deductions found for outlet:', selectedOutlet);
+      debugLog('[LIVE INVENTORY] Available outlets in sales deductions:', [...new Set(salesDeductions.map(s => s.outletName))]);
     }
   }
 
@@ -1094,8 +1269,8 @@ function LiveInventoryScreen() {
       }
       const workbook = XLSX.utils.book_new();
       
-      const dateRangeStart = getDateRange(selectedDate, dateRange)[0];
-      const dateRangeEnd = selectedDate;
+      const dateRangeStart = activeDateWindow.startDate;
+      const dateRangeEnd = activeDateWindow.endDate;
       
       const summaryData = [
         ['Live Inventory Discrepancies Report'],
@@ -1219,7 +1394,7 @@ function LiveInventoryScreen() {
       const summaryData = [
         ['Live Inventory Report'],
         ['Outlet:', selectedOutlet],
-        ['Date Range:', `${getDateRange(selectedDate, dateRange)[0]} to ${selectedDate}`],
+        ['Date Range:', `${activeDateWindow.startDate} to ${activeDateWindow.endDate}`],
         ['Generated:', new Date().toLocaleString()],
         [],
         ['Summary'],
@@ -1271,7 +1446,7 @@ function LiveInventoryScreen() {
       XLSX.utils.book_append_sheet(workbook, detailSheet, 'Inventory Detail');
 
       const base64 = XLSX.write(workbook, { type: 'base64', bookType: 'xlsx' });
-      const filename = `live_inventory_${selectedOutlet.replace(/\s+/g, '_')}_${selectedDate}.xlsx`;
+      const filename = `live_inventory_${selectedOutlet.replace(/\s+/g, '_')}_${activeDateWindow.startDate}_to_${activeDateWindow.endDate}.xlsx`;
 
       if (Platform.OS === 'web') {
         const byteCharacters = atob(base64);
@@ -1317,9 +1492,9 @@ function LiveInventoryScreen() {
 
   const handleEditCurrentStock = useCallback(async (productId: string, date: string, field: 'currentWhole' | 'currentSlices', newWhole: number, newSlices: number) => {
     try {
-      console.log('\n=== EDITING CURRENT STOCK IN LIVE INVENTORY ===');
-      console.log('Product:', productId, 'Date:', date);
-      console.log('New values - Whole:', newWhole, 'Slices:', newSlices);
+      debugLog('\n=== EDITING CURRENT STOCK IN LIVE INVENTORY ===');
+      debugLog('Product:', productId, 'Date:', date);
+      debugLog('New values - Whole:', newWhole, 'Slices:', newSlices);
       
       const outlet = outlets.find(o => o.name === selectedOutlet);
       if (!outlet) {
@@ -1341,11 +1516,11 @@ function LiveInventoryScreen() {
       })();
       
       // STEP 1: Update TODAY's stock check to mark the edit and set the new current stock
-      console.log('STEP 1: Marking current stock as manually edited on date:', date);
-      const todayCheck = stockChecks.find(c => c.date === date && c.outlet === selectedOutlet && isUserStockCheck(c));
+      debugLog('STEP 1: Marking current stock as manually edited on date:', date);
+      const todayCheck = stockChecks.find(c => c.date === date && outletMatches(c.outlet, selectedOutlet) && isUserStockCheck(c));
       
       if (todayCheck) {
-        console.log('Found existing stock check for today:', todayCheck.id);
+        debugLog('Found existing stock check for today:', todayCheck.id);
         const updatedTodayCounts = [...todayCheck.counts];
         
         if (productPair) {
@@ -1360,7 +1535,7 @@ function LiveInventoryScreen() {
               openingStock: newWhole,
               manuallyEditedDate: date,
             };
-            console.log('Updated whole product count with manuallyEditedDate and openingStock');
+            debugLog('Updated whole product count with manuallyEditedDate and openingStock');
           } else {
             updatedTodayCounts.push({
               productId: productPair.wholeProductId,
@@ -1370,7 +1545,7 @@ function LiveInventoryScreen() {
               wastage: 0,
               manuallyEditedDate: date,
             });
-            console.log('Created new whole product count with manuallyEditedDate and openingStock');
+            debugLog('Created new whole product count with manuallyEditedDate and openingStock');
           }
           
           if (slicesCountIndex >= 0) {
@@ -1380,7 +1555,7 @@ function LiveInventoryScreen() {
               openingStock: newSlices,
               manuallyEditedDate: date,
             };
-            console.log('Updated slices product count with manuallyEditedDate and openingStock');
+            debugLog('Updated slices product count with manuallyEditedDate and openingStock');
           } else {
             updatedTodayCounts.push({
               productId: productPair.slicesProductId,
@@ -1390,7 +1565,7 @@ function LiveInventoryScreen() {
               wastage: 0,
               manuallyEditedDate: date,
             });
-            console.log('Created new slices product count with manuallyEditedDate and openingStock');
+            debugLog('Created new slices product count with manuallyEditedDate and openingStock');
           }
         } else {
           // Product without conversions
@@ -1403,7 +1578,7 @@ function LiveInventoryScreen() {
               openingStock: newWhole,
               manuallyEditedDate: date,
             };
-            console.log('Updated product count with manuallyEditedDate and openingStock');
+            debugLog('Updated product count with manuallyEditedDate and openingStock');
           } else {
             updatedTodayCounts.push({
               productId: productId,
@@ -1413,14 +1588,14 @@ function LiveInventoryScreen() {
               wastage: 0,
               manuallyEditedDate: date,
             });
-            console.log('Created new product count with manuallyEditedDate and openingStock');
+            debugLog('Created new product count with manuallyEditedDate and openingStock');
           }
         }
         
         await updateStockCheck(todayCheck.id, updatedTodayCounts);
-        console.log('✓ Updated today\'s stock check with manuallyEditedDate');
+        debugLog('✓ Updated today\'s stock check with manuallyEditedDate');
       } else {
-        console.log('Creating new stock check for today with manual edit');
+        debugLog('Creating new stock check for today with manual edit');
         const newCounts: StockCount[] = [];
         
         if (productPair) {
@@ -1462,14 +1637,14 @@ function LiveInventoryScreen() {
         };
         
         await saveStockCheck(newStockCheck, true);
-        console.log('✓ Created new stock check for today with manuallyEditedDate');
+        debugLog('✓ Created new stock check for today with manuallyEditedDate');
       }
       
-      console.log('✓ Opening stock for the SELECTED DATE has been set:', date);
-      console.log('The opening stock is now:', newWhole, 'whole,', newSlices, 'slices for date:', date);
-      console.log('This will be used as the opening stock for the selected date in live inventory calculations');
+      debugLog('✓ Opening stock for the SELECTED DATE has been set:', date);
+      debugLog('The opening stock is now:', newWhole, 'whole,', newSlices, 'slices for date:', date);
+      debugLog('This will be used as the opening stock for the selected date in live inventory calculations');
       
-      console.log('=== EDIT COMPLETE - CURRENT STOCK WILL BE HIGHLIGHTED IN RED ===\n');
+      debugLog('=== EDIT COMPLETE - CURRENT STOCK WILL BE HIGHLIGHTED IN RED ===\n');
       
       Alert.alert(
         'Success',
@@ -1483,16 +1658,28 @@ function LiveInventoryScreen() {
   }, [selectedOutlet, outlets, productConversions, stockChecks, updateStockCheck, saveStockCheck]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
+    const directionMultiplier = direction === 'prev' ? -1 : 1;
+
+    if (dateRange === 'custom') {
+      const span = Math.max(activeDateWindow.dates.length, 1);
+      const start = new Date(activeDateWindow.startDate);
+      const end = new Date(activeDateWindow.endDate);
+      start.setDate(start.getDate() + (directionMultiplier * span));
+      end.setDate(end.getDate() + (directionMultiplier * span));
+      setCustomStartDate(toIsoDate(start));
+      setCustomEndDate(toIsoDate(end));
+      return;
+    }
+
     const current = new Date(selectedDate);
     const daysToMove = dateRange === 'week' ? 7 : 30;
-    
-    if (direction === 'prev') {
+    if (directionMultiplier < 0) {
       current.setDate(current.getDate() - daysToMove);
     } else {
       current.setDate(current.getDate() + daysToMove);
     }
     
-    setSelectedDate(current.toISOString().split('T')[0]);
+    setSelectedDate(toIsoDate(current));
   };
 
   return (
@@ -1525,16 +1712,40 @@ function LiveInventoryScreen() {
           >
             <Text style={[styles.rangeButtonText, dateRange === 'month' && styles.rangeButtonTextActive]}>Month</Text>
           </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.rangeButton, dateRange === 'custom' && styles.rangeButtonActive]}
+            onPress={() => {
+              setCustomStartDate(activeDateWindow.startDate);
+              setCustomEndDate(activeDateWindow.endDate);
+              setDateRange('custom');
+            }}
+          >
+            <Text style={[styles.rangeButtonText, dateRange === 'custom' && styles.rangeButtonTextActive]}>Custom</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.dateNavigator}>
           <TouchableOpacity onPress={() => navigateDate('prev')} style={styles.navButton}>
             <ChevronLeft size={20} color={Colors.light.text} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowCalendar(true)} style={styles.dateButton}>
-            <Calendar size={16} color={Colors.light.tint} />
-            <Text style={styles.dateText}>{selectedDate}</Text>
-          </TouchableOpacity>
+          {dateRange === 'custom' ? (
+            <>
+              <TouchableOpacity onPress={() => setShowStartDateCalendar(true)} style={styles.dateButton}>
+                <Calendar size={16} color={Colors.light.tint} />
+                <Text style={styles.dateText}>{activeDateWindow.startDate}</Text>
+              </TouchableOpacity>
+              <Text style={styles.dateRangeJoinText}>to</Text>
+              <TouchableOpacity onPress={() => setShowEndDateCalendar(true)} style={styles.dateButton}>
+                <Calendar size={16} color={Colors.light.tint} />
+                <Text style={styles.dateText}>{activeDateWindow.endDate}</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity onPress={() => setShowCalendar(true)} style={styles.dateButton}>
+              <Calendar size={16} color={Colors.light.tint} />
+              <Text style={styles.dateText}>{selectedDate}</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={() => navigateDate('next')} style={styles.navButton}>
             <ChevronRight size={20} color={Colors.light.text} />
           </TouchableOpacity>
@@ -1956,6 +2167,32 @@ function LiveInventoryScreen() {
           setShowCalendar(false);
         }}
       />
+      <CalendarModal
+        visible={showStartDateCalendar}
+        initialDate={customStartDate}
+        onClose={() => setShowStartDateCalendar(false)}
+        onSelect={(iso) => {
+          setCustomStartDate(iso);
+          if (iso > customEndDate) {
+            setCustomEndDate(iso);
+          }
+          setShowStartDateCalendar(false);
+          setDateRange('custom');
+        }}
+      />
+      <CalendarModal
+        visible={showEndDateCalendar}
+        initialDate={customEndDate}
+        onClose={() => setShowEndDateCalendar(false)}
+        onSelect={(iso) => {
+          setCustomEndDate(iso);
+          if (iso < customStartDate) {
+            setCustomStartDate(iso);
+          }
+          setShowEndDateCalendar(false);
+          setDateRange('custom');
+        }}
+      />
     </View>
   );
 }
@@ -2052,6 +2289,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600' as const,
     color: Colors.light.text,
+  },
+  dateRangeJoinText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: Colors.light.muted,
   },
   exportButtons: {
     flexDirection: 'row' as const,
