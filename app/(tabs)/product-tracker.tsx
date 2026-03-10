@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -81,8 +81,7 @@ export default function ProductTrackerScreen() {
   const [showStartPicker, setShowStartPicker] = useState<boolean>(false);
   const [showEndPicker, setShowEndPicker] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [searchInput, setSearchInput] = useState<string>('');
   const [kitchenReports, setKitchenReports] = useState<KitchenStockReport[]>([]);
   const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
   const [isReconciliationLoading, setIsReconciliationLoading] = useState<boolean>(true);
@@ -134,14 +133,6 @@ export default function ProductTrackerScreen() {
     void loadReconciliationReports();
   }, [loadReconciliationReports]);
 
-  useEffect(() => {
-    return () => {
-      if (searchDebounceRef.current) {
-        clearTimeout(searchDebounceRef.current);
-      }
-    };
-  }, []);
-
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
@@ -163,7 +154,7 @@ export default function ProductTrackerScreen() {
   const isLoading = isStockLoading || isStoresLoading || isProductionLoading || isRecipesLoading || isReconciliationLoading;
   const isSyncing = isStockSyncing || isStoresSyncing || isProductionSyncing || isRecipesSyncing || isRefreshing;
 
-  const trackerState = useMemo(() => {
+  const trackerBaseState = useMemo(() => {
     const startIso = toIsoDate(startDate);
     const endIso = toIsoDate(endDate);
 
@@ -493,7 +484,7 @@ export default function ProductTrackerScreen() {
       };
     });
 
-    const filteredRows = rows
+    const nonZeroRows = rows
       .filter((row) => {
         const hasAnyData =
           row.estimatedOpeningStores !== 0 ||
@@ -501,15 +492,45 @@ export default function ProductTrackerScreen() {
           row.currentStores !== 0 ||
           row.issuedToProduction !== 0 ||
           row.soldByRecipes !== 0;
-        if (!hasAnyData) return false;
-        if (!searchQuery.trim()) return true;
-        return row.rawProductName.toLowerCase().includes(searchQuery.trim().toLowerCase());
+        return hasAnyData;
       })
       .sort((a, b) => {
         const absDiff = Math.abs(b.discrepancy) - Math.abs(a.discrepancy);
         if (absDiff !== 0) return absDiff;
         return a.rawProductName.localeCompare(b.rawProductName);
       });
+
+    return {
+      rows: nonZeroRows,
+      meta: {
+        unmatchedStoreMappings,
+        salesFallbackCount,
+        startIso,
+        endIso,
+      },
+    };
+  }, [
+    startDate,
+    endDate,
+    products,
+    productConversions,
+    storeProducts,
+    grns,
+    approvedProductions,
+    kitchenReports,
+    reconcileHistory,
+    salesReports,
+    recipes,
+    selectedOutlet,
+  ]);
+
+  const trackerState = useMemo(() => {
+    const normalizedQuery = searchInput.trim().toLowerCase();
+    const filteredRows = !normalizedQuery
+      ? trackerBaseState.rows
+      : trackerBaseState.rows.filter((row) =>
+          row.rawProductName.toLowerCase().includes(normalizedQuery)
+        );
 
     const totals = filteredRows.reduce(
       (acc, row) => {
@@ -536,28 +557,9 @@ export default function ProductTrackerScreen() {
         sold: round3(totals.sold),
         discrepancy: round3(totals.discrepancy),
       },
-      meta: {
-        unmatchedStoreMappings,
-        salesFallbackCount,
-        startIso,
-        endIso,
-      },
+      meta: trackerBaseState.meta,
     };
-  }, [
-    startDate,
-    endDate,
-    products,
-    productConversions,
-    storeProducts,
-    grns,
-    approvedProductions,
-    kitchenReports,
-    reconcileHistory,
-    salesReports,
-    recipes,
-    selectedOutlet,
-    searchQuery,
-  ]);
+  }, [trackerBaseState, searchInput]);
 
   return (
     <>
@@ -565,7 +567,7 @@ export default function ProductTrackerScreen() {
       <View style={styles.container}>
         <ScrollView
           style={styles.content}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
         >
           <View style={styles.filtersContainer}>
@@ -691,15 +693,8 @@ export default function ProductTrackerScreen() {
                 style={styles.searchInput}
                 placeholder="Search raw material..."
                 placeholderTextColor={Colors.light.muted}
-                defaultValue=""
-                onChangeText={(text) => {
-                  if (searchDebounceRef.current) {
-                    clearTimeout(searchDebounceRef.current);
-                  }
-                  searchDebounceRef.current = setTimeout(() => {
-                    setSearchQuery(text);
-                  }, 120);
-                }}
+                value={searchInput}
+                onChangeText={setSearchInput}
                 autoCorrect={false}
                 autoCapitalize="none"
                 blurOnSubmit={false}
