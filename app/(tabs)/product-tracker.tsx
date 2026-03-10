@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -81,8 +81,8 @@ export default function ProductTrackerScreen() {
   const [showStartPicker, setShowStartPicker] = useState<boolean>(false);
   const [showEndPicker, setShowEndPicker] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [searchInput, setSearchInput] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [kitchenReports, setKitchenReports] = useState<KitchenStockReport[]>([]);
   const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
   const [isReconciliationLoading, setIsReconciliationLoading] = useState<boolean>(true);
@@ -135,11 +135,12 @@ export default function ProductTrackerScreen() {
   }, [loadReconciliationReports]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearchQuery(searchInput);
-    }, 120);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+    };
+  }, []);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -690,8 +691,19 @@ export default function ProductTrackerScreen() {
                 style={styles.searchInput}
                 placeholder="Search raw material..."
                 placeholderTextColor={Colors.light.muted}
-                value={searchInput}
-                onChangeText={setSearchInput}
+                defaultValue=""
+                onChangeText={(text) => {
+                  if (searchDebounceRef.current) {
+                    clearTimeout(searchDebounceRef.current);
+                  }
+                  searchDebounceRef.current = setTimeout(() => {
+                    setSearchQuery(text);
+                  }, 120);
+                }}
+                autoCorrect={false}
+                autoCapitalize="none"
+                blurOnSubmit={false}
+                returnKeyType="search"
               />
             </View>
 
