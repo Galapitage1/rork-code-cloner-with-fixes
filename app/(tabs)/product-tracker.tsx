@@ -19,6 +19,7 @@ import { useStores } from '@/contexts/StoresContext';
 import { useProduction } from '@/contexts/ProductionContext';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { Product, ProductConversion, Recipe, SalesReconciliationHistory } from '@/types';
+import { getLocalKitchenStockReports, getLocalSalesReports, KitchenStockReport, SalesReport, syncAllReconciliationData } from '@/utils/reconciliationSync';
 
 type ViewType = 'weekly' | 'monthly';
 
@@ -81,6 +82,25 @@ export default function ProductTrackerScreen() {
   const [showEndPicker, setShowEndPicker] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [search, setSearch] = useState<string>('');
+  const [kitchenReports, setKitchenReports] = useState<KitchenStockReport[]>([]);
+  const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
+  const [isReconciliationLoading, setIsReconciliationLoading] = useState<boolean>(true);
+
+  const loadReconciliationReports = useCallback(async () => {
+    try {
+      setIsReconciliationLoading(true);
+      const [localKitchen, localSales] = await Promise.all([
+        getLocalKitchenStockReports(),
+        getLocalSalesReports(),
+      ]);
+      setKitchenReports((localKitchen || []).filter((report) => !report.deleted));
+      setSalesReports((localSales || []).filter((report) => !report.deleted));
+    } catch (error) {
+      console.error('ProductTracker(raw): failed to load reconciliation reports', error);
+    } finally {
+      setIsReconciliationLoading(false);
+    }
+  }, []);
 
   const applyStartDate = useCallback((date: Date) => {
     const next = new Date(date);
@@ -109,6 +129,10 @@ export default function ProductTrackerScreen() {
     setEndDate(getMonthEnd(new Date()));
   }, [viewType]);
 
+  useEffect(() => {
+    void loadReconciliationReports();
+  }, [loadReconciliationReports]);
+
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
@@ -117,15 +141,17 @@ export default function ProductTrackerScreen() {
         syncStores(true),
         syncProduction(true),
         syncRecipes(true),
+        syncAllReconciliationData(),
       ]);
+      await loadReconciliationReports();
     } catch (error) {
       console.error('ProductTracker(raw): refresh failed', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [syncStock, syncStores, syncProduction, syncRecipes]);
+  }, [syncStock, syncStores, syncProduction, syncRecipes, loadReconciliationReports]);
 
-  const isLoading = isStockLoading || isStoresLoading || isProductionLoading || isRecipesLoading;
+  const isLoading = isStockLoading || isStoresLoading || isProductionLoading || isRecipesLoading || isReconciliationLoading;
   const isSyncing = isStockSyncing || isStoresSyncing || isProductionSyncing || isRecipesSyncing || isRefreshing;
 
   const trackerState = useMemo(() => {
@@ -276,9 +302,101 @@ export default function ProductTrackerScreen() {
       });
     });
 
-    // Sales-implied raw usage from reconciliation history (prefer stored rawConsumption)
+    const toProducedQty = (productId: string, quantityWhole: number, quantitySlices: number): number => {
+      const factor =
+        conversionByFrom.get(productId)?.conversionFactor ||
+        conversionByTo.get(productId)?.conversionFactor ||
+        0;
+      if (factor > 0) {
+        return (quantityWhole || 0) + (quantitySlices || 0) / factor;
+      }
+      return (quantityWhole || 0) + (quantitySlices || 0);
+    };
+
+    // Raw issued to production from kitchen reconciliation (products loaded -> recipe ingredients consumed)
+    const recipeByProductId = new Map<string, Recipe>();
+    recipes.forEach((recipe) => recipeByProductId.set(recipe.menuProductId, recipe));
+
+    const latestKitchenReportsByKey = new Map<string, KitchenStockReport>();
+    kitchenReports.forEach((report) => {
+      if (!report || report.deleted) return;
+      if (!isIsoDateInRange(report.date, startIso, endIso)) return;
+      const reportKey = `${normalize(report.outlet)}__${report.date}`;
+      const existing = latestKitchenReportsByKey.get(reportKey);
+      const reportTime = report.updatedAt || report.timestamp || 0;
+      const existingTime = existing ? (existing.updatedAt || existing.timestamp || 0) : 0;
+      if (!existing || reportTime >= existingTime) {
+        latestKitchenReportsByKey.set(reportKey, report);
+      }
+    });
+
+    latestKitchenReportsByKey.forEach((report) => {
+      (report.products || []).forEach((reportProduct) => {
+        if (!reportProduct.productId) return;
+        let recipe = recipeByProductId.get(reportProduct.productId);
+        if (!recipe) {
+          const asSlice = conversionByTo.get(reportProduct.productId);
+          if (asSlice?.fromProductId) {
+            recipe = recipeByProductId.get(asSlice.fromProductId);
+          }
+        }
+        if (!recipe || !Array.isArray(recipe.components)) return;
+
+        const producedQty = toProducedQty(
+          reportProduct.productId,
+          Number(reportProduct.quantityWhole || 0),
+          Number(reportProduct.quantitySlices || 0)
+        );
+        if (!Number.isFinite(producedQty) || producedQty <= 0) return;
+
+        recipe.components.forEach((component) => {
+          addToMetric(
+            issuedToProductionByRaw,
+            component.rawProductId,
+            producedQty * (component.quantityPerUnit || 0),
+            rowMeta
+          );
+        });
+      });
+    });
+
+    // Sales-implied raw usage from NEW sales reports first, then reconciliation-history fallback.
     const recipeByMenuId = new Map<string, Recipe>();
     recipes.forEach((r) => recipeByMenuId.set(r.menuProductId, r));
+
+    const latestSalesReportsByKey = new Map<string, SalesReport>();
+    salesReports.forEach((report) => {
+      if (!report || report.deleted) return;
+      if (!isIsoDateInRange(report.date, startIso, endIso)) return;
+      if (selectedOutlet !== 'ALL' && normalize(report.outlet) !== normalize(selectedOutlet)) return;
+      const reportKey = `${normalize(report.outlet)}__${report.date}`;
+      const existing = latestSalesReportsByKey.get(reportKey);
+      const reportTime = report.updatedAt || report.timestamp || 0;
+      const existingTime = existing ? (existing.updatedAt || existing.timestamp || 0) : 0;
+      if (!existing || reportTime >= existingTime) {
+        latestSalesReportsByKey.set(reportKey, report);
+      }
+    });
+
+    const processedSalesKeys = new Set<string>();
+    latestSalesReportsByKey.forEach((report, reportKey) => {
+      processedSalesKeys.add(reportKey);
+      const consumedByBaseId = new Map<string, number>();
+      (report.rawConsumption || []).forEach((raw) => {
+        const normalized = toBaseQuantity(raw.rawProductId, 1);
+        if (!normalized) return;
+        const consumedQty =
+          Number((raw as any).consumed) ||
+          toProducedQty(raw.rawProductId, Number(raw.consumedWhole || 0), Number(raw.consumedSlices || 0));
+        const existing = consumedByBaseId.get(normalized.baseProductId) || 0;
+        // Sales reports may include both whole/slice rows for the same raw product pair.
+        // Keep the larger value per base raw product to avoid double counting.
+        consumedByBaseId.set(normalized.baseProductId, Math.max(existing, consumedQty));
+      });
+      consumedByBaseId.forEach((consumedQty, baseProductId) => {
+        addToMetric(soldByRecipesByRaw, baseProductId, consumedQty, rowMeta);
+      });
+    });
 
     const addFallbackSalesConsumption = (history: SalesReconciliationHistory) => {
       salesFallbackCount++;
@@ -298,6 +416,8 @@ export default function ProductTrackerScreen() {
       if (history.deleted) return;
       if (!isIsoDateInRange(history.date, startIso, endIso)) return;
       if (selectedOutlet !== 'ALL' && (history.outlet || '').toLowerCase() !== selectedOutlet.toLowerCase()) return;
+      const historyKey = `${normalize(history.outlet)}__${history.date}`;
+      if (processedSalesKeys.has(historyKey)) return;
 
       if (history.rawConsumption && history.rawConsumption.length > 0) {
         history.rawConsumption.forEach((raw) => {
@@ -409,7 +529,9 @@ export default function ProductTrackerScreen() {
     storeProducts,
     grns,
     approvedProductions,
+    kitchenReports,
     reconcileHistory,
+    salesReports,
     recipes,
     selectedOutlet,
     search,

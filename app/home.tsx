@@ -1,9 +1,9 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays, BadgeDollarSign } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays, BadgeDollarSign, Gift } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useMemo } from 'react';
 import { useStores } from '@/contexts/StoresContext';
 
 import Colors from '@/constants/colors';
@@ -18,123 +18,193 @@ type NavCard = {
   route: string;
   color: string;
   requiresPermission?: 'viewSales' | 'viewRecipes' | null;
+  requiresRole?: 'adminOrSuper' | 'superAdmin';
 };
 
-const navCards: NavCard[] = [
+type NavSection = {
+  title: string;
+  cards: NavCard[];
+};
+
+const homeSections: NavSection[] = [
   {
-    title: 'Stock Check',
-    icon: ClipboardCheck,
-    route: '/(tabs)/stock-check',
-    color: '#3B82F6',
+    title: 'Daily Tasks',
+    cards: [
+      {
+        title: 'Stock Check',
+        icon: ClipboardCheck,
+        route: '/(tabs)/stock-check',
+        color: '#3B82F6',
+      },
+      {
+        title: 'Requests',
+        icon: ShoppingCart,
+        route: '/(tabs)/requests',
+        color: '#10B981',
+      },
+      {
+        title: 'History',
+        icon: History,
+        route: '/(tabs)/history',
+        color: '#8B5CF6',
+      },
+      {
+        title: 'Production',
+        icon: Factory,
+        route: '/(tabs)/production',
+        color: '#6366F1',
+        requiresPermission: 'viewRecipes',
+      },
+    ],
   },
   {
-    title: 'Requests',
-    icon: ShoppingCart,
-    route: '/(tabs)/requests',
-    color: '#10B981',
-  },
-  {
-    title: 'History',
-    icon: History,
-    route: '/(tabs)/history',
-    color: '#8B5CF6',
+    title: 'Data',
+    cards: [
+      {
+        title: 'Reconcile',
+        icon: FileSpreadsheet,
+        route: '/(tabs)/sales-upload',
+        color: '#EF4444',
+        requiresPermission: 'viewSales',
+      },
+      {
+        title: 'Inventory',
+        icon: Package,
+        route: '/(tabs)/inventory',
+        color: '#14B8A6',
+        requiresPermission: 'viewRecipes',
+      },
+      {
+        title: 'Live Inventory',
+        icon: TrendingUp,
+        route: '/(tabs)/live-inventory',
+        color: '#06B6D4',
+        requiresPermission: 'viewRecipes',
+      },
+      {
+        title: 'Raw Tracker',
+        icon: ClipboardList,
+        route: '/(tabs)/product-tracker',
+        color: '#F97316',
+        requiresRole: 'adminOrSuper',
+      },
+      {
+        title: 'Reports',
+        icon: BarChart3,
+        route: '/(tabs)/reports',
+        color: '#8B5CF6',
+        requiresPermission: 'viewSales',
+      },
+    ],
   },
   {
     title: 'Customers',
-    icon: Users,
-    route: '/(tabs)/customers',
-    color: '#F59E0B',
-  },
-  {
-    title: 'Reconcile',
-    icon: FileSpreadsheet,
-    route: '/(tabs)/sales-upload',
-    color: '#EF4444',
-    requiresPermission: 'viewSales',
-  },
-  {
-    title: 'Recipes',
-    icon: Utensils,
-    route: '/(tabs)/recipes',
-    color: '#EC4899',
-    requiresPermission: 'viewRecipes',
-  },
-
-  {
-    title: 'Stores',
-    icon: Warehouse,
-    route: '/(tabs)/stores',
-    color: '#0EA5E9',
-    requiresPermission: 'viewRecipes',
-  },
-  {
-    title: 'Suppliers',
-    icon: UserCheck,
-    route: '/(tabs)/suppliers',
-    color: '#F59E0B',
-    requiresPermission: 'viewRecipes',
-  },
-  {
-    title: 'GRN',
-    icon: ClipboardList,
-    route: '/(tabs)/grn',
-    color: '#10B981',
-    requiresPermission: 'viewRecipes',
+    cards: [
+      {
+        title: 'Customers',
+        icon: Users,
+        route: '/(tabs)/customers',
+        color: '#F59E0B',
+      },
+      {
+        title: 'Orders',
+        icon: ShoppingBag,
+        route: '/(tabs)/orders',
+        color: '#F97316',
+      },
+      {
+        title: 'Rewards',
+        icon: Gift,
+        route: '/discounts-vouchers',
+        color: '#7C3AED',
+        requiresRole: 'adminOrSuper',
+      },
+      {
+        title: 'Campaigns',
+        icon: Mail,
+        route: '/campaigns',
+        color: '#0EA5E9',
+        requiresRole: 'adminOrSuper',
+      },
+      {
+        title: 'Feedback',
+        icon: BarChart3,
+        route: '/feedback-dashboard',
+        color: '#0F766E',
+        requiresRole: 'superAdmin',
+      },
+    ],
   },
   {
     title: 'Inventory',
-    icon: Package,
-    route: '/(tabs)/inventory',
-    color: '#14B8A6',
-    requiresPermission: 'viewRecipes',
+    cards: [
+      {
+        title: 'Stores',
+        icon: Warehouse,
+        route: '/(tabs)/stores',
+        color: '#0EA5E9',
+        requiresPermission: 'viewRecipes',
+      },
+      {
+        title: 'Recipes',
+        icon: Utensils,
+        route: '/(tabs)/recipes',
+        color: '#EC4899',
+        requiresPermission: 'viewRecipes',
+      },
+      {
+        title: 'GRN',
+        icon: ClipboardList,
+        route: '/(tabs)/grn',
+        color: '#10B981',
+        requiresPermission: 'viewRecipes',
+      },
+      {
+        title: 'Suppliers',
+        icon: UserCheck,
+        route: '/(tabs)/suppliers',
+        color: '#F59E0B',
+        requiresPermission: 'viewRecipes',
+      },
+    ],
   },
   {
-    title: 'Live Inventory',
-    icon: TrendingUp,
-    route: '/(tabs)/live-inventory',
-    color: '#06B6D4',
-    requiresPermission: 'viewRecipes',
+    title: 'HR',
+    cards: [
+      {
+        title: 'Leave',
+        icon: CalendarDays,
+        route: '/leave',
+        color: '#0891B2',
+      },
+      {
+        title: 'Staff HR',
+        icon: BadgeDollarSign,
+        route: '/hr',
+        color: '#0F766E',
+        requiresRole: 'adminOrSuper',
+      },
+    ],
   },
   {
-    title: 'Reports',
-    icon: BarChart3,
-    route: '/(tabs)/reports',
-    color: '#8B5CF6',
-    requiresPermission: 'viewSales',
-  },
-  {
-    title: 'Orders',
-    icon: ShoppingBag,
-    route: '/(tabs)/orders',
-    color: '#F97316',
-  },
-  {
-    title: 'Campaigns',
-    icon: Mail,
-    route: '/campaigns',
-    color: '#7C3AED',
-  },
-  {
-    title: 'Production',
-    icon: Factory,
-    route: '/(tabs)/production',
-    color: '#6366F1',
-    requiresPermission: 'viewRecipes',
-  },
-  {
-    title: 'Settings',
-    icon: Settings,
-    route: '/(tabs)/settings',
-    color: '#6B7280',
+    title: 'Setup',
+    cards: [
+      {
+        title: 'Activity Logs',
+        icon: FileText,
+        route: '/logs',
+        color: '#7C3AED',
+        requiresRole: 'superAdmin',
+      },
+      {
+        title: 'Settings',
+        icon: Settings,
+        route: '/(tabs)/settings',
+        color: '#6B7280',
+      },
+    ],
   },
 ];
-
-const leaveCard: NavCard = {
-  title: 'Leave',
-  icon: CalendarDays,
-  route: '/leave',
-  color: '#0891B2',
-};
 
 function NavigationCard({ card, onPress, unreadCount }: { card: NavCard; onPress: () => void; unreadCount?: number }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -272,51 +342,26 @@ export default function HomeScreen() {
     }
   };
 
-
-
-  const visibleCards = navCards.filter(card => {
-    if (!card.requiresPermission) return true;
-    return hasPermission(currentUser?.role, card.requiresPermission);
-  });
-
-  const settingsIndex = visibleCards.findIndex(card => card.route === '/(tabs)/settings');
-  let allCards: NavCard[] = isSuperAdmin && settingsIndex >= 0 
-    ? [
-        ...visibleCards.slice(0, settingsIndex),
-        {
-          title: 'Feedback',
-          icon: BarChart3,
-          route: '/feedback-dashboard',
-          color: '#0F766E',
-        },
-        {
-          title: 'Activity Logs',
-          icon: FileText,
-          route: '/logs',
-          color: '#7C3AED',
-        },
-        ...visibleCards.slice(settingsIndex)
-      ]
-    : visibleCards;
-
-  if (currentUser?.role === 'admin' || isSuperAdmin) {
-    const settingsInsertIndex = allCards.findIndex(card => card.route === '/(tabs)/settings');
-    const hrCard: NavCard = {
-      title: 'Staff HR',
-      icon: BadgeDollarSign,
-      route: '/hr',
-      color: '#0F766E',
-    };
-    if (!allCards.some(card => card.route === '/hr')) {
-      if (settingsInsertIndex >= 0) {
-        allCards = [...allCards.slice(0, settingsInsertIndex), hrCard, ...allCards.slice(settingsInsertIndex)];
-      } else {
-        allCards = [...allCards, hrCard];
-      }
-    }
-  }
-
-  allCards = [leaveCard, ...allCards];
+  const visibleSections = useMemo(() => {
+    const role = currentUser?.role;
+    return homeSections
+      .map(section => ({
+        ...section,
+        cards: section.cards.filter(card => {
+          if (card.requiresPermission && !hasPermission(role, card.requiresPermission)) {
+            return false;
+          }
+          if (card.requiresRole === 'superAdmin' && !isSuperAdmin) {
+            return false;
+          }
+          if (card.requiresRole === 'adminOrSuper' && role !== 'admin' && !isSuperAdmin) {
+            return false;
+          }
+          return true;
+        }),
+      }))
+      .filter(section => section.cards.length > 0);
+  }, [currentUser?.role, isSuperAdmin]);
 
   return (
     <>
@@ -338,15 +383,24 @@ export default function HomeScreen() {
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.grid}>
-              {allCards.map((card, index) => (
-                <NavigationCard
-                  key={index}
-                  card={card}
-                  onPress={() => handleNavigate(card.route)}
-                />
-              ))}
-            </View>
+            {visibleSections.map(section => (
+              <View key={section.title} style={styles.section}>
+                <View style={styles.sectionBox}>
+                  <View style={styles.sectionTitlePill}>
+                    <Text style={styles.sectionTitle}>{section.title}</Text>
+                  </View>
+                  <View style={styles.grid}>
+                    {section.cards.map(card => (
+                      <NavigationCard
+                        key={`${section.title}-${card.route}`}
+                        card={card}
+                        onPress={() => handleNavigate(card.route)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              </View>
+            ))}
           </ScrollView>
 
           <View style={styles.footer}>
@@ -402,6 +456,42 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionBox: {
+    borderWidth: 1,
+    borderColor: '#D6E4EC',
+    borderRadius: 18,
+    backgroundColor: '#F4EBC8',
+    paddingTop: 20,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    position: 'relative' as const,
+    shadowColor: '#D9EAF2',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  sectionTitlePill: {
+    position: 'absolute' as const,
+    top: -12,
+    left: '50%' as const,
+    transform: [{ translateX: -50 }],
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: '#D6E4EC',
+    zIndex: 1,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: '#334155',
   },
   grid: {
     flexDirection: 'row' as const,
