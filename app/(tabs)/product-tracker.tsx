@@ -689,17 +689,30 @@ export default function ProductTrackerScreen() {
 
             <View style={styles.searchRow}>
               <Search size={16} color={Colors.light.muted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search raw material..."
-                placeholderTextColor={Colors.light.muted}
-                value={searchInput}
-                onChangeText={setSearchInput}
-                autoCorrect={false}
-                autoCapitalize="none"
-                blurOnSubmit={false}
-                returnKeyType="search"
-              />
+              {Platform.OS === 'web' ? (
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e: any) => setSearchInput(String(e?.target?.value || ''))}
+                  placeholder="Search raw material..."
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={styles.webSearchInput as any}
+                />
+              ) : (
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search raw material..."
+                  placeholderTextColor={Colors.light.muted}
+                  value={searchInput}
+                  onChangeText={setSearchInput}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  blurOnSubmit={false}
+                  returnKeyType="search"
+                />
+              )}
             </View>
 
             <TouchableOpacity
@@ -1035,6 +1048,17 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     fontSize: 14,
     paddingVertical: 10,
+  },
+  webSearchInput: {
+    flex: 1,
+    border: 'none',
+    outlineStyle: 'none',
+    backgroundColor: 'transparent',
+    color: Colors.light.text,
+    fontSize: 14,
+    minWidth: 0,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   refreshButton: {
     flexDirection: 'row',
