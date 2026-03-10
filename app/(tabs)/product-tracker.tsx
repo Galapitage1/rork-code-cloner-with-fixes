@@ -81,7 +81,8 @@ export default function ProductTrackerScreen() {
   const [showStartPicker, setShowStartPicker] = useState<boolean>(false);
   const [showEndPicker, setShowEndPicker] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [search, setSearch] = useState<string>('');
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [kitchenReports, setKitchenReports] = useState<KitchenStockReport[]>([]);
   const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
   const [isReconciliationLoading, setIsReconciliationLoading] = useState<boolean>(true);
@@ -132,6 +133,13 @@ export default function ProductTrackerScreen() {
   useEffect(() => {
     void loadReconciliationReports();
   }, [loadReconciliationReports]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(searchInput);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -290,7 +298,20 @@ export default function ProductTrackerScreen() {
     });
 
     // Raw issued to production (approved productions in selected range)
+    // Deduplicate repeated approvals by requestId and keep the latest.
+    const latestApprovalByRequest = new Map<string, typeof approvedProductions[number]>();
     approvedProductions.forEach((approval) => {
+      if ((approval as any).deleted) return;
+      const key = approval.requestId || approval.id;
+      const existing = latestApprovalByRequest.get(key);
+      const approvalTime = approval.updatedAt || approval.approvedAt || approval.createdAt || 0;
+      const existingTime = existing ? (existing.updatedAt || existing.approvedAt || existing.createdAt || 0) : 0;
+      if (!existing || approvalTime >= existingTime) {
+        latestApprovalByRequest.set(key, approval);
+      }
+    });
+
+    latestApprovalByRequest.forEach((approval) => {
       if ((approval as any).deleted) return;
       const approvalDate = approval.approvalDate || approval.date;
       if (!isIsoDateInRange(approvalDate, startIso, endIso)) return;
@@ -480,8 +501,8 @@ export default function ProductTrackerScreen() {
           row.issuedToProduction !== 0 ||
           row.soldByRecipes !== 0;
         if (!hasAnyData) return false;
-        if (!search.trim()) return true;
-        return row.rawProductName.toLowerCase().includes(search.trim().toLowerCase());
+        if (!searchQuery.trim()) return true;
+        return row.rawProductName.toLowerCase().includes(searchQuery.trim().toLowerCase());
       })
       .sort((a, b) => {
         const absDiff = Math.abs(b.discrepancy) - Math.abs(a.discrepancy);
@@ -534,7 +555,7 @@ export default function ProductTrackerScreen() {
     salesReports,
     recipes,
     selectedOutlet,
-    search,
+    searchQuery,
   ]);
 
   return (
@@ -543,6 +564,7 @@ export default function ProductTrackerScreen() {
       <View style={styles.container}>
         <ScrollView
           style={styles.content}
+          keyboardShouldPersistTaps="handled"
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
         >
           <View style={styles.filtersContainer}>
@@ -668,8 +690,8 @@ export default function ProductTrackerScreen() {
                 style={styles.searchInput}
                 placeholder="Search raw material..."
                 placeholderTextColor={Colors.light.muted}
-                value={search}
-                onChangeText={setSearch}
+                value={searchInput}
+                onChangeText={setSearchInput}
               />
             </View>
 
