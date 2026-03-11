@@ -261,6 +261,60 @@ export interface CustomerOrder {
   fulfilledAt?: number;
   fulfilledBy?: string;
   notes?: string;
+  externalSource?: 'website';
+  externalSourceId?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface WebsiteOrderItem {
+  itemId?: string;
+  itemName: string;
+  itemQuantity: number;
+  variantName?: string;
+  addOnList?: string[];
+  note?: string;
+  unitPrice?: number;
+  totalPrice?: number;
+}
+
+export interface WebsiteOrder {
+  id: string;
+  transactionId: string;
+  status: string;
+  orderDate: string;
+  orderTime: string;
+  requestedDateTime?: string;
+  orderReadyTime?: string;
+  collectionMethod?: string;
+  pickupMethodSubtype?: string;
+  channel?: string;
+  customerName: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  customerAddress?: string;
+  paymentStatus?: string;
+  paymentType?: string;
+  subTotalPrice?: number;
+  taxAmount?: number;
+  serviceCharge?: number;
+  deliveryCharge?: number;
+  tipAmount?: number;
+  promoAmount?: number;
+  promoCode?: string;
+  grandTotalPrice?: number;
+  additionalComments?: string;
+  items: WebsiteOrderItem[];
+  rewardItems?: WebsiteOrderItem[];
+  dynamicEntries?: Array<{ key?: string; value?: string }>;
+  taxSummary?: unknown[];
+  discounts?: unknown[];
+  flatFees?: unknown[];
+  additionalInfos?: Record<string, unknown>;
+  detail?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
   deleted?: boolean;
   deviceId?: string;
 }
@@ -566,6 +620,7 @@ export interface LeaveRequest {
   leaveTypeId: string;
   startDate: string;
   endDate: string;
+  dayPortion?: number; // 1 for full day, 0.5 for half day (single-day requests)
   reason?: string;
   status: LeaveRequestStatus;
   reviewedBy?: string;
@@ -637,6 +692,12 @@ export interface HRAttendanceSummaryRow {
   workMinutes: number;
   overtimeText: string;
   overtimeMinutes: number;
+  holidaysText?: string;
+  holidaysMinutes?: number;
+  holidayMercText?: string;
+  holidayMercMinutes?: number;
+  holidayPublicText?: string;
+  holidayPublicMinutes?: number;
   sourceSheet?: string;
 }
 
@@ -695,6 +756,103 @@ export interface HRSecuritySettings {
   id: string;
   hrModulePasswordHash: string;
   hrAuthorizerPasswordHash: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRFingerprintPortalSettings {
+  id: string;
+  portalBaseUrl: string;
+  corporateId: string;
+  userName: string;
+  password: string;
+  monthlyReportPath?: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRHolidayCalendarItem {
+  id: string;
+  name: string;
+  date: string; // YYYY-MM-DD
+  getPaid: boolean;
+  times: number;
+}
+
+export interface HRHolidayCalendarSettings {
+  id: string;
+  calendarUrl?: string;
+  holidays: HRHolidayCalendarItem[];
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRLoanRecord {
+  id: string;
+  name: string;
+  loanDate: string; // YYYY-MM-DD
+  loanAmount: number;
+  interestRate: number; // APR percent
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRServiceChargeOutletOption {
+  id: string;
+  outletName: string;
+  percentToStaff: number;
+  percentOther: number;
+}
+
+export interface HRServiceChargeSettings {
+  id: string;
+  outletOptions: HRServiceChargeOutletOption[];
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy?: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
+export interface HRServiceChargeMonthOutletRow {
+  id: string;
+  outletName: string;
+  serviceCharge: number;
+  availableToStaff: number;
+}
+
+export interface HRServiceChargeSalesCapture {
+  id: string;
+  outletName: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  updatedAt: number;
+  deleted?: boolean;
+}
+
+export interface HRServiceChargeMonthEntry {
+  id: string;
+  monthKey: string; // YYYY-MM
+  outletRows: HRServiceChargeMonthOutletRow[];
+  salesCaptures?: HRServiceChargeSalesCapture[];
+  totalAvailableToStaff: number;
   createdAt: number;
   updatedAt: number;
   createdBy: string;
