@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIn
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState, useEffect, useCallback } from 'react';
-import { Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, AlertCircle, CheckCircle, MessageSquare, CalendarDays } from 'lucide-react-native';
+import { Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, AlertCircle, CheckCircle, MessageSquare, CalendarDays, Download } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -12,6 +12,8 @@ import { useStores } from '@/contexts/StoresContext';
 import { useProduction } from '@/contexts/ProductionContext';
 
 import { syncData } from '@/utils/syncData';
+import { getSyncDiagnosticsSummary, resetSyncDiagnostics } from '@/utils/directSync';
+import type { SyncDiagnosticsSummary } from '@/utils/directSync';
 import { testServerConnection, testWriteToServer } from '@/utils/testSync';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
@@ -23,6 +25,7 @@ import { hasPermission } from '@/utils/permissions';
 import { useBackendStatus } from '@/utils/backendStatus';
 import Colors from '@/constants/colors';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { exportCriticalDataBackup, saveAutomaticCriticalDataBackup } from '@/utils/criticalDataBackup';
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 
@@ -65,6 +68,9 @@ export default function SettingsScreen() {
   const [smtpPort, setSmtpPort] = useState<string>('587');
   const [smtpUsername, setSmtpUsername] = useState<string>('');
   const [smtpPassword, setSmtpPassword] = useState<string>('');
+  const [websiteOrdersUsername, setWebsiteOrdersUsername] = useState<string>('');
+  const [websiteOrdersPassword, setWebsiteOrdersPassword] = useState<string>('');
+  const [websiteOrdersBizId, setWebsiteOrdersBizId] = useState<string>('');
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [isTestingEmail, setIsTestingEmail] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -78,6 +84,10 @@ export default function SettingsScreen() {
   const [newLeaveTypeColor, setNewLeaveTypeColor] = useState<string>('#3B82F6');
   const [dataCleanupExpanded, setDataCleanupExpanded] = useState<boolean>(false);
   const [isDeletingData, setIsDeletingData] = useState<boolean>(false);
+  const [isExportingCriticalBackup, setIsExportingCriticalBackup] = useState<boolean>(false);
+  const [syncDiagnostics, setSyncDiagnostics] = useState<SyncDiagnosticsSummary | null>(null);
+  const [isLoadingSyncDiagnostics, setIsLoadingSyncDiagnostics] = useState<boolean>(false);
+  const [isResettingSyncDiagnostics, setIsResettingSyncDiagnostics] = useState<boolean>(false);
   
   const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
   const { leaveTypes, addLeaveType, updateLeaveType, deleteLeaveType } = useLeave();
@@ -90,22 +100,26 @@ export default function SettingsScreen() {
   const backendStatus = useBackendStatus();
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  const canManageAddDeleteInSettings = isSuperAdmin;
 
   const loadCampaignSettings = useCallback(async () => {
     try {
       console.log('[SETTINGS] Loading campaign settings from local storage...');
       const settings = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
-      if (settings) {
-        const parsed = JSON.parse(settings);
-        console.log('[SETTINGS] Loaded local settings:', { hasEmail: !!parsed.emailApiKey, hasSmtp: !!parsed.smtpHost });
-        setEmailApiKey(parsed.emailApiKey || '');
-        setEmailApiProvider(parsed.emailApiProvider || 'smtp');
-        setSmsApiKey(parsed.smsApiKey || '');
-        setSmsApiUrl(parsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
-        setSmtpHost(parsed.smtpHost || '');
-        setSmtpPort(parsed.smtpPort || '587');
-        setSmtpUsername(parsed.smtpUsername || '');
-        setSmtpPassword(parsed.smtpPassword || '');
+      const localParsed = settings ? JSON.parse(settings) : null;
+      if (localParsed) {
+        console.log('[SETTINGS] Loaded local settings:', { hasEmail: !!localParsed.emailApiKey, hasSmtp: !!localParsed.smtpHost });
+        setEmailApiKey(localParsed.emailApiKey || '');
+        setEmailApiProvider(localParsed.emailApiProvider || 'smtp');
+        setSmsApiKey(localParsed.smsApiKey || '');
+        setSmsApiUrl(localParsed.smsApiUrl || 'https://app.notify.lk/api/v1/send');
+        setSmtpHost(localParsed.smtpHost || '');
+        setSmtpPort(localParsed.smtpPort || '587');
+        setSmtpUsername(localParsed.smtpUsername || '');
+        setSmtpPassword(localParsed.smtpPassword || '');
+        setWebsiteOrdersUsername(localParsed.websiteOrdersUsername || '');
+        setWebsiteOrdersPassword(localParsed.websiteOrdersPassword || '');
+        setWebsiteOrdersBizId(localParsed.websiteOrdersBizId || '');
       } else {
         console.log('[SETTINGS] No local settings found');
       }
@@ -113,9 +127,16 @@ export default function SettingsScreen() {
       if (currentUser) {
         console.log('[SETTINGS] Syncing settings from server for user:', currentUser.id);
         try {
-          const synced = await syncData<any>('campaign_settings', [], currentUser.id);
-          if (synced && synced.length > 0) {
-            const latest = synced[0];
+          const synced = await syncData<any>(
+            'campaign_settings',
+            localParsed ? [localParsed] : [],
+            currentUser.id,
+            { fetchOnly: true, includeDeleted: true, minDays: 3650 }
+          );
+          const latest = (Array.isArray(synced) ? synced : [])
+            .filter((item: any) => item && item.deleted !== true)
+            .sort((a: any, b: any) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))[0];
+          if (latest) {
             console.log('[SETTINGS] Synced settings from server:', { hasEmail: !!latest?.emailApiKey, hasSmtp: !!latest?.smtpHost });
             await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(latest));
             setEmailApiKey(latest?.emailApiKey || '');
@@ -126,6 +147,9 @@ export default function SettingsScreen() {
             setSmtpPort(latest?.smtpPort || '587');
             setSmtpUsername(latest?.smtpUsername || '');
             setSmtpPassword(latest?.smtpPassword || '');
+            setWebsiteOrdersUsername(latest?.websiteOrdersUsername || '');
+            setWebsiteOrdersPassword(latest?.websiteOrdersPassword || '');
+            setWebsiteOrdersBizId(latest?.websiteOrdersBizId || '');
           }
         } catch (syncError) {
           console.error('[SETTINGS] Failed to sync campaign settings from server:', syncError);
@@ -140,6 +164,30 @@ export default function SettingsScreen() {
     loadCampaignSettings();
   }, [loadCampaignSettings]);
 
+  const loadSyncDiagnostics = useCallback(async (silent: boolean = false) => {
+    try {
+      if (!silent) {
+        setIsLoadingSyncDiagnostics(true);
+      }
+      const summary = await getSyncDiagnosticsSummary();
+      setSyncDiagnostics(summary);
+    } catch (error) {
+      console.error('[SETTINGS] Failed to load sync diagnostics:', error);
+    } finally {
+      if (!silent) {
+        setIsLoadingSyncDiagnostics(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSyncDiagnostics();
+    const interval = setInterval(() => {
+      loadSyncDiagnostics(true).catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadSyncDiagnostics]);
+
   const saveCampaignSettings = async () => {
     try {
       setIsSavingSettings(true);
@@ -153,6 +201,9 @@ export default function SettingsScreen() {
         smtpPort,
         smtpUsername,
         smtpPassword,
+        websiteOrdersUsername,
+        websiteOrdersPassword,
+        websiteOrdersBizId,
         updatedAt: Date.now(),
         id: 'campaign_settings',
       };
@@ -161,7 +212,10 @@ export default function SettingsScreen() {
       
       if (currentUser) {
         try {
-          await syncData('campaign_settings', [settings], currentUser.id);
+          await syncData('campaign_settings', [settings], currentUser.id, {
+            pushOnly: true,
+            changedItems: [settings],
+          });
           setConnectionStatus({ type: 'success', message: 'Settings saved and synced successfully' });
         } catch (syncError) {
           console.error('Failed to sync campaign settings:', syncError);
@@ -273,6 +327,18 @@ export default function SettingsScreen() {
     return new Date(timestamp).toLocaleDateString();
   };
 
+  const formatBytes = (bytes: number) => {
+    if (!bytes || bytes <= 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const formatDiagnosticsTime = (timestamp: number | null | undefined) => {
+    if (!timestamp) return 'No sync yet';
+    return new Date(timestamp).toLocaleString();
+  };
+
   const openConfirm = (cfg: { title: string; message: string; destructive?: boolean; onConfirm: () => Promise<void> | void; testID: string }) => {
     setConfirmState(cfg);
     setConfirmVisible(true);
@@ -335,6 +401,15 @@ export default function SettingsScreen() {
   const deleteOldDataFromServer = async (daysToKeep: number) => {
     if (!currentUser) {
       throw new Error('User not logged in');
+    }
+
+    try {
+      const backup = await saveAutomaticCriticalDataBackup('before_server_cleanup');
+      console.log(
+        `[DATA CLEANUP] Backup created before server cleanup (${backup.id}) - local checks:${backup.localStockChecks}, local requests:${backup.localRequests}, approved:${backup.localApprovedRequests}, server checks:${backup.serverStockChecks}, server requests:${backup.serverRequests}`,
+      );
+    } catch (backupError) {
+      console.warn('[DATA CLEANUP] Failed to create pre-cleanup backup, continuing:', backupError);
     }
 
     const cutoffDate = Date.now() - (daysToKeep * 24 * 60 * 60 * 1000);
@@ -421,6 +496,16 @@ export default function SettingsScreen() {
         '@last_sync_salesDeductions_' + currentUser.id,
         '@last_sync_reconcileHistory_' + currentUser.id,
         '@last_sync_liveInventorySnapshots_' + currentUser.id,
+        '@last_sync_recipes_' + currentUser.id,
+        '@last_sync_linkedProducts_' + currentUser.id,
+        '@last_sync_storeProducts_' + currentUser.id,
+        '@last_sync_suppliers_' + currentUser.id,
+        '@last_sync_grns_' + currentUser.id,
+        '@last_sync_customers_' + currentUser.id,
+        '@last_sync_orders_' + currentUser.id,
+        '@last_sync_productionRequests_' + currentUser.id,
+        '@last_sync_approvedProductions_' + currentUser.id,
+        '@last_sync_users_' + currentUser.id,
       ];
       
       console.log('[SETTINGS] Clearing sync timestamps to restore full 45-day history...');
@@ -431,12 +516,12 @@ export default function SettingsScreen() {
       
       const syncOperations = [
         { fn: () => syncAll(false, true), name: 'Stock Data' },
-        { fn: () => syncUsers(undefined, false), name: 'Users' },
-        { fn: syncCustomers, name: 'Customers' },
-        { fn: syncRecipes, name: 'Recipes' },
-        { fn: syncOrders, name: 'Orders' },
-        { fn: syncStores, name: 'Stores & GRN' },
-        { fn: syncProduction, name: 'Production' },
+        { fn: () => syncUsers(undefined, false, true), name: 'Users' },
+        { fn: () => syncCustomers(false, true), name: 'Customers' },
+        { fn: () => syncRecipes(false, true), name: 'Recipes' },
+        { fn: () => syncOrders(false, true), name: 'Orders' },
+        { fn: () => syncStores(false, true), name: 'Stores & GRN' },
+        { fn: () => syncProduction(false, true), name: 'Production' },
       ];
       
       console.log('[SETTINGS] Executing', syncOperations.length, 'sync operations with 45-day restore...');
@@ -465,9 +550,26 @@ export default function SettingsScreen() {
       
       console.log('[SETTINGS] Manual sync complete - Success:', successCount, 'Failed:', failCount);
       console.log('[SETTINGS] ✓ Restored data from last 45 days from server');
+      await loadSyncDiagnostics(true);
     } catch (error) {
       console.error('[SETTINGS] Manual sync error:', error);
       Alert.alert('Sync Failed', 'Failed to sync data. Please check your internet connection and try again.');
+    }
+  };
+
+  const handleExportCriticalBackup = async () => {
+    try {
+      setIsExportingCriticalBackup(true);
+      const result = await exportCriticalDataBackup('manual_export');
+      Alert.alert(
+        'Backup Exported',
+        `File: ${result.fileName}\n\nLocal\n- Stock Checks: ${result.localStockChecks}\n- Requests: ${result.localRequests}\n- Approved Requests: ${result.localApprovedRequests}\n\nServer\n- Stock Checks: ${result.serverStockChecks}\n- Requests: ${result.serverRequests}`,
+      );
+    } catch (error) {
+      console.error('[SETTINGS] Failed to export critical backup:', error);
+      Alert.alert('Backup Failed', error instanceof Error ? error.message : 'Failed to export backup.');
+    } finally {
+      setIsExportingCriticalBackup(false);
     }
   };
 
@@ -506,6 +608,109 @@ export default function SettingsScreen() {
               ? 'Auto-sync is paused. Manual sync is still available. Resume to enable automatic syncing every 1 minute.'
               : 'Your products, outlets, users, customers, and recipes automatically sync every 1 minute across all your devices.'}
           </Text>
+        </View>
+
+        <View style={[styles.statsCard, { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' }]}>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Data Saver Sync</Text>
+            {isLoadingSyncDiagnostics ? (
+              <ActivityIndicator size="small" color={Colors.light.tint} />
+            ) : (
+              <Text style={styles.statValue}>{formatDiagnosticsTime(syncDiagnostics?.lastEvent?.timestamp)}</Text>
+            )}
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Uploaded (This Device, All-Time)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.totals.uploadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Downloaded (This Device, All-Time)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.totals.downloadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Uploaded (This Device, Last 24h)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.last24h.uploadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Downloaded (This Device, Last 24h)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.last24h.downloadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Uploaded (This Device, Current Session)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.currentSession.uploadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Downloaded (This Device, Current Session)</Text>
+            <Text style={styles.statValue}>{formatBytes(syncDiagnostics?.currentSession.downloadBytes || 0)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Ops (Success / Failed)</Text>
+            <Text style={styles.statValue}>
+              {(syncDiagnostics?.totals.successfulOps || 0)} / {(syncDiagnostics?.totals.failedOps || 0)}
+            </Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Delta Ops (24h)</Text>
+            <Text style={styles.statValue}>
+              {(syncDiagnostics?.last24hOperationCounts.pushDelta || 0)}↑ / {(syncDiagnostics?.last24hOperationCounts.pullDelta || 0)}↓
+            </Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Full Ops (24h)</Text>
+            <Text style={styles.statValue}>
+              {(syncDiagnostics?.last24hOperationCounts.pushFull || 0)}↑ / {(syncDiagnostics?.last24hOperationCounts.pullFull || 0)}↓
+            </Text>
+          </View>
+          <View style={styles.syncInfoCard}>
+            <Text style={[styles.syncInfoText, { textAlign: 'left' }]}>
+              This meter is per-device only. Download can increase when this device pulls server changes made on other devices.
+            </Text>
+          </View>
+          <View style={styles.inlineActions}>
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton, styles.inlineButton]}
+              onPress={() => loadSyncDiagnostics()}
+              disabled={isLoadingSyncDiagnostics}
+            >
+              {isLoadingSyncDiagnostics ? (
+                <ActivityIndicator color={Colors.light.tint} />
+              ) : (
+                <>
+                  <RefreshCw size={16} color={Colors.light.tint} />
+                  <Text style={[styles.buttonText, styles.secondaryButtonText]}>Refresh Usage</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton, styles.inlineButton]}
+              onPress={() => {
+                openConfirm({
+                  title: 'Reset Data Usage',
+                  message: 'This clears Data Saver Sync diagnostics counters on this device. Continue?',
+                  testID: 'confirm-reset-sync-diagnostics',
+                  onConfirm: async () => {
+                    try {
+                      setIsResettingSyncDiagnostics(true);
+                      await resetSyncDiagnostics();
+                      await loadSyncDiagnostics();
+                    } finally {
+                      setIsResettingSyncDiagnostics(false);
+                    }
+                  },
+                });
+              }}
+              disabled={isResettingSyncDiagnostics}
+            >
+              {isResettingSyncDiagnostics ? (
+                <ActivityIndicator color={Colors.light.tint} />
+              ) : (
+                <>
+                  <Trash2 size={16} color={Colors.light.tint} />
+                  <Text style={[styles.buttonText, styles.secondaryButtonText]}>Reset Usage</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         <TouchableOpacity
@@ -634,11 +839,32 @@ export default function SettingsScreen() {
                 </Text>
               </View>
 
-              <View style={[styles.syncInfoCard, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
-                <Text style={[styles.syncInfoText, { color: '#92400E' }]}>⚠️ Only manually deleted data can be removed from the server. Data is NEVER automatically deleted.</Text>
-              </View>
+	              <View style={[styles.syncInfoCard, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+	                <Text style={[styles.syncInfoText, { color: '#92400E' }]}>⚠️ Only manually deleted data can be removed from the server. Data is NEVER automatically deleted.</Text>
+	              </View>
 
-              <Text style={styles.sectionSubtitle}>Keep Data From Last:</Text>
+	              <View style={[styles.syncInfoCard, { backgroundColor: '#ECFDF5', borderColor: '#10B981' }]}>
+	                <Text style={[styles.syncInfoText, { color: '#065F46' }]}>
+	                  Stock checks and requests are automatically backed up before cleanup. You can also download a full backup JSON at any time.
+	                </Text>
+	              </View>
+
+	              <TouchableOpacity
+	                style={[styles.button, styles.primaryButton]}
+	                onPress={handleExportCriticalBackup}
+	                disabled={isExportingCriticalBackup}
+	              >
+	                {isExportingCriticalBackup ? (
+	                  <ActivityIndicator color={Colors.light.card} />
+	                ) : (
+	                  <>
+	                    <Download size={20} color={Colors.light.card} />
+	                    <Text style={styles.buttonText}>Download Stock Backup</Text>
+	                  </>
+	                )}
+	              </TouchableOpacity>
+
+	              <Text style={styles.sectionSubtitle}>Keep Data From Last:</Text>
 
               <TouchableOpacity
                 style={[styles.button, styles.primaryButton]}
@@ -914,33 +1140,35 @@ export default function SettingsScreen() {
                       >
                         <Edit2 size={20} color={Colors.light.tint} />
                       </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => {
-                          openConfirm({
-                            title: 'Delete User',
-                            message: `Are you sure you want to delete ${user.username}?`,
-                            destructive: true,
-                            testID: 'confirm-delete-user',
-                            onConfirm: async () => {
-                              try {
-                                await deleteUser(user.id);
-                                await deleteUserData(user.id);
-                                Alert.alert('Success', 'User deleted successfully');
-                              } catch {
-                                Alert.alert('Error', 'Failed to delete user');
-                              }
-                            },
-                          });
-                        }}
-                      >
-                        <Trash2 size={20} color={Colors.light.danger} />
-                      </TouchableOpacity>
+                      {canManageAddDeleteInSettings && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            openConfirm({
+                              title: 'Delete User',
+                              message: `Are you sure you want to delete ${user.username}?`,
+                              destructive: true,
+                              testID: 'confirm-delete-user',
+                              onConfirm: async () => {
+                                try {
+                                  await deleteUser(user.id);
+                                  await deleteUserData(user.id);
+                                  Alert.alert('Success', 'User deleted successfully');
+                                } catch {
+                                  Alert.alert('Error', 'Failed to delete user');
+                                }
+                              },
+                            });
+                          }}
+                        >
+                          <Trash2 size={20} color={Colors.light.danger} />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   )}
                 </View>
               ))}
 
-              {hasPermission(currentUser?.role, 'manageUsers') && (
+              {canManageAddDeleteInSettings && (
                 <TouchableOpacity
                   style={[styles.button, styles.primaryButton]}
                   onPress={() => {
@@ -1006,32 +1234,34 @@ export default function SettingsScreen() {
                       >
                         <Edit2 size={20} color={Colors.light.tint} />
                       </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => {
-                          openConfirm({
-                            title: 'Delete Outlet',
-                            message: `Are you sure you want to delete ${outlet.name}?`,
-                            destructive: true,
-                            testID: 'confirm-delete-outlet',
-                            onConfirm: async () => {
-                              try {
-                                await deleteOutlet(outlet.id);
-                                Alert.alert('Success', 'Outlet deleted successfully');
-                              } catch {
-                                Alert.alert('Error', 'Failed to delete outlet');
-                              }
-                            },
-                          });
-                        }}
-                      >
-                        <Trash2 size={20} color={Colors.light.danger} />
-                      </TouchableOpacity>
+                      {canManageAddDeleteInSettings && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            openConfirm({
+                              title: 'Delete Outlet',
+                              message: `Are you sure you want to delete ${outlet.name}?`,
+                              destructive: true,
+                              testID: 'confirm-delete-outlet',
+                              onConfirm: async () => {
+                                try {
+                                  await deleteOutlet(outlet.id);
+                                  Alert.alert('Success', 'Outlet deleted successfully');
+                                } catch {
+                                  Alert.alert('Error', 'Failed to delete outlet');
+                                }
+                              },
+                            });
+                          }}
+                        >
+                          <Trash2 size={20} color={Colors.light.danger} />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   )}
                 </View>
               ))}
 
-              {hasPermission(currentUser?.role, 'manageOutlets') && (
+              {canManageAddDeleteInSettings && (
                 <TouchableOpacity
                   style={[styles.button, styles.primaryButton]}
                   onPress={() => {
@@ -1333,6 +1563,51 @@ export default function SettingsScreen() {
                 </Text>
               </View>
 
+              <Text style={styles.sectionSubtitle}>Website Orders Connection</Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Appigo Username</Text>
+                <TextInput
+                  style={styles.input}
+                  value={websiteOrdersUsername}
+                  onChangeText={setWebsiteOrdersUsername}
+                  placeholder="Orders@tecclk.com"
+                  placeholderTextColor={Colors.light.muted}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Appigo Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={websiteOrdersPassword}
+                  onChangeText={setWebsiteOrdersPassword}
+                  placeholder="Enter Appigo password"
+                  placeholderTextColor={Colors.light.muted}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Business ID (bizId)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={websiteOrdersBizId}
+                  onChangeText={setWebsiteOrdersBizId}
+                  placeholder="BIZ_..."
+                  placeholderTextColor={Colors.light.muted}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>
+                  Orders tab will use these saved credentials to pull website orders from the last 7 days to next 7 days.
+                </Text>
+              </View>
+
               <View style={{ flexDirection: 'row', gap: 12 }}>
                 <TouchableOpacity
                   style={[styles.button, styles.primaryButton, { flex: 1 }]}
@@ -1426,13 +1701,15 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>App Settings</Text>
         </View>
 
-        <TouchableOpacity
-          style={[styles.button, styles.secondaryButton]}
-          onPress={() => router.push('/products' as any)}
-        >
-          <Package size={20} color={Colors.light.tint} />
-          <Text style={[styles.buttonText, styles.secondaryButtonText]}>Products</Text>
-        </TouchableOpacity>
+        {isSuperAdmin && (
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
+            onPress={() => router.push('/products' as any)}
+          >
+            <Package size={20} color={Colors.light.tint} />
+            <Text style={[styles.buttonText, styles.secondaryButtonText]}>Products</Text>
+          </TouchableOpacity>
+        )}
 
         <View style={styles.syncInfoCard}>
           <View style={styles.toggleRow}>
@@ -1930,6 +2207,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 12,
     marginBottom: 12,
+  },
+  inlineActions: {
+    flexDirection: 'row' as const,
+    gap: 8,
+  },
+  inlineButton: {
+    flex: 1,
+    marginBottom: 0,
+    paddingVertical: 12,
   },
   primaryButton: {
     backgroundColor: Colors.light.tint,

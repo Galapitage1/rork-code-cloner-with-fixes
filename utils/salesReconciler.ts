@@ -35,6 +35,8 @@ export type SalesReconcileResult = {
   stockCheckDate: string | null;
   sheetDate: string | null;
   dateMatched: boolean;
+  serviceChargeAmount: number | null;
+  serviceChargeRowIndex: number | null;
   rows: ReconciledRow[];
   errors: string[];
 };
@@ -68,7 +70,9 @@ function getCellDate(worksheet: XLSX.WorkSheet, addr: string): string | null {
 function getCellNumber(worksheet: XLSX.WorkSheet, addr: string): number | null {
   const c = worksheet[addr];
   if (!c) return null;
-  const n = typeof c.v === 'number' ? c.v : Number(c.v);
+  const n = typeof c.v === 'number'
+    ? c.v
+    : Number(String(c.v).replace(/,/g, '').trim());
   return Number.isFinite(n) ? n : null;
 }
 
@@ -91,6 +95,8 @@ export async function reconcileSalesFromExcelBase64(
         stockCheckDate: null,
         sheetDate: null,
         dateMatched: false,
+        serviceChargeAmount: null,
+        serviceChargeRowIndex: null,
         rows: [],
         errors: ['Workbook contains no sheets'],
       };
@@ -149,6 +155,30 @@ export async function reconcileSalesFromExcelBase64(
     console.log('Example: 2025-11-10 means November 10, 2025');
     console.log('==========================================');
 
+    const normalizeServiceChargeLabel = (value: string | null): string =>
+      String(value || '')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, ' ');
+
+    let serviceChargeAmount: number | null = null;
+    let serviceChargeRowIndex: number | null = null;
+    try {
+      const searchRange = XLSX.utils.decode_range(ws['!ref'] || 'A1:AG2000');
+      for (let rowIdx = searchRange.s.r + 1; rowIdx <= searchRange.e.r + 1; rowIdx += 1) {
+        const label = normalizeServiceChargeLabel(getCellString(ws, `Y${rowIdx}`));
+        if (label === 'SERVICE CHARGE' || label.includes('SERVICE CHARGE')) {
+          const amount = getCellNumber(ws, `AG${rowIdx}`);
+          serviceChargeAmount = amount !== null ? Number(amount.toFixed(2)) : null;
+          serviceChargeRowIndex = rowIdx;
+          console.log(`Sales reconciliation: Service charge row found at Y${rowIdx}/AG${rowIdx}, amount=${serviceChargeAmount}`);
+          break;
+        }
+      }
+    } catch (serviceChargeParseError) {
+      console.warn('Sales reconciliation: Failed to parse service charge from Y/AG columns:', serviceChargeParseError);
+    }
+
     let matchedOutletName: string | null = null;
     let matchedCheck: StockCheck | undefined;
 
@@ -203,6 +233,8 @@ export async function reconcileSalesFromExcelBase64(
         stockCheckDate: matchedCheck?.date ?? null,
         sheetDate: sheetDate ?? null,
         dateMatched: false,
+        serviceChargeAmount,
+        serviceChargeRowIndex,
         rows: [],
         errors: [
           ...errors,
@@ -465,6 +497,8 @@ export async function reconcileSalesFromExcelBase64(
       stockCheckDate: matchedCheck?.date ?? null,
       sheetDate: sheetDate ?? null,
       dateMatched: finalDateMatched,
+      serviceChargeAmount,
+      serviceChargeRowIndex,
       rows,
       errors,
     };
@@ -477,6 +511,8 @@ export async function reconcileSalesFromExcelBase64(
       stockCheckDate: null,
       sheetDate: null,
       dateMatched: false,
+      serviceChargeAmount: null,
+      serviceChargeRowIndex: null,
       rows: [],
       errors: [`Failed to parse sales workbook: ${msg}`],
     };
@@ -596,6 +632,7 @@ export function exportSalesDiscrepanciesToExcel(
     { Field: 'Sales Date (from Excel H9)', Value: result.sheetDate ?? '' },
     { Field: 'Stock Check Date Used', Value: result.stockCheckDate ?? '' },
     { Field: 'Outlet (from Excel J5)', Value: result.outletFromSheet ?? '' },
+    { Field: 'Service Charge (Y/AG)', Value: result.serviceChargeAmount ?? '' },
     { Field: 'Date Matched', Value: result.dateMatched ? `Yes - Date Reconsolidated: ${reconciliationTimestamp}` : 'No' },
     { Field: 'Formula', Value: 'Discrepancy = Opening + Received - Sales - Closing - Wastage' },
     { Field: 'Note', Value: 'Opening, Received, Wastage, and Closing are ACTUAL values from the Stock Check' },
@@ -905,6 +942,66 @@ function parseKitchenRowsFromDiscrepanciesSheet(ws: XLSX.WorkSheet): ParsedKitch
 
   if (!rows.length) return parsed;
 
+  const seen = new Set<string>();
+  const pushParsedRow = (
+    rowIndex: number,
+    productName: string,
+    unit: string,
+    kitchenProduction: number | null,
+    openingStockFromSheet?: number,
+    receivedInStockCheckFromSheet?: number,
+  ) => {
+    const normalizedProduct = productName.trim();
+    const normalizedUnit = unit.trim();
+    if (!normalizedProduct || kitchenProduction == null) return;
+    if (/^(total|sub\s*total|grand\s*total)$/i.test(normalizedProduct)) return;
+
+    const dedupeKey = `${rowIndex}__${normalizedProduct.toLowerCase()}__${normalizedUnit.toLowerCase()}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
+    parsed.push({
+      productName: normalizedProduct,
+      unit: normalizedUnit,
+      kitchenProduction,
+      openingStockFromSheet,
+      receivedInStockCheckFromSheet,
+    });
+  };
+
+  const parseRowsWithColumns = (
+    startRow: number,
+    idxProduct: number,
+    idxUnit: number,
+    idxKitchen: number,
+    idxOpening: number,
+    idxReceived: number,
+  ) => {
+    if (idxProduct < 0 || idxKitchen < 0) return;
+    let consecutiveEmptyRows = 0;
+
+    for (let i = startRow; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const productName = String(row[idxProduct] ?? '').trim();
+      const unit = idxUnit >= 0 ? String(row[idxUnit] ?? '').trim() : '';
+      const kitchenProduction = parseNumberFromValue(row[idxKitchen]);
+
+      const isEmpty = !productName && kitchenProduction == null;
+      if (isEmpty) {
+        consecutiveEmptyRows++;
+        if (consecutiveEmptyRows >= 10) break;
+        continue;
+      }
+      consecutiveEmptyRows = 0;
+
+      if (!productName || kitchenProduction == null) continue;
+
+      const openingStockFromSheet = idxOpening >= 0 ? parseNumberFromValue(row[idxOpening]) ?? undefined : undefined;
+      const receivedInStockCheckFromSheet = idxReceived >= 0 ? parseNumberFromValue(row[idxReceived]) ?? undefined : undefined;
+      pushParsedRow(i, productName, unit, kitchenProduction, openingStockFromSheet, receivedInStockCheckFromSheet);
+    }
+  };
+
   let headerIndex = -1;
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const header = (rows[i] || []).map((h) => String(h ?? '').toLowerCase().trim());
@@ -917,48 +1014,31 @@ function parseKitchenRowsFromDiscrepanciesSheet(ws: XLSX.WorkSheet): ParsedKitch
     }
   }
 
-  if (headerIndex === -1) return parsed;
+  if (headerIndex !== -1) {
+    const header = (rows[headerIndex] || []).map((h) => String(h ?? '').toLowerCase().trim());
+    let idxProduct = header.findIndex((h) => h.includes('product'));
+    let idxUnit = header.findIndex((h) => h.includes('unit'));
+    const idxOpening = header.findIndex((h) => h.includes('opening'));
+    const idxReceived = header.findIndex((h) => h.includes('received'));
+    let idxKitchen = header.findIndex((h) => h.includes('kitchen') && h.includes('production'));
+    if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('kitchen'));
+    if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('production'));
 
-  const header = (rows[headerIndex] || []).map((h) => String(h ?? '').toLowerCase().trim());
-  const idxProduct = header.findIndex((h) => h.includes('product'));
-  const idxUnit = header.findIndex((h) => h.includes('unit'));
-  const idxOpening = header.findIndex((h) => h.includes('opening'));
-  const idxReceived = header.findIndex((h) => h.includes('received'));
-  let idxKitchen = header.findIndex((h) => h.includes('kitchen') && h.includes('production'));
-  if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('kitchen'));
-  if (idxKitchen === -1) idxKitchen = header.findIndex((h) => h.includes('production'));
-  // Last fallback for known "Discrepancies" export layout: column E.
-  if (idxKitchen === -1 && header.length >= 5) idxKitchen = 4;
+    // Known worksheet layout fallbacks: Product in Column C and Kitchen Production in Column E.
+    if (idxProduct === -1) idxProduct = 2;
+    if (idxUnit === -1) idxUnit = 3;
+    if (idxKitchen === -1 && header.length >= 5) idxKitchen = 4;
 
-  if (idxProduct === -1 || idxUnit === -1 || idxKitchen === -1) return parsed;
+    parseRowsWithColumns(headerIndex + 1, idxProduct, idxUnit, idxKitchen, idxOpening, idxReceived);
+  }
 
-  let consecutiveEmptyRows = 0;
-  for (let i = headerIndex + 1; i < rows.length; i++) {
-    const row = rows[i] || [];
-    const productName = String(row[idxProduct] ?? '').trim();
-    const unit = String(row[idxUnit] ?? '').trim();
-    const kitchenProduction = parseNumberFromValue(row[idxKitchen]);
-
-    const isEmpty = !productName && !unit && kitchenProduction == null;
-    if (isEmpty) {
-      consecutiveEmptyRows++;
-      if (consecutiveEmptyRows >= 10) break;
-      continue;
-    }
-    consecutiveEmptyRows = 0;
-
-    if (!productName || !unit || kitchenProduction == null) continue;
-
-    const openingStockFromSheet = idxOpening !== -1 ? parseNumberFromValue(row[idxOpening]) ?? undefined : undefined;
-    const receivedInStockCheckFromSheet = idxReceived !== -1 ? parseNumberFromValue(row[idxReceived]) ?? undefined : undefined;
-
-    parsed.push({
-      productName,
-      unit,
-      kitchenProduction,
-      openingStockFromSheet,
-      receivedInStockCheckFromSheet,
-    });
+  // Positional fallback for outlet exports where product list is strictly in Column C and kitchen production in Column E.
+  if (parsed.length === 0) {
+    parseRowsWithColumns(0, 2, 3, 4, 0, 1);
+  }
+  if (parsed.length === 0) {
+    // Secondary fallback for files where unit is in column B instead of D.
+    parseRowsWithColumns(0, 2, 1, 4, 0, 3);
   }
 
   return parsed;
@@ -1049,10 +1129,39 @@ export function reconcileKitchenStockFromExcelBase64(
     console.log(`Kitchen reconciliation: Using outlet name from matched stock check: "${outletName}" (Excel had: "${outletNameFromExcel}")`);
 
     const productMap = new Map<string, Product>();
+    const productMapByName = new Map<string, Product[]>();
     products.forEach((p) => {
       const key = `${p.name.toLowerCase()}__${p.unit.toLowerCase()}`;
       if (!productMap.has(key)) productMap.set(key, p);
+      const nameKey = p.name.toLowerCase();
+      const existingByName = productMapByName.get(nameKey);
+      if (existingByName) {
+        existingByName.push(p);
+      } else {
+        productMapByName.set(nameKey, [p]);
+      }
     });
+
+    const resolveKitchenRowProduct = (row: ParsedKitchenRow): Product | undefined => {
+      const normalizedName = row.productName.toLowerCase();
+      const normalizedUnit = row.unit.toLowerCase();
+      if (normalizedUnit) {
+        const exact = productMap.get(`${normalizedName}__${normalizedUnit}`);
+        if (exact) return exact;
+      }
+
+      const sameName = productMapByName.get(normalizedName) || [];
+      if (sameName.length === 0) return undefined;
+      if (sameName.length === 1) return sameName[0];
+
+      if (normalizedUnit) {
+        const byUnit = sameName.find((candidate) => candidate.unit.toLowerCase() === normalizedUnit);
+        if (byUnit) return byUnit;
+      }
+
+      // Prefer kitchen/menu products for reconciliation row mapping.
+      return sameName.find((candidate) => candidate.type === 'kitchen' || candidate.type === 'menu') || sameName[0];
+    };
 
     const openingStockMap = new Map<string, number>();
     matchedStockCheck.counts.forEach((count) => {
@@ -1127,15 +1236,16 @@ export function reconcileKitchenStockFromExcelBase64(
     }
 
     for (const row of parsedRows) {
-      const key = `${row.productName.toLowerCase()}__${row.unit.toLowerCase()}`;
-      const product = productMap.get(key);
+      const product = resolveKitchenRowProduct(row);
+      const resolvedName = product?.name || row.productName;
+      const resolvedUnit = product?.unit || row.unit || '';
 
       if (!product) {
         const openingStock = row.openingStockFromSheet ?? 0;
         const receivedInStockCheck = row.receivedInStockCheckFromSheet ?? 0;
         discrepancies.push({
-          productName: row.productName,
-          unit: row.unit,
+          productName: resolvedName,
+          unit: resolvedUnit,
           openingStock,
           receivedInStockCheck,
           kitchenProduction: row.kitchenProduction,
@@ -1153,8 +1263,8 @@ export function reconcileKitchenStockFromExcelBase64(
       const discrepancy = row.kitchenProduction - openingStock - receivedInStockCheck;
 
       discrepancies.push({
-        productName: row.productName,
-        unit: row.unit,
+        productName: resolvedName,
+        unit: resolvedUnit,
         openingStock,
         receivedInStockCheck,
         kitchenProduction: row.kitchenProduction,

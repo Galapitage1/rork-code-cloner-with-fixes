@@ -133,7 +133,9 @@ type ServerQueuedEmailJob = {
 export default function CampaignsScreen() {
   const router = useRouter();
   const { customers } = useCustomers();
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin, isSuperAdmin } = useAuth();
+  const canUseCampaigns = isAdmin || isSuperAdmin;
+  const canManageCampaignSettings = isSuperAdmin;
   const {
     settings: dialogSMSSettings,
     campaigns: smsCampaigns,
@@ -202,6 +204,9 @@ export default function CampaignsScreen() {
   const [smtpPort, setSmtpPort] = useState<string>('587');
   const [smtpUsername, setSmtpUsername] = useState<string>('');
   const [smtpPassword, setSmtpPassword] = useState<string>('');
+  const [websiteOrdersUsername, setWebsiteOrdersUsername] = useState<string>('');
+  const [websiteOrdersPassword, setWebsiteOrdersPassword] = useState<string>('');
+  const [websiteOrdersBizId, setWebsiteOrdersBizId] = useState<string>('');
   const [imapHost, setImapHost] = useState<string>('');
   const [imapPort, setImapPort] = useState<string>('993');
   const [imapUsername, setImapUsername] = useState<string>('');
@@ -281,6 +286,9 @@ export default function CampaignsScreen() {
     setSmtpPort(parsed.smtpPort || '587');
     setSmtpUsername(parsed.smtpUsername || '');
     setSmtpPassword(parsed.smtpPassword || '');
+    setWebsiteOrdersUsername(parsed.websiteOrdersUsername || '');
+    setWebsiteOrdersPassword(parsed.websiteOrdersPassword || '');
+    setWebsiteOrdersBizId(parsed.websiteOrdersBizId || '');
     setImapHost(parsed.imapHost || '');
     setImapPort(parsed.imapPort || '993');
     setImapUsername(parsed.imapUsername || '');
@@ -370,6 +378,11 @@ export default function CampaignsScreen() {
   };
 
   const saveCampaignSettings = async () => {
+    if (!canManageCampaignSettings) {
+      Alert.alert('Access Denied', 'Only super admins can view or edit campaign settings.');
+      return;
+    }
+
     try {
       console.log('[CAMPAIGNS] Saving campaign settings...');
       const settings = {
@@ -378,6 +391,9 @@ export default function CampaignsScreen() {
         smtpPort,
         smtpUsername,
         smtpPassword,
+        websiteOrdersUsername,
+        websiteOrdersPassword,
+        websiteOrdersBizId,
         imapHost,
         imapPort,
         imapUsername,
@@ -1325,6 +1341,18 @@ export default function CampaignsScreen() {
     return !!pendingEmailCampaign && pendingEmailCampaign.recipients.length > 0 && emailRemainingWaitMs <= 0;
   }, [pendingEmailCampaign, emailRemainingWaitMs]);
 
+  const emailDailyCapacityLeftNow = useMemo(() => {
+    if (!emailDailyLimitEnabled) return null;
+    const cap = getEffectiveEmailWindowMax();
+    if (!pendingEmailCampaign || pendingEmailCampaign.recipients.length === 0) {
+      return cap;
+    }
+    if (emailRemainingWaitMs > 0) {
+      return 0;
+    }
+    return Math.min(cap, pendingEmailCampaign.recipients.length);
+  }, [emailDailyLimitEnabled, pendingEmailCampaign, emailRemainingWaitMs, emailDailyLimitMax]);
+
   const toggleCustomer = (customerId: string) => {
     const newSet = new Set(selectedCustomerIds);
     if (newSet.has(customerId)) {
@@ -1372,6 +1400,11 @@ export default function CampaignsScreen() {
   };
 
   const testEmailConnection = async () => {
+    if (!canManageCampaignSettings) {
+      Alert.alert('Access Denied', 'Only super admins can view or edit campaign settings.');
+      return;
+    }
+
     try {
       setTestingEmail(true);
       console.log('[Email Test] Starting connection test...');
@@ -2951,6 +2984,22 @@ export default function CampaignsScreen() {
     );
   }
 
+  if (!canUseCampaigns) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+        <Text style={{ color: Colors.light.text, fontSize: 18, fontWeight: '700', marginBottom: 8 }}>
+          Campaign Access Restricted
+        </Text>
+        <Text style={{ color: Colors.light.muted, textAlign: 'center', marginBottom: 16 }}>
+          Campaigns are visible only for admins and super admins.
+        </Text>
+        <TouchableOpacity style={[styles.actionButton, styles.testButton]} onPress={() => router.back()}>
+          <Text style={styles.testButtonText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   console.log('[CAMPAIGNS] Render - isPageLoading:', isPageLoading, 'customers:', customers.length);
   console.log('[CAMPAIGNS] confirmVisible:', confirmVisible, 'confirmState:', !!confirmState);
   console.log('[CAMPAIGNS] SMTP configured:', { host: !!smtpHost, user: !!smtpUsername, pass: !!smtpPassword });
@@ -3032,7 +3081,7 @@ export default function CampaignsScreen() {
           <Text style={styles.advancedSettingsTriggerText}>Discounts & Vouchers</Text>
         </TouchableOpacity>
 
-        {(campaignType === 'email' || campaignType === 'sms') && (
+        {canManageCampaignSettings && (campaignType === 'email' || campaignType === 'sms') && (
           <TouchableOpacity
             style={styles.advancedSettingsTrigger}
             onPress={() => setShowAdvancedSettingsModal(true)}
@@ -3046,22 +3095,24 @@ export default function CampaignsScreen() {
 
         {campaignType === 'email' && (
           <>
-            <TouchableOpacity
-              style={styles.settingsToggle}
-              onPress={() => setShowEmailSettings(!showEmailSettings)}
-            >
-              <View style={styles.settingsToggleLeft}>
-                <Settings size={20} color={Colors.light.tint} />
-                <Text style={styles.settingsToggleText}>Email Configuration</Text>
-              </View>
-              {showEmailSettings ? (
-                <ChevronUp size={20} color={Colors.light.tint} />
-              ) : (
-                <ChevronDown size={20} color={Colors.light.tint} />
-              )}
-            </TouchableOpacity>
+            {canManageCampaignSettings && (
+              <TouchableOpacity
+                style={styles.settingsToggle}
+                onPress={() => setShowEmailSettings(!showEmailSettings)}
+              >
+                <View style={styles.settingsToggleLeft}>
+                  <Settings size={20} color={Colors.light.tint} />
+                  <Text style={styles.settingsToggleText}>Email Configuration</Text>
+                </View>
+                {showEmailSettings ? (
+                  <ChevronUp size={20} color={Colors.light.tint} />
+                ) : (
+                  <ChevronDown size={20} color={Colors.light.tint} />
+                )}
+              </TouchableOpacity>
+            )}
 
-            {showEmailSettings && (
+            {canManageCampaignSettings && showEmailSettings && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>SMTP Settings (Outgoing Mail)</Text>
                 
@@ -3207,7 +3258,9 @@ export default function CampaignsScreen() {
               )}
 
               <Text style={styles.helpText}>
-                Batch controls are in Email Advanced Settings (button above).
+                {canManageCampaignSettings
+                  ? 'Batch controls are in Email Advanced Settings (button above).'
+                  : 'Campaign settings are managed by a super admin.'}
               </Text>
 
               <Text style={styles.label}>Email Format</Text>
@@ -3270,6 +3323,9 @@ export default function CampaignsScreen() {
                   />
                   <Text style={styles.helpText}>
                     Sends up to this amount now, then queues the rest for "Send remaining" after 24 hours.
+                  </Text>
+                  <Text style={styles.helpText}>
+                    Left to send now: {emailDailyCapacityLeftNow ?? 0} / {getEffectiveEmailWindowMax()}
                   </Text>
                 </>
               )}
@@ -3591,7 +3647,9 @@ export default function CampaignsScreen() {
         {campaignType === 'sms' && (
           <>
             <Text style={styles.helpText}>
-              SMS configuration is available in the SMS Settings popup (button above).
+              {canManageCampaignSettings
+                ? 'SMS configuration is available in the SMS Settings popup (button above).'
+                : 'SMS campaign settings are managed by a super admin.'}
             </Text>
 
             <View style={styles.section}>
@@ -3701,22 +3759,24 @@ export default function CampaignsScreen() {
 
         {campaignType === 'whatsapp' && (
           <>
-            <TouchableOpacity
-              style={styles.settingsToggle}
-              onPress={() => setShowWhatsAppSettings(!showWhatsAppSettings)}
-            >
-              <View style={styles.settingsToggleLeft}>
-                <Settings size={20} color={Colors.light.tint} />
-                <Text style={styles.settingsToggleText}>WhatsApp Business API</Text>
-              </View>
-              {showWhatsAppSettings ? (
-                <ChevronUp size={20} color={Colors.light.tint} />
-              ) : (
-                <ChevronDown size={20} color={Colors.light.tint} />
-              )}
-            </TouchableOpacity>
+            {canManageCampaignSettings && (
+              <TouchableOpacity
+                style={styles.settingsToggle}
+                onPress={() => setShowWhatsAppSettings(!showWhatsAppSettings)}
+              >
+                <View style={styles.settingsToggleLeft}>
+                  <Settings size={20} color={Colors.light.tint} />
+                  <Text style={styles.settingsToggleText}>WhatsApp Business API</Text>
+                </View>
+                {showWhatsAppSettings ? (
+                  <ChevronUp size={20} color={Colors.light.tint} />
+                ) : (
+                  <ChevronDown size={20} color={Colors.light.tint} />
+                )}
+              </TouchableOpacity>
+            )}
 
-            {showWhatsAppSettings && (
+            {canManageCampaignSettings && showWhatsAppSettings && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>WhatsApp Business Configuration</Text>
                 
@@ -4514,7 +4574,7 @@ export default function CampaignsScreen() {
               disabled={!canSendEmailRemaining || isSending}
             >
               <Text style={styles.sendRemainingButtonText}>
-                Send Remaining ({Math.min(pendingEmailCampaign.maxPerWindow, pendingEmailCampaign.recipients.length)})
+                Send Balance ({Math.min(pendingEmailCampaign.maxPerWindow, pendingEmailCampaign.recipients.length)})
               </Text>
             </TouchableOpacity>
             <Text style={styles.remainingInfoText}>
@@ -4591,22 +4651,23 @@ export default function CampaignsScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      <Modal
-        visible={showAdvancedSettingsModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowAdvancedSettingsModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {campaignType === 'email' ? 'Email Advanced Settings' : 'SMS Settings'}
-              </Text>
-              <TouchableOpacity onPress={() => setShowAdvancedSettingsModal(false)}>
-                <X size={20} color={Colors.light.text} />
-              </TouchableOpacity>
-            </View>
+      {canManageCampaignSettings && (
+        <Modal
+          visible={showAdvancedSettingsModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowAdvancedSettingsModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {campaignType === 'email' ? 'Email Advanced Settings' : 'SMS Settings'}
+                </Text>
+                <TouchableOpacity onPress={() => setShowAdvancedSettingsModal(false)}>
+                  <X size={20} color={Colors.light.text} />
+                </TouchableOpacity>
+              </View>
 
             <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
               {campaignType === 'email' && (
@@ -4707,10 +4768,11 @@ export default function CampaignsScreen() {
                   </TouchableOpacity>
                 </>
               )}
-            </ScrollView>
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
 
       <ConfirmDialog
         visible={confirmVisible}
