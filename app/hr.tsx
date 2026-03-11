@@ -191,7 +191,54 @@ function parsePortalHourLikeToMinutes(value: unknown): number {
   return Math.round(numeric * 60);
 }
 
-function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
+function countPaidHolidayCategoriesForMonth(
+  monthKey: string,
+  holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null
+): { mercCount: number; publicCount: number } {
+  let mercCount = 0;
+  let publicCount = 0;
+  const holidays = holidayCalendarSettings?.holidays || [];
+  for (const holiday of holidays) {
+    if (!holiday || holiday.getPaid !== true) continue;
+    const dateIso = String(holiday.date || '').trim();
+    if (!dateIso || !dateIso.startsWith(`${monthKey}-`)) continue;
+    const times = Number(holiday.times);
+    if (!Number.isFinite(times)) continue;
+    if (Math.abs(times - 1.5) <= 0.0001) {
+      mercCount += 1;
+      continue;
+    }
+    if (Math.abs(times - 2) <= 0.0001) {
+      publicCount += 1;
+    }
+  }
+  return { mercCount, publicCount };
+}
+
+function splitHolidayMinutesByCategory(
+  totalHolidayMinutes: number,
+  mercCount: number,
+  publicCount: number
+): { holidayMercMinutes: number; holidayPublicMinutes: number } {
+  const total = Math.max(0, Math.round(totalHolidayMinutes || 0));
+  if (total <= 0) return { holidayMercMinutes: 0, holidayPublicMinutes: 0 };
+  const categoryTotal = Math.max(0, mercCount) + Math.max(0, publicCount);
+  if (categoryTotal <= 0) {
+    return { holidayMercMinutes: 0, holidayPublicMinutes: 0 };
+  }
+  const holidayMercMinutes = Math.round((total * Math.max(0, mercCount)) / categoryTotal);
+  const holidayPublicMinutes = Math.max(0, total - holidayMercMinutes);
+  return { holidayMercMinutes, holidayPublicMinutes };
+}
+
+function parsePortalMonthlySummaryWorkbook(
+  workbook: any,
+  XLSX: any,
+  options?: {
+    holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null;
+    monthKeyHint?: string;
+  }
+): {
   rows: any[];
   monthLabel?: string;
   reportStartDate?: string;
@@ -257,13 +304,19 @@ function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
     const presentIndex = findIndexByAliases(normalizedHeader, ['Present Days', 'Present']);
     const absentIndex = findIndexByAliases(normalizedHeader, ['Absent Days', 'Absent']);
     const workHoursIndex = findIndexByAliases(normalizedHeader, ['Total Work Hrs', 'HoursWorked', 'Work Hrs', 'WorkHrs']);
-    const overtimeIndex = findIndexByAliases(normalizedHeader, ['OT Hours', 'OtHrs', 'Overtime', 'OvTim']);
+    const overtimeIndex = findIndexByAliases(normalizedHeader, ['OT Hours', 'OtHrs', 'Overtime Hours', 'OvTim']);
     const leaveIndex = findIndexByAliases(normalizedHeader, ['Total Leave', 'Leave']);
     const lateIndex = findIndexByAliases(normalizedHeader, ['Late Coming Hrs', 'LateHrs', 'Late']);
     const weeklyOffIndex = findIndexByAliases(normalizedHeader, ['Weekly Off', 'Weekoff', 'WO']);
-    const holidayIndex = findIndexByAliases(normalizedHeader, ['Holiday', 'Holiday Present']);
+    const holidayIndex = findIndexByAliases(normalizedHeader, ['Holiday']);
+    const holidayPresentIndex = findIndexByAliases(normalizedHeader, ['Holiday Present']);
 
     if (empCodeIndex < 0 || nameIndex < 0 || presentIndex < 0) continue;
+    const reportRange = extractReportRange(rows);
+    const rowMonthKey = reportRange.reportStartDate?.slice(0, 7) || options?.monthKeyHint;
+    const { mercCount, publicCount } = rowMonthKey
+      ? countPaidHolidayCategoriesForMonth(rowMonthKey, options?.holidayCalendarSettings)
+      : { mercCount: 0, publicCount: 0 };
 
     const parsedRows: any[] = [];
     for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
@@ -281,8 +334,27 @@ function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
       const weeklyOffDays = parsePortalNumber(weeklyOffIndex >= 0 ? row[weeklyOffIndex] : 0);
       const lateMinutes = parsePortalHourLikeToMinutes(lateIndex >= 0 ? row[lateIndex] : '');
       const workMinutes = parsePortalHourLikeToMinutes(workHoursIndex >= 0 ? row[workHoursIndex] : '');
-      const overtimeMinutes = parsePortalHourLikeToMinutes(overtimeIndex >= 0 ? row[overtimeIndex] : '');
-      const holidaysMinutes = parsePortalHourLikeToMinutes(holidayIndex >= 0 ? row[holidayIndex] : '');
+      const rawOvertimeMinutes = parsePortalHourLikeToMinutes(overtimeIndex >= 0 ? row[overtimeIndex] : '');
+      const holidayPresentDays = parsePortalNumber(holidayPresentIndex >= 0 ? row[holidayPresentIndex] : 0);
+      const holidayDays = parsePortalNumber(holidayIndex >= 0 ? row[holidayIndex] : 0);
+      const appliedHolidayDays = holidayPresentDays > 0 ? holidayPresentDays : holidayDays;
+      const perDayWorkMinutes = presentDays > 0 && workMinutes > 0
+        ? Math.max(0, Math.round(workMinutes / presentDays))
+        : 8 * 60;
+      const estimatedHolidayMinutes = appliedHolidayDays > 0
+        ? Math.max(0, Math.round(appliedHolidayDays * perDayWorkMinutes))
+        : 0;
+      const holidaysMinutes = Math.min(
+        Math.max(0, rawOvertimeMinutes),
+        estimatedHolidayMinutes > 0 ? estimatedHolidayMinutes : 0
+      );
+
+      const { holidayMercMinutes, holidayPublicMinutes } = splitHolidayMinutesByCategory(
+        holidaysMinutes,
+        mercCount,
+        publicCount
+      );
+      const overtimeMinutes = Math.max(0, rawOvertimeMinutes - holidayMercMinutes - holidayPublicMinutes);
 
       const hasSignals =
         presentDays > 0 ||
@@ -291,7 +363,7 @@ function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
         weeklyOffDays > 0 ||
         lateMinutes > 0 ||
         workMinutes > 0 ||
-        overtimeMinutes > 0 ||
+        rawOvertimeMinutes > 0 ||
         holidaysMinutes > 0;
       if (!hasSignals) continue;
 
@@ -312,16 +384,15 @@ function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
         overtimeMinutes,
         holidaysText: holidaysMinutes > 0 ? minutesToText(holidaysMinutes) : '',
         holidaysMinutes,
-        holidayMercText: '',
-        holidayMercMinutes: 0,
-        holidayPublicText: '',
-        holidayPublicMinutes: 0,
+        holidayMercText: holidayMercMinutes > 0 ? minutesToText(holidayMercMinutes) : '',
+        holidayMercMinutes,
+        holidayPublicText: holidayPublicMinutes > 0 ? minutesToText(holidayPublicMinutes) : '',
+        holidayPublicMinutes,
         sourceSheet: sheetName,
       });
     }
 
     if (!parsedRows.length) continue;
-    const reportRange = extractReportRange(rows);
     const monthKey = reportRange.reportStartDate?.slice(0, 7);
     const monthLabel = monthKey ? formatMonthKey(monthKey) : undefined;
     const candidate = {
@@ -1032,7 +1103,10 @@ export default function HRScreen() {
             pulledReportEndDate = pulledReportEndDate || parsedFromWorkbook.reportEndDate;
             pulledSourceSheetName = parsedFromWorkbook.sourceSheetName || pulledSourceSheetName;
           } else {
-            const portalFallback = parsePortalMonthlySummaryWorkbook(workbook, XLSX);
+            const portalFallback = parsePortalMonthlySummaryWorkbook(workbook, XLSX, {
+              holidayCalendarSettings,
+              monthKeyHint: pulledMonthKey,
+            });
             if (portalFallback?.rows?.length) {
               pulledRows = portalFallback.rows;
               pulledMonthLabel = pulledMonthLabel || portalFallback.monthLabel || pulledMonthLabel;
