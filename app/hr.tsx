@@ -22,6 +22,7 @@ import {
   createAttendanceImportSummaryText,
   formatMonthKey,
   generatePayrollRowsForMonth,
+  minutesToText,
   parseFingerprintAttendanceWorkbook,
   PAYROLL_COLUMNS,
   minutesToDecimalHours,
@@ -132,6 +133,211 @@ function monthKeyToDateRange(monthKey: string): { fromDate: string; toDate: stri
     fromDate: format(start),
     toDate: format(end),
   };
+}
+
+function decodeBase64ToUint8Array(base64Input: string): Uint8Array {
+  const base64 = String(base64Input || '').trim();
+  if (!base64) return new Uint8Array(0);
+
+  const atobFn = (globalThis as any).atob;
+  if (typeof atobFn === 'function') {
+    const binary = atobFn(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  const BufferCtor = (globalThis as any).Buffer;
+  if (BufferCtor?.from) {
+    const buf = BufferCtor.from(base64, 'base64');
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+
+  throw new Error('Base64 decoder is not available on this device.');
+}
+
+function parsePortalDmyToIso(value: string): string | undefined {
+  const match = String(value || '').trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!match) return undefined;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (!day || !month || !year) return undefined;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function parsePortalNumber(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const parsed = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parsePortalHourLikeToMinutes(value: unknown): number {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const durationMatch = raw.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (durationMatch) {
+    const hours = Number(durationMatch[1]) || 0;
+    const mins = Number(durationMatch[2]) || 0;
+    const secs = Number(durationMatch[3] || 0) || 0;
+    return Math.max(0, hours * 60 + mins + Math.round(secs / 60));
+  }
+  const numeric = Number(raw.replace(/,/g, ''));
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.round(numeric * 60);
+}
+
+function parsePortalMonthlySummaryWorkbook(workbook: any, XLSX: any): {
+  rows: any[];
+  monthLabel?: string;
+  reportStartDate?: string;
+  reportEndDate?: string;
+  sourceSheetName?: string;
+} | null {
+  const findIndexByAliases = (normalizedRow: string[], aliases: string[]): number => {
+    const normalizedAliases = aliases.map((alias) => normalizeLooseText(alias));
+    let idx = normalizedRow.findIndex((value) => normalizedAliases.includes(value));
+    if (idx >= 0) return idx;
+    idx = normalizedRow.findIndex((value) => normalizedAliases.some((alias) => value.includes(alias)));
+    return idx;
+  };
+
+  const extractReportRange = (rows: any[][]): { reportStartDate?: string; reportEndDate?: string } => {
+    for (let i = 0; i < Math.min(rows.length, 10); i += 1) {
+      const row = rows[i] || [];
+      for (const cell of row) {
+        const text = String(cell ?? '').trim();
+        if (!text) continue;
+        const match = text.match(/(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*To\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i);
+        if (match) {
+          return {
+            reportStartDate: parsePortalDmyToIso(match[1]),
+            reportEndDate: parsePortalDmyToIso(match[2]),
+          };
+        }
+      }
+    }
+    return {};
+  };
+
+  let best: {
+    rows: any[];
+    monthLabel?: string;
+    reportStartDate?: string;
+    reportEndDate?: string;
+    sourceSheetName?: string;
+  } | null = null;
+
+  for (const sheetName of workbook?.SheetNames || []) {
+    const sheet = workbook?.Sheets?.[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+    if (!rows.length) continue;
+
+    let headerRowIndex = -1;
+    for (let i = 0; i < Math.min(rows.length, 12); i += 1) {
+      const normalized = (rows[i] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
+      const hasEmpCode = findIndexByAliases(normalized, ['Emp Code', 'EmpCode', 'Employee Code']) >= 0;
+      const hasName = findIndexByAliases(normalized, ['Employee Name', 'Empname', 'Name']) >= 0;
+      const hasPresent = findIndexByAliases(normalized, ['Present Days', 'Present']) >= 0;
+      if (hasEmpCode && hasName && hasPresent) {
+        headerRowIndex = i;
+        break;
+      }
+    }
+    if (headerRowIndex < 0) continue;
+
+    const normalizedHeader = (rows[headerRowIndex] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
+    const empCodeIndex = findIndexByAliases(normalizedHeader, ['Emp Code', 'EmpCode', 'Employee Code']);
+    const nameIndex = findIndexByAliases(normalizedHeader, ['Employee Name', 'Empname', 'Name']);
+    const presentIndex = findIndexByAliases(normalizedHeader, ['Present Days', 'Present']);
+    const absentIndex = findIndexByAliases(normalizedHeader, ['Absent Days', 'Absent']);
+    const workHoursIndex = findIndexByAliases(normalizedHeader, ['Total Work Hrs', 'HoursWorked', 'Work Hrs', 'WorkHrs']);
+    const overtimeIndex = findIndexByAliases(normalizedHeader, ['OT Hours', 'OtHrs', 'Overtime', 'OvTim']);
+    const leaveIndex = findIndexByAliases(normalizedHeader, ['Total Leave', 'Leave']);
+    const lateIndex = findIndexByAliases(normalizedHeader, ['Late Coming Hrs', 'LateHrs', 'Late']);
+    const weeklyOffIndex = findIndexByAliases(normalizedHeader, ['Weekly Off', 'Weekoff', 'WO']);
+    const holidayIndex = findIndexByAliases(normalizedHeader, ['Holiday', 'Holiday Present']);
+
+    if (empCodeIndex < 0 || nameIndex < 0 || presentIndex < 0) continue;
+
+    const parsedRows: any[] = [];
+    for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
+      const row = rows[r] || [];
+      const employeeCode = String(row[empCodeIndex] ?? '').trim();
+      const employeeName = String(row[nameIndex] ?? '').trim();
+      if (!employeeCode || !employeeName) continue;
+
+      const codeKey = normalizeLooseText(employeeCode);
+      if (codeKey.includes('total') || codeKey.includes('grand')) continue;
+
+      const presentDays = parsePortalNumber(row[presentIndex]);
+      const absentDays = parsePortalNumber(absentIndex >= 0 ? row[absentIndex] : 0);
+      const leaveDays = parsePortalNumber(leaveIndex >= 0 ? row[leaveIndex] : 0);
+      const weeklyOffDays = parsePortalNumber(weeklyOffIndex >= 0 ? row[weeklyOffIndex] : 0);
+      const lateMinutes = parsePortalHourLikeToMinutes(lateIndex >= 0 ? row[lateIndex] : '');
+      const workMinutes = parsePortalHourLikeToMinutes(workHoursIndex >= 0 ? row[workHoursIndex] : '');
+      const overtimeMinutes = parsePortalHourLikeToMinutes(overtimeIndex >= 0 ? row[overtimeIndex] : '');
+      const holidaysMinutes = parsePortalHourLikeToMinutes(holidayIndex >= 0 ? row[holidayIndex] : '');
+
+      const hasSignals =
+        presentDays > 0 ||
+        absentDays > 0 ||
+        leaveDays > 0 ||
+        weeklyOffDays > 0 ||
+        lateMinutes > 0 ||
+        workMinutes > 0 ||
+        overtimeMinutes > 0 ||
+        holidaysMinutes > 0;
+      if (!hasSignals) continue;
+
+      parsedRows.push({
+        employeeCode,
+        employeeName,
+        presentDays,
+        halfLeaveDays: 0,
+        weeklyOffDays,
+        absentDays,
+        leaveDays,
+        paidDays: Math.max(0, presentDays + weeklyOffDays - absentDays),
+        lateHoursText: lateMinutes > 0 ? minutesToText(lateMinutes) : '',
+        lateMinutes,
+        workHoursText: workMinutes > 0 ? minutesToText(workMinutes) : '',
+        workMinutes,
+        overtimeText: overtimeMinutes > 0 ? minutesToText(overtimeMinutes) : '',
+        overtimeMinutes,
+        holidaysText: holidaysMinutes > 0 ? minutesToText(holidaysMinutes) : '',
+        holidaysMinutes,
+        holidayMercText: '',
+        holidayMercMinutes: 0,
+        holidayPublicText: '',
+        holidayPublicMinutes: 0,
+        sourceSheet: sheetName,
+      });
+    }
+
+    if (!parsedRows.length) continue;
+    const reportRange = extractReportRange(rows);
+    const monthKey = reportRange.reportStartDate?.slice(0, 7);
+    const monthLabel = monthKey ? formatMonthKey(monthKey) : undefined;
+    const candidate = {
+      rows: parsedRows,
+      monthLabel,
+      reportStartDate: reportRange.reportStartDate,
+      reportEndDate: reportRange.reportEndDate,
+      sourceSheetName: sheetName,
+    };
+
+    if (!best || candidate.rows.length > best.rows.length) {
+      best = candidate;
+    }
+  }
+
+  return best;
 }
 
 function normalizeLooseText(input: string): string {
@@ -799,18 +1005,58 @@ export default function HRScreen() {
         );
       }
 
-      const pulledRows = Array.isArray(data.rows) ? data.rows : [];
-      if (!pulledRows.length) {
-        throw new Error('No attendance rows returned by portal for selected month.');
+      let pulledRows: any[] = Array.isArray(data.rows) ? data.rows : [];
+      let pulledMonthKey = normalizeMonthKeyInput(String(data.monthKey || selectedMonthKey));
+      let pulledMonthLabel = String(data.monthLabel || formatMonthKey(pulledMonthKey));
+      let pulledReportStartDate = String(data.reportStartDate || '').trim() || undefined;
+      let pulledReportEndDate = String(data.reportEndDate || '').trim() || undefined;
+      let pulledSourceSheetName = String(data.sourceSheetName || 'OnlineBioCloud Pull');
+
+      if (!pulledRows.length && typeof data.reportBase64 === 'string' && data.reportBase64.trim()) {
+        try {
+          const reportBytes = decodeBase64ToUint8Array(data.reportBase64);
+          const workbook = XLSX.read(reportBytes, { type: 'array' });
+          let parsedFromWorkbook: ReturnType<typeof parseFingerprintAttendanceWorkbook> | null = null;
+          try {
+            parsedFromWorkbook = parseFingerprintAttendanceWorkbook(workbook as any, XLSX, {
+              holidayCalendarSettings,
+            });
+          } catch {
+            parsedFromWorkbook = null;
+          }
+
+          if (parsedFromWorkbook?.rows?.length) {
+            pulledRows = parsedFromWorkbook.rows;
+            pulledMonthLabel = pulledMonthLabel || parsedFromWorkbook.monthLabel;
+            pulledReportStartDate = pulledReportStartDate || parsedFromWorkbook.reportStartDate;
+            pulledReportEndDate = pulledReportEndDate || parsedFromWorkbook.reportEndDate;
+            pulledSourceSheetName = parsedFromWorkbook.sourceSheetName || pulledSourceSheetName;
+          } else {
+            const portalFallback = parsePortalMonthlySummaryWorkbook(workbook, XLSX);
+            if (portalFallback?.rows?.length) {
+              pulledRows = portalFallback.rows;
+              pulledMonthLabel = pulledMonthLabel || portalFallback.monthLabel || pulledMonthLabel;
+              pulledReportStartDate = pulledReportStartDate || portalFallback.reportStartDate;
+              pulledReportEndDate = pulledReportEndDate || portalFallback.reportEndDate;
+              pulledSourceSheetName = portalFallback.sourceSheetName || pulledSourceSheetName;
+            }
+          }
+        } catch (parseError) {
+          const details = (parseError as Error).message || 'Unknown parse error';
+          throw new Error(`Portal returned a report file, but it could not be parsed: ${details}`);
+        }
       }
 
-      const pulledMonthKey = normalizeMonthKeyInput(String(data.monthKey || selectedMonthKey));
+      if (!pulledRows.length) {
+        throw new Error('No valid attendance rows were found in portal report output.');
+      }
+
       const parsed: ReturnType<typeof parseFingerprintAttendanceWorkbook> = {
         monthKey: pulledMonthKey,
-        monthLabel: String(data.monthLabel || formatMonthKey(pulledMonthKey)),
-        reportStartDate: String(data.reportStartDate || '').trim() || undefined,
-        reportEndDate: String(data.reportEndDate || '').trim() || undefined,
-        sourceSheetName: String(data.sourceSheetName || 'OnlineBioCloud Pull'),
+        monthLabel: pulledMonthLabel,
+        reportStartDate: pulledReportStartDate,
+        reportEndDate: pulledReportEndDate,
+        sourceSheetName: pulledSourceSheetName,
         rows: pulledRows,
       };
       const importPayload = buildAttendanceImport(parsed, currentUser.id, `Pulled-${pulledMonthKey}.xls`);
