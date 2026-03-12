@@ -301,9 +301,8 @@ function parseInOutTimeToMinutes(value: unknown): number | null {
   if (!m) return null;
   const hh = Number(m[1]);
   const mm = Number(m[2]);
-  const ss = Number(m[3] || 0);
   if (Number.isNaN(hh) || Number.isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-  return hh * 60 + mm + Math.round(ss / 60);
+  return hh * 60 + mm;
 }
 
 function buildPaidHolidayDateCategoryMap(
