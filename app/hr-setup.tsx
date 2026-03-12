@@ -18,6 +18,7 @@ import { useHR } from '@/contexts/HRContext';
 import { useLeave } from '@/contexts/LeaveContext';
 import { useStock } from '@/contexts/StockContext';
 import { generatePayrollRowsForMonth } from '@/utils/hrPayroll';
+import { getSalesReportsByOutletAndDateRange, syncAllReconciliationData } from '@/utils/reconciliationSync';
 import { HRHolidayCalendarItem, HRLoanRecord, HRServiceChargeMonthEntry, HRServiceChargeOutletOption } from '@/types';
 
 type ParsedHoliday = {
@@ -217,6 +218,7 @@ export default function HRSetupScreen() {
   const [fingerprintPasswordInput, setFingerprintPasswordInput] = useState('');
   const [fingerprintMonthlyReportPathInput, setFingerprintMonthlyReportPathInput] = useState('NewMonthly.aspx');
   const [showFingerprintPassword, setShowFingerprintPassword] = useState(false);
+  const [showFingerprintPortal, setShowFingerprintPortal] = useState(false);
   const [isSavingFingerprintSettings, setIsSavingFingerprintSettings] = useState(false);
   const [calendarUrlInput, setCalendarUrlInput] = useState('');
   const [holidayItems, setHolidayItems] = useState<HRHolidayCalendarItem[]>([]);
@@ -233,6 +235,7 @@ export default function HRSetupScreen() {
   const [isSavingServiceChargeOptions, setIsSavingServiceChargeOptions] = useState(false);
   const [serviceChargeMonthInput, setServiceChargeMonthInput] = useState(new Date().toISOString().slice(0, 7));
   const [serviceChargeMonthRows, setServiceChargeMonthRows] = useState<HRServiceChargeMonthEntry['outletRows']>([]);
+  const [isLoadingServiceChargeMonth, setIsLoadingServiceChargeMonth] = useState(false);
   const [isSavingServiceChargeMonth, setIsSavingServiceChargeMonth] = useState(false);
   const [loanItems, setLoanItems] = useState<HRLoanRecord[]>([]);
   const [isSavingLoans, setIsSavingLoans] = useState(false);
@@ -737,13 +740,69 @@ export default function HRSetupScreen() {
     );
   };
 
-  const handleLoadServiceChargeMonth = () => {
+  const handleLoadServiceChargeMonth = async () => {
     const normalizedMonth = normalizeMonthKey(serviceChargeMonthInput);
     if (!/^\d{4}-\d{2}$/.test(normalizedMonth)) {
       Alert.alert('Invalid Month', 'Enter month in YYYY-MM format.');
       return;
     }
     setServiceChargeMonthInput(normalizedMonth);
+    if (salesOutlets.length === 0) {
+      Alert.alert('No Sales Outlets', 'Add sales outlets in Settings first.');
+      return;
+    }
+
+    const [yearText, monthText] = normalizedMonth.split('-');
+    const year = Number(yearText);
+    const month = Number(monthText);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+      Alert.alert('Invalid Month', 'Enter month in YYYY-MM format.');
+      return;
+    }
+    const startDate = `${normalizedMonth}-01`;
+    const endDate = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+
+    setIsLoadingServiceChargeMonth(true);
+    try {
+      try {
+        await syncAllReconciliationData();
+      } catch (syncError) {
+        console.warn('[HR Setup] Service charge month load: reconciliation sync failed, using available data', syncError);
+      }
+
+      const outletTotals = new Map<string, number>();
+      await Promise.all(
+        salesOutlets.map(async (outletName) => {
+          const reports = await getSalesReportsByOutletAndDateRange(outletName, startDate, endDate, { allowServerFetch: true });
+          const total = roundMoney(
+            reports.reduce((sum, report) => {
+              const amount = Number(report?.serviceChargeAmount);
+              return Number.isFinite(amount) ? sum + amount : sum;
+            }, 0)
+          );
+          outletTotals.set(outletName, total);
+        })
+      );
+
+      setServiceChargeMonthRows((previous) =>
+        salesOutlets.map((outletName, idx) => {
+          const existing = previous.find((row) => String(row.outletName || '').trim() === outletName);
+          return {
+            id: existing?.id || `hr-service-charge-month-row-${normalizedMonth}-${idx}`,
+            outletName,
+            serviceCharge: outletTotals.get(outletName) ?? 0,
+            availableToStaff: Number(existing?.availableToStaff || 0),
+          };
+        })
+      );
+
+      const loadedTotal = roundMoney(Array.from(outletTotals.values()).reduce((sum, value) => sum + value, 0));
+      Alert.alert('Month Loaded', `Loaded service charge from sales reconciliation for ${normalizedMonth}.\nTotal: ${loadedTotal.toFixed(2)}`);
+    } catch (error) {
+      Alert.alert('Load Failed', (error as Error).message || 'Failed to load service charge from sales reconciliation.');
+    } finally {
+      setIsLoadingServiceChargeMonth(false);
+    }
   };
 
   const handlePreviousServiceChargeMonth = () => {
@@ -984,66 +1043,74 @@ export default function HRSetupScreen() {
               <Text style={styles.sectionHint}>
                 These credentials are used by `Pull Report` in Staff HR & Payroll and sync across devices.
               </Text>
-              <View style={styles.formCard}>
-                <View style={styles.formGrid}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Portal Base URL"
-                    value={fingerprintPortalBaseUrlInput}
-                    onChangeText={setFingerprintPortalBaseUrlInput}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Corporate ID"
-                    value={fingerprintCorporateIdInput}
-                    onChangeText={setFingerprintCorporateIdInput}
-                    autoCapitalize="none"
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="User Name"
-                    value={fingerprintUserNameInput}
-                    onChangeText={setFingerprintUserNameInput}
-                    autoCapitalize="none"
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Password"
-                    value={fingerprintPasswordInput}
-                    onChangeText={setFingerprintPasswordInput}
-                    secureTextEntry={!showFingerprintPassword}
-                    autoCapitalize="none"
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Monthly Report Path (optional)"
-                    value={fingerprintMonthlyReportPathInput}
-                    onChangeText={setFingerprintMonthlyReportPathInput}
-                    autoCapitalize="none"
-                  />
+              <TouchableOpacity
+                style={[styles.actionButton, styles.secondaryButton]}
+                onPress={() => setShowFingerprintPortal((prev) => !prev)}
+              >
+                <Text style={styles.secondaryButtonText}>{showFingerprintPortal ? 'Hide' : 'Show'} Fingerprint Portal</Text>
+              </TouchableOpacity>
+              {showFingerprintPortal && (
+                <View style={styles.formCard}>
+                  <View style={styles.formGrid}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Portal Base URL"
+                      value={fingerprintPortalBaseUrlInput}
+                      onChangeText={setFingerprintPortalBaseUrlInput}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Corporate ID"
+                      value={fingerprintCorporateIdInput}
+                      onChangeText={setFingerprintCorporateIdInput}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="User Name"
+                      value={fingerprintUserNameInput}
+                      onChangeText={setFingerprintUserNameInput}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Password"
+                      value={fingerprintPasswordInput}
+                      onChangeText={setFingerprintPasswordInput}
+                      secureTextEntry={!showFingerprintPassword}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Monthly Report Path (optional)"
+                      value={fingerprintMonthlyReportPathInput}
+                      onChangeText={setFingerprintMonthlyReportPathInput}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                  <View style={styles.buttonRow}>
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.secondaryButton]}
+                      onPress={() => setShowFingerprintPassword((prev) => !prev)}
+                    >
+                      <Text style={styles.secondaryButtonText}>{showFingerprintPassword ? 'Hide Password' : 'Show Password'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.primaryButton]}
+                      onPress={handleSaveFingerprintSettings}
+                      disabled={isSavingFingerprintSettings}
+                    >
+                      {isSavingFingerprintSettings ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={styles.primaryButtonText}>Save Fingerprint Settings</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={styles.buttonRow}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.secondaryButton]}
-                    onPress={() => setShowFingerprintPassword((prev) => !prev)}
-                  >
-                    <Text style={styles.secondaryButtonText}>{showFingerprintPassword ? 'Hide Password' : 'Show Password'}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.primaryButton]}
-                    onPress={handleSaveFingerprintSettings}
-                    disabled={isSavingFingerprintSettings}
-                  >
-                    {isSavingFingerprintSettings ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text style={styles.primaryButtonText}>Save Fingerprint Settings</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
+              )}
             </View>
 
             <View style={styles.section}>
@@ -1270,8 +1337,13 @@ export default function HRSetupScreen() {
                           <TouchableOpacity
                             style={[styles.actionButton, styles.secondaryButton]}
                             onPress={handleLoadServiceChargeMonth}
+                            disabled={isLoadingServiceChargeMonth}
                           >
-                            <Text style={styles.secondaryButtonText}>Load Month</Text>
+                            {isLoadingServiceChargeMonth ? (
+                              <ActivityIndicator size="small" color={Colors.light.tint} />
+                            ) : (
+                              <Text style={styles.secondaryButtonText}>Load Month</Text>
+                            )}
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={[styles.actionButton, styles.primaryButton]}
