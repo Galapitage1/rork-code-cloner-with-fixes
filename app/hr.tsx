@@ -550,7 +550,6 @@ export default function HRScreen() {
     getLatestAttendanceImportForMonth,
     getPayrollSheetForMonth,
     canEditPayrollMonth,
-    saveFingerprintPortalSettings,
     verifyModulePassword,
     markPayrollProcessed,
     approveAndLockPayrollMonth,
@@ -578,14 +577,6 @@ export default function HRScreen() {
   const [showPayrollHistoryMonths, setShowPayrollHistoryMonths] = useState(false);
   const [payrollSearchInput, setPayrollSearchInput] = useState('');
   const [appliedPayrollSearch, setAppliedPayrollSearch] = useState('');
-  const [showFingerprintSettings, setShowFingerprintSettings] = useState(false);
-  const [fingerprintPortalBaseUrlInput, setFingerprintPortalBaseUrlInput] = useState('https://www.onlineebiocloud.com');
-  const [fingerprintCorporateIdInput, setFingerprintCorporateIdInput] = useState('');
-  const [fingerprintUserNameInput, setFingerprintUserNameInput] = useState('');
-  const [fingerprintPasswordInput, setFingerprintPasswordInput] = useState('');
-  const [fingerprintMonthlyReportPathInput, setFingerprintMonthlyReportPathInput] = useState('NewMonthly.aspx');
-  const [showFingerprintPassword, setShowFingerprintPassword] = useState(false);
-  const [isSavingFingerprintSettings, setIsSavingFingerprintSettings] = useState(false);
   const [isPullingFingerprintReport, setIsPullingFingerprintReport] = useState(false);
 
   const monthOptions = useMemo(() => {
@@ -926,15 +917,6 @@ export default function HRScreen() {
   }, [leaveRequests, selectedMonthKey]);
 
   useEffect(() => {
-    if (!fingerprintPortalSettings) return;
-    setFingerprintPortalBaseUrlInput(String(fingerprintPortalSettings.portalBaseUrl || '').trim() || 'https://www.onlineebiocloud.com');
-    setFingerprintCorporateIdInput(String(fingerprintPortalSettings.corporateId || '').trim());
-    setFingerprintUserNameInput(String(fingerprintPortalSettings.userName || '').trim());
-    setFingerprintPasswordInput(String(fingerprintPortalSettings.password || '').trim());
-    setFingerprintMonthlyReportPathInput(String(fingerprintPortalSettings.monthlyReportPath || '').trim() || 'NewMonthly.aspx');
-  }, [fingerprintPortalSettings]);
-
-  useEffect(() => {
     if (!payrollRowsWithOverrides.length) {
       setSelectedPayslipRowId('');
       return;
@@ -997,50 +979,27 @@ export default function HRScreen() {
     setIsImportingAttendance(false);
   };
 
-  const handleSaveFingerprintSettings = async () => {
-    if (!currentUser?.id) return;
-    setIsSavingFingerprintSettings(true);
-    try {
-      await saveFingerprintPortalSettings({
-        portalBaseUrl: fingerprintPortalBaseUrlInput,
-        corporateId: fingerprintCorporateIdInput,
-        userName: fingerprintUserNameInput,
-        password: fingerprintPasswordInput,
-        monthlyReportPath: fingerprintMonthlyReportPathInput,
-      });
-      Alert.alert('Saved', 'Fingerprint login settings saved and synced to server.');
-    } catch (error) {
-      Alert.alert('Save Failed', (error as Error).message || 'Failed to save fingerprint login settings.');
-    } finally {
-      setIsSavingFingerprintSettings(false);
-    }
-  };
-
   const handlePullFingerprintReport = async () => {
     if (!currentUser?.id) return;
     if (disableSelectedMonthEdits) {
       Alert.alert('Month Locked', 'This payroll month is locked or restricted to another authorizer and cannot be edited.');
       return;
     }
-    const corporateId = fingerprintCorporateIdInput.trim();
-    const userName = fingerprintUserNameInput.trim();
-    const password = fingerprintPasswordInput.trim();
+    const portalBaseUrl = String(fingerprintPortalSettings?.portalBaseUrl || '').trim() || 'https://www.onlineebiocloud.com';
+    const corporateId = String(fingerprintPortalSettings?.corporateId || '').trim();
+    const userName = String(fingerprintPortalSettings?.userName || '').trim();
+    const password = String(fingerprintPortalSettings?.password || '').trim();
+    const monthlyReportPath = String(fingerprintPortalSettings?.monthlyReportPath || '').trim() || 'NewMonthly.aspx';
     if (!corporateId || !userName || !password) {
-      Alert.alert('Missing Settings', 'Save fingerprint login settings first (Corporate ID, User Name, Password).');
-      setShowFingerprintSettings(true);
+      Alert.alert(
+        'Missing Settings',
+        'Configure fingerprint portal credentials in HR Setup first (Corporate ID, User Name, Password).'
+      );
       return;
     }
 
     setIsPullingFingerprintReport(true);
     try {
-      await saveFingerprintPortalSettings({
-        portalBaseUrl: fingerprintPortalBaseUrlInput,
-        corporateId,
-        userName,
-        password,
-        monthlyReportPath: fingerprintMonthlyReportPathInput,
-      });
-
       const { fromDate, toDate } = monthKeyToDateRange(selectedMonthKey);
       const endpoint = `${getApiBaseUrl()}/Tracker/api/hr-fingerprint-monthly-report.php`;
       const response = await fetch(endpoint, {
@@ -1049,11 +1008,11 @@ export default function HRScreen() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          portalBaseUrl: fingerprintPortalBaseUrlInput.trim() || 'https://www.onlineebiocloud.com',
+          portalBaseUrl,
           corporateId,
           userName,
           password,
-          monthlyReportPath: fingerprintMonthlyReportPathInput.trim() || 'NewMonthly.aspx',
+          monthlyReportPath,
           monthKey: selectedMonthKey,
           fromDate,
           toDate,
@@ -1083,7 +1042,7 @@ export default function HRScreen() {
       let pulledReportEndDate = String(data.reportEndDate || '').trim() || undefined;
       let pulledSourceSheetName = String(data.sourceSheetName || 'OnlineBioCloud Pull');
 
-      if (!pulledRows.length && typeof data.reportBase64 === 'string' && data.reportBase64.trim()) {
+      if (typeof data.reportBase64 === 'string' && data.reportBase64.trim()) {
         try {
           const reportBytes = decodeBase64ToUint8Array(data.reportBase64);
           const workbook = XLSX.read(reportBytes, { type: 'array' });
@@ -1096,24 +1055,37 @@ export default function HRScreen() {
             parsedFromWorkbook = null;
           }
 
-          if (parsedFromWorkbook?.rows?.length) {
-            pulledRows = parsedFromWorkbook.rows;
-            pulledMonthLabel = pulledMonthLabel || parsedFromWorkbook.monthLabel;
-            pulledReportStartDate = pulledReportStartDate || parsedFromWorkbook.reportStartDate;
-            pulledReportEndDate = pulledReportEndDate || parsedFromWorkbook.reportEndDate;
-            pulledSourceSheetName = parsedFromWorkbook.sourceSheetName || pulledSourceSheetName;
-          } else {
-            const portalFallback = parsePortalMonthlySummaryWorkbook(workbook, XLSX, {
-              holidayCalendarSettings,
-              monthKeyHint: pulledMonthKey,
-            });
-            if (portalFallback?.rows?.length) {
-              pulledRows = portalFallback.rows;
-              pulledMonthLabel = pulledMonthLabel || portalFallback.monthLabel || pulledMonthLabel;
-              pulledReportStartDate = pulledReportStartDate || portalFallback.reportStartDate;
-              pulledReportEndDate = pulledReportEndDate || portalFallback.reportEndDate;
-              pulledSourceSheetName = portalFallback.sourceSheetName || pulledSourceSheetName;
-            }
+          const portalFallback = parsePortalMonthlySummaryWorkbook(workbook, XLSX, {
+            holidayCalendarSettings,
+            monthKeyHint: pulledMonthKey,
+          });
+
+          const parsedRows = parsedFromWorkbook?.rows || [];
+          const fallbackRows = portalFallback?.rows || [];
+          const parsedHolidayTotal = parsedRows.reduce(
+            (sum, row) => sum + Number(row?.holidayMercMinutes || 0) + Number(row?.holidayPublicMinutes || 0),
+            0
+          );
+          const fallbackHolidayTotal = fallbackRows.reduce(
+            (sum, row) => sum + Number(row?.holidayMercMinutes || 0) + Number(row?.holidayPublicMinutes || 0),
+            0
+          );
+          const shouldUseFallback =
+            fallbackRows.length > 0 &&
+            (parsedRows.length === 0 || (parsedHolidayTotal <= 0 && fallbackHolidayTotal > 0));
+
+          if (shouldUseFallback) {
+            pulledRows = fallbackRows;
+            pulledMonthLabel = pulledMonthLabel || portalFallback?.monthLabel || pulledMonthLabel;
+            pulledReportStartDate = pulledReportStartDate || portalFallback?.reportStartDate;
+            pulledReportEndDate = pulledReportEndDate || portalFallback?.reportEndDate;
+            pulledSourceSheetName = portalFallback?.sourceSheetName || pulledSourceSheetName;
+          } else if (parsedRows.length > 0) {
+            pulledRows = parsedRows;
+            pulledMonthLabel = pulledMonthLabel || parsedFromWorkbook?.monthLabel;
+            pulledReportStartDate = pulledReportStartDate || parsedFromWorkbook?.reportStartDate;
+            pulledReportEndDate = pulledReportEndDate || parsedFromWorkbook?.reportEndDate;
+            pulledSourceSheetName = parsedFromWorkbook?.sourceSheetName || pulledSourceSheetName;
           }
         } catch (parseError) {
           const details = (parseError as Error).message || 'Unknown parse error';
@@ -1760,88 +1732,13 @@ export default function HRScreen() {
                     </>
                   )}
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.secondaryButton]}
-                  onPress={() => setShowFingerprintSettings((prev) => !prev)}
-                >
-                  <Settings size={14} color={Colors.light.tint} />
-                  <Text style={styles.secondaryButtonText}>
-                    {showFingerprintSettings ? 'Hide Fingerprint Settings' : 'Show Fingerprint Settings'}
-                  </Text>
-                </TouchableOpacity>
               </View>
               {disableSelectedMonthEdits && (
                 <Text style={[styles.infoTiny, { color: '#B45309' }]}>
                   Attendance import for this month is blocked because the month is locked or unlocked by another authorizer.
                 </Text>
               )}
-              {showFingerprintSettings && (
-                <View style={styles.formCard}>
-                  <Text style={styles.formTitle}>Fingerprint Login Settings (Synced)</Text>
-                  <Text style={styles.infoTiny}>
-                    These settings are saved to server and sync across devices. Credentials are required for `Pull Report`.
-                  </Text>
-                  <View style={styles.formGrid}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Portal Base URL"
-                      value={fingerprintPortalBaseUrlInput}
-                      onChangeText={setFingerprintPortalBaseUrlInput}
-                      autoCapitalize="none"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Corporate ID"
-                      value={fingerprintCorporateIdInput}
-                      onChangeText={setFingerprintCorporateIdInput}
-                      autoCapitalize="none"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="User Name"
-                      value={fingerprintUserNameInput}
-                      onChangeText={setFingerprintUserNameInput}
-                      autoCapitalize="none"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Password"
-                      value={fingerprintPasswordInput}
-                      onChangeText={setFingerprintPasswordInput}
-                      secureTextEntry={!showFingerprintPassword}
-                      autoCapitalize="none"
-                    />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Monthly Report Path (optional)"
-                      value={fingerprintMonthlyReportPathInput}
-                      onChangeText={setFingerprintMonthlyReportPathInput}
-                      autoCapitalize="none"
-                    />
-                  </View>
-                  <View style={styles.buttonRow}>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.secondaryButton]}
-                      onPress={() => setShowFingerprintPassword((prev) => !prev)}
-                    >
-                      <Text style={styles.secondaryButtonText}>{showFingerprintPassword ? 'Hide Password' : 'Show Password'}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.primaryButton]}
-                      onPress={handleSaveFingerprintSettings}
-                      disabled={isSavingFingerprintSettings}
-                    >
-                      {isSavingFingerprintSettings ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <>
-                          <Text style={styles.primaryButtonText}>Save Fingerprint Settings</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
+              <Text style={styles.infoTiny}>Fingerprint portal settings are managed from `Setup`.</Text>
 
               <View style={styles.infoCard}>
                 <Text style={styles.infoCardTitle}>Selected Month Attendance</Text>
