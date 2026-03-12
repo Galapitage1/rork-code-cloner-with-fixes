@@ -197,12 +197,13 @@ function roundPaidDays(value: unknown): number {
   return Math.max(0, Math.round(numeric));
 }
 
-function countPaidHolidayCategoriesForMonth(
+type PaidHolidayTimelineItem = { date: string; category: 'merc' | 'public' };
+
+function getPaidHolidayTimelineForMonth(
   monthKey: string,
   holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null
-): { mercCount: number; publicCount: number } {
-  let mercCount = 0;
-  let publicCount = 0;
+): PaidHolidayTimelineItem[] {
+  const timeline: PaidHolidayTimelineItem[] = [];
   const holidays = holidayCalendarSettings?.holidays || [];
   for (const holiday of holidays) {
     if (!holiday || holiday.getPaid !== true) continue;
@@ -211,28 +212,55 @@ function countPaidHolidayCategoriesForMonth(
     const times = Number(holiday.times);
     if (!Number.isFinite(times)) continue;
     if (Math.abs(times - 1.5) <= 0.0001) {
-      mercCount += 1;
+      timeline.push({ date: dateIso, category: 'merc' });
       continue;
     }
     if (Math.abs(times - 2) <= 0.0001) {
-      publicCount += 1;
+      timeline.push({ date: dateIso, category: 'public' });
     }
   }
-  return { mercCount, publicCount };
+  return timeline.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function splitHolidayMinutesByCategory(
   totalHolidayMinutes: number,
-  mercCount: number,
-  publicCount: number
+  holidayDays: number,
+  timeline: PaidHolidayTimelineItem[]
 ): { holidayMercMinutes: number; holidayPublicMinutes: number } {
   const total = Math.max(0, Math.round(totalHolidayMinutes || 0));
   if (total <= 0) return { holidayMercMinutes: 0, holidayPublicMinutes: 0 };
-  const categoryTotal = Math.max(0, mercCount) + Math.max(0, publicCount);
-  if (categoryTotal <= 0) {
+  const normalizedHolidayDays = Math.max(0, Number(holidayDays || 0));
+  if (normalizedHolidayDays <= 0 || !timeline.length) {
     return { holidayMercMinutes: 0, holidayPublicMinutes: 0 };
   }
-  const holidayMercMinutes = Math.round((total * Math.max(0, mercCount)) / categoryTotal);
+
+  let remainingDays = normalizedHolidayDays;
+  let mercWeight = 0;
+  let publicWeight = 0;
+  for (const item of timeline) {
+    if (remainingDays <= 0) break;
+    const consume = Math.min(1, remainingDays);
+    if (item.category === 'merc') mercWeight += consume;
+    else publicWeight += consume;
+    remainingDays -= consume;
+  }
+
+  if (remainingDays > 0) {
+    const mercCount = timeline.filter((item) => item.category === 'merc').length;
+    const publicCount = timeline.filter((item) => item.category === 'public').length;
+    const categoryTotal = mercCount + publicCount;
+    if (categoryTotal > 0) {
+      const mercExtra = (remainingDays * mercCount) / categoryTotal;
+      const publicExtra = remainingDays - mercExtra;
+      mercWeight += mercExtra;
+      publicWeight += publicExtra;
+      remainingDays = 0;
+    }
+  }
+
+  const weightTotal = mercWeight + publicWeight;
+  if (weightTotal <= 0) return { holidayMercMinutes: 0, holidayPublicMinutes: 0 };
+  const holidayMercMinutes = Math.round((total * mercWeight) / weightTotal);
   const holidayPublicMinutes = Math.max(0, total - holidayMercMinutes);
   return { holidayMercMinutes, holidayPublicMinutes };
 }
@@ -320,9 +348,9 @@ function parsePortalMonthlySummaryWorkbook(
     if (empCodeIndex < 0 || nameIndex < 0 || presentIndex < 0) continue;
     const reportRange = extractReportRange(rows);
     const rowMonthKey = reportRange.reportStartDate?.slice(0, 7) || options?.monthKeyHint;
-    const { mercCount, publicCount } = rowMonthKey
-      ? countPaidHolidayCategoriesForMonth(rowMonthKey, options?.holidayCalendarSettings)
-      : { mercCount: 0, publicCount: 0 };
+    const paidHolidayTimeline = rowMonthKey
+      ? getPaidHolidayTimelineForMonth(rowMonthKey, options?.holidayCalendarSettings)
+      : [];
 
     const parsedRows: any[] = [];
     for (let r = headerRowIndex + 1; r < rows.length; r += 1) {
@@ -357,8 +385,8 @@ function parsePortalMonthlySummaryWorkbook(
 
       const { holidayMercMinutes, holidayPublicMinutes } = splitHolidayMinutesByCategory(
         holidaysMinutes,
-        mercCount,
-        publicCount
+        appliedHolidayDays,
+        paidHolidayTimeline
       );
       const overtimeMinutes = Math.max(0, rawOvertimeMinutes - holidayMercMinutes - holidayPublicMinutes);
 

@@ -280,6 +280,26 @@ function parse_attendance_rows_from_report_html($html, $sourceSheetName = 'NewMo
   return [];
 }
 
+function score_export_body_quality($body, $contentType = '') {
+  $text = strtolower((string)$body);
+  if ($text === '') return -1000;
+  if (strpos($text, 'validation of viewstate mac failed') !== false) return -1000;
+  if (strpos($text, 'id="loginform"') !== false) return -900;
+  if (strpos($text, 'loading...cancel') !== false) return -800;
+
+  $score = 0;
+  $contentType = strtolower(trim((string)$contentType));
+  if (strpos($contentType, 'application/vnd.ms-excel') !== false || strpos($contentType, 'application/octet-stream') !== false) {
+    $score += 40;
+  }
+  if (strpos($text, 'poh') !== false) $score += 80;
+  if (strpos($text, 'status') !== false) $score += 40;
+  if (strpos($text, 'o.times hrs') !== false || strpos($text, 'otimes hrs') !== false) $score += 40;
+  if (strpos($text, 'monthly summary report') !== false) $score += 10;
+  $score += min(30, intval(strlen($text) / 15000));
+  return $score;
+}
+
 function pull_report_once($payload) {
   $portalBaseUrl = normalize_base_url($payload['portalBaseUrl'] ?? 'https://www.onlineebiocloud.com');
   $monthlyReportPath = trim((string)($payload['monthlyReportPath'] ?? 'NewMonthly.aspx'));
@@ -404,6 +424,8 @@ function pull_report_once($payload) {
 
     $reportResponse = $request($monthlyUrl, http_build_query($showReportPost, '', '&', PHP_QUERY_RFC3986));
     $reportHtml = $reportResponse['body'];
+    $rawReportBody = $reportHtml;
+    $rawReportContentType = $reportResponse['contentType'];
 
     if (contains_viewstate_mac_error($reportHtml)) {
       throw new Exception('Monthly report postback failed due server ViewState MAC validation.');
@@ -413,10 +435,12 @@ function pull_report_once($payload) {
     }
 
     $rows = parse_attendance_rows_from_report_html($reportHtml, basename(parse_url($monthlyUrl, PHP_URL_PATH) ?: 'NewMonthly.aspx'));
+    $selectedExport = 'showreport-html';
+    $exportCandidatesTried = [];
     if (empty($rows)) {
       $monthlyPage2 = $request($monthlyUrl);
       $hiddenMonthly2 = extract_hidden_inputs($monthlyPage2['body']);
-      $excelPost = [
+      $commonPost = [
         '__EVENTTARGET' => '',
         '__EVENTARGUMENT' => '',
         '__VIEWSTATE' => $hiddenMonthly2['__VIEWSTATE'] ?? '',
@@ -431,18 +455,77 @@ function pull_report_once($payload) {
         'ctl00$MainContent$Dept' => 'AllDesignation',
         'ctl00$MainContent$Desig' => 'RadioButton1',
         'ctl00$MainContent$Emp' => 'optAllEmployee',
-        'ctl00$MainContent$Daily' => 'MonthlySummaryDetails',
-        'ctl00$MainContent$Button10' => 'Monthly Summary In Excel',
       ];
-      $excelResponse = $request($monthlyUrl, http_build_query($excelPost, '', '&', PHP_QUERY_RFC3986));
-      $excelBody = $excelResponse['body'];
-      if (contains_viewstate_mac_error($excelBody)) {
-        throw new Exception('Monthly summary export postback failed due server ViewState MAC validation.');
+
+      $exportCandidates = [
+        [
+          'label' => 'vertical-performance',
+          'daily' => 'optmonthlyperformence',
+          'buttonName' => 'ctl00$MainContent$Button1',
+          'buttonValue' => 'Vertical Performance',
+        ],
+        [
+          'label' => 'attendance',
+          'daily' => 'optmonthlyattendence',
+          'buttonName' => 'ctl00$MainContent$Button2',
+          'buttonValue' => 'Attendance',
+        ],
+        [
+          'label' => 'monthly-summary',
+          'daily' => 'MonthlySummaryDetails',
+          'buttonName' => 'ctl00$MainContent$Button10',
+          'buttonValue' => 'Monthly Summary In Excel',
+        ],
+      ];
+
+      $best = null;
+      foreach ($exportCandidates as $candidate) {
+        $post = $commonPost;
+        $post['ctl00$MainContent$Daily'] = $candidate['daily'];
+        $post[$candidate['buttonName']] = $candidate['buttonValue'];
+        $candidateResponse = $request($monthlyUrl, http_build_query($post, '', '&', PHP_QUERY_RFC3986));
+        $candidateBody = $candidateResponse['body'];
+        if (contains_viewstate_mac_error($candidateBody) || looks_like_login_page($candidateBody)) {
+          $exportCandidatesTried[] = [
+            'label' => $candidate['label'],
+            'score' => -1000,
+            'rows' => 0,
+            'size' => strlen((string)$candidateBody),
+          ];
+          continue;
+        }
+
+        $candidateRows = parse_attendance_rows_from_report_html($candidateBody, basename(parse_url($monthlyUrl, PHP_URL_PATH) ?: 'NewMonthly.aspx'));
+        $contentTypeLower = strtolower(trim((string)$candidateResponse['contentType']));
+        $isExcelLike = strpos($contentTypeLower, 'application/vnd.ms-excel') !== false || strpos($contentTypeLower, 'application/octet-stream') !== false;
+        $candidateScore = ($isExcelLike ? 1000 : 0) + score_export_body_quality($candidateBody, $candidateResponse['contentType']) + (count($candidateRows) > 0 ? 25 : 0);
+        $exportCandidatesTried[] = [
+          'label' => $candidate['label'],
+          'score' => $candidateScore,
+          'rows' => count($candidateRows),
+          'size' => strlen((string)$candidateBody),
+        ];
+
+        if ($best === null || $candidateScore > $best['score']) {
+          $best = [
+            'label' => $candidate['label'],
+            'score' => $candidateScore,
+            'rows' => $candidateRows,
+            'body' => $candidateBody,
+            'contentType' => $candidateResponse['contentType'],
+          ];
+        }
       }
-      $rows = parse_attendance_rows_from_report_html($excelBody, basename(parse_url($monthlyUrl, PHP_URL_PATH) ?: 'NewMonthly.aspx'));
+
+      if ($best !== null) {
+        $selectedExport = $best['label'];
+        $rows = $best['rows'];
+        $rawReportBody = $best['body'];
+        $rawReportContentType = $best['contentType'];
+      }
     }
 
-    if (empty($rows)) {
+    if (empty($rows) && trim((string)$rawReportBody) === '') {
       throw new Exception('No valid attendance rows found in portal report output.');
     }
 
@@ -462,7 +545,11 @@ function pull_report_once($payload) {
         'monthlyUrl' => $monthlyUrl,
         'fromDate' => $fromDate,
         'toDate' => $toDate,
+        'selectedExport' => $selectedExport,
+        'exportCandidates' => $exportCandidatesTried,
       ],
+      'reportBase64' => base64_encode((string)$rawReportBody),
+      'reportContentType' => $rawReportContentType,
     ];
   } finally {
     curl_close($ch);
@@ -492,9 +579,13 @@ for ($attempt = 1; $attempt <= 3; $attempt++) {
       'reportEndDate' => $result['reportEndDate'],
       'sourceSheetName' => $result['sourceSheetName'],
       'rows' => $result['rows'],
+      'reportBase64' => $result['reportBase64'] ?? null,
+      'reportContentType' => $result['reportContentType'] ?? null,
       'diagnostics' => [
         'attempt' => $attempt,
         'monthlyUrl' => $result['diagnostics']['monthlyUrl'] ?? null,
+        'selectedExport' => $result['diagnostics']['selectedExport'] ?? null,
+        'exportCandidates' => $result['diagnostics']['exportCandidates'] ?? [],
       ],
     ]);
   } catch (Exception $e) {
