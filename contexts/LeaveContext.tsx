@@ -45,6 +45,7 @@ type CheckLeaveAvailabilityInput = {
   leaveTypeId: string;
   startDate: string;
   endDate: string;
+  dayPortion?: number;
   excludeRequestId?: string;
 };
 
@@ -114,8 +115,22 @@ function splitDateRangeByYear(startDate: string, endDate: string): Record<number
   return counts;
 }
 
-function getRequestDaysByYear(request: Pick<LeaveRequest, 'startDate' | 'endDate'>): Record<number, number> {
-  return splitDateRangeByYear(request.startDate, request.endDate) || {};
+function getNormalizedDayPortion(requestLike: { startDate: string; endDate: string; dayPortion?: number }): number {
+  const start = String(requestLike.startDate || '').trim();
+  const end = String(requestLike.endDate || '').trim();
+  if (start !== end) return 1;
+  return requestLike.dayPortion === 0.5 ? 0.5 : 1;
+}
+
+function getWeightedRequestDaysByYear(requestLike: { startDate: string; endDate: string; dayPortion?: number }): Record<number, number> {
+  const byYear = splitDateRangeByYear(requestLike.startDate, requestLike.endDate) || {};
+  const portion = getNormalizedDayPortion(requestLike);
+  if (portion === 1) return byYear;
+  const weighted: Record<number, number> = {};
+  Object.entries(byYear).forEach(([yearText, dayCount]) => {
+    weighted[Number(yearText)] = roundDays((Number(dayCount) || 0) * portion);
+  });
+  return weighted;
 }
 
 function roundDays(value: number): number {
@@ -147,8 +162,12 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       return { isEnough: false, message: 'Please select staff and leave type.', yearly: [] };
     }
 
-    const requestedByYear = splitDateRangeByYear(startDate, endDate);
-    if (!requestedByYear) {
+    const requestedByYear = getWeightedRequestDaysByYear({
+      startDate,
+      endDate,
+      dayPortion: input.dayPortion,
+    });
+    if (!requestedByYear || Object.keys(requestedByYear).length === 0) {
       return { isEnough: false, message: 'Invalid leave date range.', yearly: [] };
     }
 
@@ -174,7 +193,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
         let usedPendingDays = 0;
         let usedApprovedDays = 0;
         requestsForStaffLeaveType.forEach((row) => {
-          const daysByYear = getRequestDaysByYear(row);
+          const daysByYear = getWeightedRequestDaysByYear(row);
           const days = Number(daysByYear[year] || 0);
           if (!days) return;
           if (row.status === 'approved') {
@@ -327,7 +346,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
 
     if (currentUser) {
       try {
-        await syncData('leave_types', updated, currentUser.id);
+        const synced = await syncData<LeaveType>('leave_types', updated, currentUser.id);
+        const active = synced.filter((row) => !row.deleted);
+        setLeaveTypes(active.length > 0 ? active : DEFAULT_LEAVE_TYPES);
+        await AsyncStorage.setItem(LEAVE_TYPES_KEY, JSON.stringify(synced));
       } catch (error) {
         console.error('[LeaveContext] Failed to sync leave types:', error);
       }
@@ -343,7 +365,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
 
     if (currentUser) {
       try {
-        await syncData('leave_types', updated, currentUser.id);
+        const synced = await syncData<LeaveType>('leave_types', updated, currentUser.id);
+        const active = synced.filter((row) => !row.deleted);
+        setLeaveTypes(active.length > 0 ? active : DEFAULT_LEAVE_TYPES);
+        await AsyncStorage.setItem(LEAVE_TYPES_KEY, JSON.stringify(synced));
       } catch (error) {
         console.error('[LeaveContext] Failed to sync leave types:', error);
       }
@@ -359,7 +384,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
 
     if (currentUser) {
       try {
-        await syncData('leave_types', updated, currentUser.id);
+        const synced = await syncData<LeaveType>('leave_types', updated, currentUser.id);
+        const active = synced.filter((row) => !row.deleted);
+        setLeaveTypes(active.length > 0 ? active : DEFAULT_LEAVE_TYPES);
+        await AsyncStorage.setItem(LEAVE_TYPES_KEY, JSON.stringify(synced));
       } catch (error) {
         console.error('[LeaveContext] Failed to sync leave types:', error);
       }
@@ -374,11 +402,14 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       throw new Error('Please select a staff member from active HR staff.');
     }
 
+    const normalizedDayPortion = (request.startDate === request.endDate && request.dayPortion === 0.5) ? 0.5 : 1;
+
     const availability = checkLeaveAvailability({
       staffId,
       leaveTypeId: request.leaveTypeId,
       startDate: request.startDate,
       endDate: request.endDate,
+      dayPortion: normalizedDayPortion,
     });
     if (!availability.isEnough) {
       throw new Error(availability.message || 'Not enough leave balance.');
@@ -387,6 +418,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     const newRequest: LeaveRequest = {
       ...request,
       staffId,
+      dayPortion: normalizedDayPortion,
       id: `leave-req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       status: 'pending',
       createdAt: Date.now(),

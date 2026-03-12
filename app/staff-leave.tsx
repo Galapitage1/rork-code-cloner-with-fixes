@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -42,10 +42,24 @@ function splitDateRangeByYear(startDate: string, endDate: string): Record<number
   return out;
 }
 
+function getRequestWeightedDaysByYear(request: { startDate: string; endDate: string; dayPortion?: number }): Record<number, number> {
+  const base = splitDateRangeByYear(request.startDate, request.endDate);
+  const normalizedPortion =
+    String(request.startDate || '').trim() === String(request.endDate || '').trim() && request.dayPortion === 0.5
+      ? 0.5
+      : 1;
+  if (normalizedPortion === 1) return base;
+  const weighted: Record<number, number> = {};
+  Object.entries(base).forEach(([yearText, count]) => {
+    weighted[Number(yearText)] = (Number(count) || 0) * normalizedPortion;
+  });
+  return weighted;
+}
+
 export default function StaffLeaveScreen() {
   const router = useRouter();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { staffMembers } = useHR();
+  const { staffMembers, syncAll: syncHRData } = useHR();
   const {
     leaveTypes,
     leaveRequests,
@@ -85,6 +99,18 @@ export default function StaffLeaveScreen() {
     [staffMembers]
   );
 
+  useEffect(() => {
+    syncHRData(true);
+  }, [syncHRData]);
+
+  useEffect(() => {
+    if (!editorStaffId) return;
+    const stillValid = activeStaff.some((row) => row.id === editorStaffId);
+    if (!stillValid) {
+      setEditorStaffId(activeStaff[0]?.id || '');
+    }
+  }, [activeStaff, editorStaffId]);
+
   const balancesByKey = useMemo(() => {
     const map = new Map<string, number>();
     staffLeaveBalances
@@ -106,7 +132,7 @@ export default function StaffLeaveScreen() {
       if (!(request.status === 'approved' || request.status === 'pending')) return;
       if (!request.staffId || !request.leaveTypeId) return;
 
-      const daysByYear = splitDateRangeByYear(request.startDate, request.endDate);
+      const daysByYear = getRequestWeightedDaysByYear(request);
       const usedDays = Number(daysByYear[selectedYear] || 0);
       if (!usedDays) return;
 
@@ -311,49 +337,55 @@ export default function StaffLeaveScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <ScrollView horizontal style={styles.tableWrap} contentContainerStyle={{ paddingBottom: 16 }}>
-            <View>
-              <View style={styles.tableHeaderRow}>
-                <Text style={[styles.headerCell, styles.staffCol]}>Staff</Text>
-                {leaveTypes.map((leaveType) => (
-                  <Text key={`header-${leaveType.id}`} style={styles.headerCell}>
-                    {leaveType.name}
-                  </Text>
-                ))}
-              </View>
-
-              {matrixRows.length === 0 ? (
-                <Text style={styles.emptyText}>No active staff found in HR module.</Text>
-              ) : (
-                matrixRows.map((row) => (
-                  <View key={row.staff.id} style={styles.tableRow}>
-                    <Text style={[styles.cell, styles.staffCol]}>{row.staff.fullName}</Text>
-                    {row.cells.map((cell) => (
-                      <TouchableOpacity
-                        key={`${row.staff.id}-${cell.leaveType.id}`}
-                        style={styles.cellButton}
-                        onPress={() => openEditor({
-                          staffId: row.staff.id,
-                          leaveTypeId: cell.leaveType.id,
-                          totalDays: cell.total,
-                        })}
-                      >
-                        <Text style={[styles.cellValue, cell.remaining < 0 && styles.negativeText]}>
-                          {cell.remaining.toFixed(1)}
-                        </Text>
-                        <Text style={styles.cellSub}>Total {cell.total.toFixed(1)}</Text>
-                        <Text style={styles.cellSub}>Used {Number(cell.approved + cell.pending).toFixed(1)}</Text>
-                        <View style={styles.editPill}>
-                          <Pencil size={11} color={Colors.light.tint} />
-                          <Text style={styles.editPillText}>Edit</Text>
-                        </View>
-                      </TouchableOpacity>
+          <View style={styles.tableContainer}>
+            <ScrollView style={styles.tableVerticalWrap} contentContainerStyle={{ paddingBottom: 16 }}>
+              <ScrollView horizontal style={styles.tableWrap} contentContainerStyle={{ paddingBottom: 4 }}>
+                <View>
+                  <View style={styles.tableHeaderRow}>
+                    <Text style={[styles.headerCell, styles.staffCol]}>Name</Text>
+                    <Text style={[styles.headerCell, styles.userCol]}>Username</Text>
+                    {leaveTypes.map((leaveType) => (
+                      <Text key={`header-${leaveType.id}`} style={styles.headerCell}>
+                        {leaveType.name}
+                      </Text>
                     ))}
                   </View>
-                ))
-              )}
-            </View>
-          </ScrollView>
+
+                  {matrixRows.length === 0 ? (
+                    <Text style={styles.emptyText}>No active staff found in HR module.</Text>
+                  ) : (
+                    matrixRows.map((row) => (
+                      <View key={row.staff.id} style={styles.tableRow}>
+                        <Text style={[styles.cell, styles.staffCol]}>{row.staff.fullName}</Text>
+                        <Text style={[styles.cell, styles.userCol]}>{row.staff.userName || '-'}</Text>
+                        {row.cells.map((cell) => (
+                          <TouchableOpacity
+                            key={`${row.staff.id}-${cell.leaveType.id}`}
+                            style={styles.cellButton}
+                            onPress={() => openEditor({
+                              staffId: row.staff.id,
+                              leaveTypeId: cell.leaveType.id,
+                              totalDays: cell.total,
+                            })}
+                          >
+                            <Text style={[styles.cellValue, cell.remaining < 0 && styles.negativeText]}>
+                              {cell.remaining.toFixed(1)}
+                            </Text>
+                            <Text style={styles.cellSub}>Total {cell.total.toFixed(1)}</Text>
+                            <Text style={styles.cellSub}>Used {Number(cell.approved + cell.pending).toFixed(1)}</Text>
+                            <View style={styles.editPill}>
+                              <Pencil size={11} color={Colors.light.tint} />
+                              <Text style={styles.editPillText}>Edit</Text>
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ))
+                  )}
+                </View>
+              </ScrollView>
+            </ScrollView>
+          </View>
         )}
       </SafeAreaView>
 
@@ -568,11 +600,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 13,
   },
-  tableWrap: {
+  tableContainer: {
     flex: 1,
     marginHorizontal: 16,
     marginTop: 8,
     marginBottom: 12,
+  },
+  tableVerticalWrap: {
+    flex: 1,
+  },
+  tableWrap: {
+    flexGrow: 0,
   },
   tableHeaderRow: {
     flexDirection: 'row',
@@ -590,6 +628,9 @@ const styles = StyleSheet.create({
   },
   staffCol: {
     minWidth: 220,
+  },
+  userCol: {
+    minWidth: 170,
   },
   tableRow: {
     flexDirection: 'row',
