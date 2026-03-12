@@ -191,6 +191,12 @@ function parsePortalHourLikeToMinutes(value: unknown): number {
   return Math.round(numeric * 60);
 }
 
+function roundPaidDays(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.round(numeric));
+}
+
 function countPaidHolidayCategoriesForMonth(
   monthKey: string,
   holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null
@@ -375,7 +381,7 @@ function parsePortalMonthlySummaryWorkbook(
         weeklyOffDays,
         absentDays,
         leaveDays,
-        paidDays: Math.max(0, presentDays + weeklyOffDays - absentDays),
+        paidDays: roundPaidDays(Math.max(0, presentDays + weeklyOffDays - absentDays)),
         lateHoursText: lateMinutes > 0 ? minutesToText(lateMinutes) : '',
         lateMinutes,
         workHoursText: workMinutes > 0 ? minutesToText(workMinutes) : '',
@@ -1096,6 +1102,10 @@ export default function HRScreen() {
       if (!pulledRows.length) {
         throw new Error('No valid attendance rows were found in portal report output.');
       }
+      pulledRows = pulledRows.map((row) => ({
+        ...row,
+        paidDays: roundPaidDays(row?.paidDays),
+      }));
 
       const parsed: ReturnType<typeof parseFingerprintAttendanceWorkbook> = {
         monthKey: pulledMonthKey,
@@ -1794,7 +1804,7 @@ export default function HRScreen() {
                         <Text style={styles.tableCell}>{row.leaveDays}</Text>
                         <Text style={styles.tableCell}>{attendanceUnpaidLeaveByRowId.get(row.id) || 0}</Text>
                         <Text style={styles.tableCell}>{row.absentDays}</Text>
-                        <Text style={styles.tableCell}>{row.paidDays}</Text>
+                        <Text style={styles.tableCell}>{roundPaidDays(row.paidDays)}</Text>
                         <Text style={styles.tableCell}>{row.lateHoursText || '-'}</Text>
                         <Text style={styles.tableCell}>{row.workHoursText || '-'}</Text>
                         <Text style={styles.tableCell}>{holidayMercHours}</Text>
