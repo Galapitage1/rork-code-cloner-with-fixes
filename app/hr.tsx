@@ -265,6 +265,155 @@ function splitHolidayMinutesByCategory(
   return { holidayMercMinutes, holidayPublicMinutes };
 }
 
+function normalizeEmployeeCodeKey(input: unknown): string {
+  const raw = String(input ?? '').trim();
+  if (!raw) return '';
+  const digitsOnly = raw.replace(/\D+/g, '');
+  if (!digitsOnly) return raw.toLowerCase();
+  return digitsOnly.replace(/^0+/, '') || '0';
+}
+
+function parseInOutDateToIso(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  let m = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3]);
+    if (!dd || !mm || !yyyy) return null;
+    return `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  }
+  m = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yy = Number(m[3]);
+  if (!dd || !mm || Number.isNaN(yy)) return null;
+  const yyyy = 2000 + yy;
+  return `${String(yyyy)}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+
+function parseInOutTimeToMinutes(value: unknown): number | null {
+  const raw = String(value ?? '').trim();
+  if (!raw || /^na$/i.test(raw)) return null;
+  const m = raw.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const ss = Number(m[3] || 0);
+  if (Number.isNaN(hh) || Number.isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm + Math.round(ss / 60);
+}
+
+function buildPaidHolidayDateCategoryMap(
+  monthKey: string,
+  holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null
+): Map<string, 'merc' | 'public'> {
+  const map = new Map<string, 'merc' | 'public'>();
+  for (const holiday of holidayCalendarSettings?.holidays || []) {
+    if (!holiday || holiday.getPaid !== true) continue;
+    const dateIso = String(holiday.date || '').trim();
+    if (!dateIso || !dateIso.startsWith(`${monthKey}-`)) continue;
+    const times = Number(holiday.times);
+    if (Math.abs(times - 1.5) <= 0.0001) {
+      map.set(dateIso, 'merc');
+      continue;
+    }
+    if (Math.abs(times - 2) <= 0.0001) {
+      map.set(dateIso, 'public');
+    }
+  }
+  return map;
+}
+
+function applyHolidayMinutesFromInOutWorkbook(
+  rows: any[],
+  inOutWorkbook: any,
+  XLSX: any,
+  monthKey: string,
+  holidayCalendarSettings?: { holidays?: Array<{ date?: string; getPaid?: boolean; times?: number }> } | null
+): { rows: any[]; matchedEmployees: number } {
+  const holidayCategoryByDate = buildPaidHolidayDateCategoryMap(monthKey, holidayCalendarSettings);
+  if (!holidayCategoryByDate.size) return { rows, matchedEmployees: 0 };
+
+  let inOutRows: any[][] = [];
+  for (const sheetName of inOutWorkbook?.SheetNames || []) {
+    const sheet = inOutWorkbook?.Sheets?.[sheetName];
+    if (!sheet) continue;
+    const parsed = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+    if (!parsed.length) continue;
+    const header = (parsed[0] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
+    const hasEmp = header.includes(normalizeLooseText('Emp Code'));
+    const hasDate = header.includes(normalizeLooseText('Access Date'));
+    const hasIn = header.includes(normalizeLooseText('First_In_time'));
+    const hasOut = header.includes(normalizeLooseText('Last_Out_time'));
+    if (hasEmp && hasDate && hasIn && hasOut) {
+      inOutRows = parsed;
+      break;
+    }
+  }
+  if (!inOutRows.length) return { rows, matchedEmployees: 0 };
+
+  const header = (inOutRows[0] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
+  const empIdx = header.findIndex((value) => value === normalizeLooseText('Emp Code'));
+  const dateIdx = header.findIndex((value) => value === normalizeLooseText('Access Date (dd-mm-yy)') || value === normalizeLooseText('Access Date'));
+  const inIdx = header.findIndex((value) => value === normalizeLooseText('First_In_time (hh:mm)') || value === normalizeLooseText('First_In_time'));
+  const outIdx = header.findIndex((value) => value === normalizeLooseText('Last_Out_time (hh:mm)') || value === normalizeLooseText('Last_Out_time'));
+  if (empIdx < 0 || dateIdx < 0 || inIdx < 0 || outIdx < 0) return { rows, matchedEmployees: 0 };
+
+  const holidayMinutesByEmployee = new Map<string, { merc: number; public: number }>();
+  for (const row of inOutRows.slice(1)) {
+    const codeKey = normalizeEmployeeCodeKey(row[empIdx]);
+    if (!codeKey) continue;
+    const dateIso = parseInOutDateToIso(row[dateIdx]);
+    if (!dateIso) continue;
+    const category = holidayCategoryByDate.get(dateIso);
+    if (!category) continue;
+    const inMinutes = parseInOutTimeToMinutes(row[inIdx]);
+    const outMinutes = parseInOutTimeToMinutes(row[outIdx]);
+    if (inMinutes === null || outMinutes === null) continue;
+    let duration = outMinutes - inMinutes;
+    if (duration < 0) duration += 24 * 60;
+    if (duration <= 0) continue;
+
+    const current = holidayMinutesByEmployee.get(codeKey) || { merc: 0, public: 0 };
+    if (category === 'merc') current.merc += duration;
+    else current.public += duration;
+    holidayMinutesByEmployee.set(codeKey, current);
+  }
+
+  let matchedEmployees = 0;
+  const updatedRows = rows.map((row) => {
+    const codeKey = normalizeEmployeeCodeKey(row?.employeeCode);
+    if (!codeKey) return row;
+    const holiday = holidayMinutesByEmployee.get(codeKey);
+    if (!holiday) return row;
+
+    matchedEmployees += 1;
+    const holidayMercMinutes = Math.max(0, Math.round(holiday.merc || 0));
+    const holidayPublicMinutes = Math.max(0, Math.round(holiday.public || 0));
+    const holidaysMinutes = holidayMercMinutes + holidayPublicMinutes;
+    const previousHolidayTotal = Math.max(0, Number(row?.holidayMercMinutes || 0) + Number(row?.holidayPublicMinutes || 0));
+    const overtimeBase = Math.max(0, Number(row?.overtimeMinutes || 0) + previousHolidayTotal);
+    const overtimeMinutes = Math.max(0, overtimeBase - holidaysMinutes);
+
+    return {
+      ...row,
+      holidayMercMinutes,
+      holidayMercText: holidayMercMinutes > 0 ? minutesToText(holidayMercMinutes) : '',
+      holidayPublicMinutes,
+      holidayPublicText: holidayPublicMinutes > 0 ? minutesToText(holidayPublicMinutes) : '',
+      holidaysMinutes,
+      holidaysText: holidaysMinutes > 0 ? minutesToText(holidaysMinutes) : '',
+      overtimeMinutes,
+      overtimeText: overtimeMinutes > 0 ? minutesToText(overtimeMinutes) : '',
+    };
+  });
+
+  return { rows: updatedRows, matchedEmployees };
+}
+
 function parsePortalMonthlySummaryWorkbook(
   workbook: any,
   XLSX: any,
@@ -1130,6 +1279,26 @@ export default function HRScreen() {
       if (!pulledRows.length) {
         throw new Error('No valid attendance rows were found in portal report output.');
       }
+
+      if (typeof data.inOutReportBase64 === 'string' && data.inOutReportBase64.trim()) {
+        try {
+          const inOutBytes = decodeBase64ToUint8Array(data.inOutReportBase64);
+          const inOutWorkbook = XLSX.read(inOutBytes, { type: 'array' });
+          const applied = applyHolidayMinutesFromInOutWorkbook(
+            pulledRows,
+            inOutWorkbook,
+            XLSX,
+            pulledMonthKey,
+            holidayCalendarSettings
+          );
+          if (applied.matchedEmployees > 0) {
+            pulledRows = applied.rows;
+          }
+        } catch (inOutError) {
+          console.warn('[HR] Failed to apply in/out holiday split:', inOutError);
+        }
+      }
+
       pulledRows = pulledRows.map((row) => ({
         ...row,
         paidDays: roundPaidDays(row?.paidDays),
