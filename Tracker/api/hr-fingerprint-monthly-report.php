@@ -305,6 +305,7 @@ function pull_report_once($payload) {
   $monthlyReportPath = trim((string)($payload['monthlyReportPath'] ?? 'NewMonthly.aspx'));
   if ($monthlyReportPath === '') $monthlyReportPath = 'NewMonthly.aspx';
   $monthKey = normalize_month_key($payload['monthKey'] ?? '');
+  $forceExport = trim((string)($payload['forceExport'] ?? ''));
   $defaultRange = month_key_to_date_range($monthKey);
   $fromDate = trim((string)($payload['fromDate'] ?? '')) ?: $defaultRange['fromDate'];
   $toDate = trim((string)($payload['toDate'] ?? '')) ?: $defaultRange['toDate'];
@@ -437,6 +438,8 @@ function pull_report_once($payload) {
     $rows = parse_attendance_rows_from_report_html($reportHtml, basename(parse_url($monthlyUrl, PHP_URL_PATH) ?: 'NewMonthly.aspx'));
     $selectedExport = 'showreport-html';
     $exportCandidatesTried = [];
+    $inOutReportBody = null;
+    $inOutReportContentType = null;
     if (empty($rows)) {
       $monthlyPage2 = $request($monthlyUrl);
       $hiddenMonthly2 = extract_hidden_inputs($monthlyPage2['body']);
@@ -471,6 +474,24 @@ function pull_report_once($payload) {
           'buttonValue' => 'Attendance',
         ],
         [
+          'label' => 'monthly-inout',
+          'daily' => 'MonthlyPunhingreport',
+          'buttonName' => 'ctl00$MainContent$Button11',
+          'buttonValue' => 'Monthly In-Out Report',
+        ],
+        [
+          'label' => 'monthly-inout-break',
+          'daily' => 'RdMonthlyInOutwithBreak',
+          'buttonName' => 'ctl00$MainContent$Button12',
+          'buttonValue' => 'Monthly In-Out with Break',
+        ],
+        [
+          'label' => 'inout-excel',
+          'daily' => 'RadioButton2',
+          'buttonName' => 'ctl00$MainContent$Button15',
+          'buttonValue' => 'In_OUT IN .Excel Format',
+        ],
+        [
           'label' => 'monthly-summary',
           'daily' => 'MonthlySummaryDetails',
           'buttonName' => 'ctl00$MainContent$Button10',
@@ -479,7 +500,11 @@ function pull_report_once($payload) {
       ];
 
       $best = null;
+      $preferredMain = null;
       foreach ($exportCandidates as $candidate) {
+        if ($forceExport !== '' && strcasecmp($forceExport, (string)$candidate['label']) !== 0) {
+          continue;
+        }
         $post = $commonPost;
         $post['ctl00$MainContent$Daily'] = $candidate['daily'];
         $post[$candidate['buttonName']] = $candidate['buttonValue'];
@@ -498,6 +523,10 @@ function pull_report_once($payload) {
         $candidateRows = parse_attendance_rows_from_report_html($candidateBody, basename(parse_url($monthlyUrl, PHP_URL_PATH) ?: 'NewMonthly.aspx'));
         $contentTypeLower = strtolower(trim((string)$candidateResponse['contentType']));
         $isExcelLike = strpos($contentTypeLower, 'application/vnd.ms-excel') !== false || strpos($contentTypeLower, 'application/octet-stream') !== false;
+        if ($candidate['label'] === 'inout-excel' && !contains_viewstate_mac_error($candidateBody) && !looks_like_login_page($candidateBody) && strlen((string)$candidateBody) > 0) {
+          $inOutReportBody = $candidateBody;
+          $inOutReportContentType = $candidateResponse['contentType'];
+        }
         $candidateScore = ($isExcelLike ? 1000 : 0) + score_export_body_quality($candidateBody, $candidateResponse['contentType']) + (count($candidateRows) > 0 ? 25 : 0);
         $exportCandidatesTried[] = [
           'label' => $candidate['label'],
@@ -515,13 +544,23 @@ function pull_report_once($payload) {
             'contentType' => $candidateResponse['contentType'],
           ];
         }
+        if ($forceExport === '' && $candidate['label'] === 'monthly-summary' && strlen((string)$candidateBody) > 0) {
+          $preferredMain = [
+            'label' => $candidate['label'],
+            'score' => $candidateScore,
+            'rows' => $candidateRows,
+            'body' => $candidateBody,
+            'contentType' => $candidateResponse['contentType'],
+          ];
+        }
       }
 
-      if ($best !== null) {
-        $selectedExport = $best['label'];
-        $rows = $best['rows'];
-        $rawReportBody = $best['body'];
-        $rawReportContentType = $best['contentType'];
+      $selected = $preferredMain !== null ? $preferredMain : $best;
+      if ($selected !== null) {
+        $selectedExport = $selected['label'];
+        $rows = $selected['rows'];
+        $rawReportBody = $selected['body'];
+        $rawReportContentType = $selected['contentType'];
       }
     }
 
@@ -550,6 +589,8 @@ function pull_report_once($payload) {
       ],
       'reportBase64' => base64_encode((string)$rawReportBody),
       'reportContentType' => $rawReportContentType,
+      'inOutReportBase64' => $inOutReportBody !== null ? base64_encode((string)$inOutReportBody) : null,
+      'inOutReportContentType' => $inOutReportContentType,
     ];
   } finally {
     curl_close($ch);
@@ -581,6 +622,8 @@ for ($attempt = 1; $attempt <= 3; $attempt++) {
       'rows' => $result['rows'],
       'reportBase64' => $result['reportBase64'] ?? null,
       'reportContentType' => $result['reportContentType'] ?? null,
+      'inOutReportBase64' => $result['inOutReportBase64'] ?? null,
+      'inOutReportContentType' => $result['inOutReportContentType'] ?? null,
       'diagnostics' => [
         'attempt' => $attempt,
         'monthlyUrl' => $result['diagnostics']['monthlyUrl'] ?? null,
