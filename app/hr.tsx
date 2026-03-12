@@ -335,6 +335,13 @@ function applyHolidayMinutesFromInOutWorkbook(
 ): { rows: any[]; matchedEmployees: number } {
   const holidayCategoryByDate = buildPaidHolidayDateCategoryMap(monthKey, holidayCalendarSettings);
   if (!holidayCategoryByDate.size) return { rows, matchedEmployees: 0 };
+  const findHeaderIndex = (header: string[], aliases: string[]): number => {
+    const normalizedAliases = aliases.map((alias) => normalizeLooseText(alias));
+    let idx = header.findIndex((value) => normalizedAliases.includes(value));
+    if (idx >= 0) return idx;
+    idx = header.findIndex((value) => normalizedAliases.some((alias) => value.includes(alias)));
+    return idx;
+  };
 
   let inOutRows: any[][] = [];
   for (const sheetName of inOutWorkbook?.SheetNames || []) {
@@ -343,10 +350,10 @@ function applyHolidayMinutesFromInOutWorkbook(
     const parsed = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
     if (!parsed.length) continue;
     const header = (parsed[0] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
-    const hasEmp = header.includes(normalizeLooseText('Emp Code'));
-    const hasDate = header.includes(normalizeLooseText('Access Date'));
-    const hasIn = header.includes(normalizeLooseText('First_In_time'));
-    const hasOut = header.includes(normalizeLooseText('Last_Out_time'));
+    const hasEmp = findHeaderIndex(header, ['Emp Code', 'EmpCode']) >= 0;
+    const hasDate = findHeaderIndex(header, ['Access Date (dd-mm-yy)', 'Access Date']) >= 0;
+    const hasIn = findHeaderIndex(header, ['First_In_time (hh:mm)', 'First_In_time']) >= 0;
+    const hasOut = findHeaderIndex(header, ['Last_Out_time (hh:mm)', 'Last_Out_time']) >= 0;
     if (hasEmp && hasDate && hasIn && hasOut) {
       inOutRows = parsed;
       break;
@@ -355,10 +362,10 @@ function applyHolidayMinutesFromInOutWorkbook(
   if (!inOutRows.length) return { rows, matchedEmployees: 0 };
 
   const header = (inOutRows[0] || []).map((cell) => normalizeLooseText(String(cell ?? '')));
-  const empIdx = header.findIndex((value) => value === normalizeLooseText('Emp Code'));
-  const dateIdx = header.findIndex((value) => value === normalizeLooseText('Access Date (dd-mm-yy)') || value === normalizeLooseText('Access Date'));
-  const inIdx = header.findIndex((value) => value === normalizeLooseText('First_In_time (hh:mm)') || value === normalizeLooseText('First_In_time'));
-  const outIdx = header.findIndex((value) => value === normalizeLooseText('Last_Out_time (hh:mm)') || value === normalizeLooseText('Last_Out_time'));
+  const empIdx = findHeaderIndex(header, ['Emp Code', 'EmpCode']);
+  const dateIdx = findHeaderIndex(header, ['Access Date (dd-mm-yy)', 'Access Date']);
+  const inIdx = findHeaderIndex(header, ['First_In_time (hh:mm)', 'First_In_time']);
+  const outIdx = findHeaderIndex(header, ['Last_Out_time (hh:mm)', 'Last_Out_time']);
   if (empIdx < 0 || dateIdx < 0 || inIdx < 0 || outIdx < 0) return { rows, matchedEmployees: 0 };
 
   const holidayMinutesByEmployee = new Map<string, { merc: number; public: number }>();
