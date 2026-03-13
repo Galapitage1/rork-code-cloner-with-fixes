@@ -143,7 +143,7 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
 
     const remoteChanges = isFirstSync || options?.fetchOnly || shouldForceFullFetch
       ? await getFromServer<T>({ userId, dataType, minDays: effectiveMinDays, includeDeleted: shouldIncludeDeleted })
-      : await getDeltaFromServer<T>({ userId, dataType, since: deltaSince });
+      : await getDeltaFromServer<T>({ userId, dataType, since: deltaSince, includeDeleted: shouldIncludeDeleted });
     
     console.log(`syncData [${dataType}]: Fetched ${remoteChanges.length} items from server (includeDeleted: ${shouldIncludeDeleted}, minDays: ${effectiveMinDays || 'default'})`);
     

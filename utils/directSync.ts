@@ -239,7 +239,8 @@ export async function getDeltaFromServer<T extends { updatedAt?: number }>(
   try {
     const baseUrl = getBaseUrl();
     const since = options.since || 0;
-    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}&since=${since}`;
+    const includeDeletedParam = options.includeDeleted ? '&includeDeleted=true' : '';
+    const url = `${baseUrl}/Tracker/api/get.php?endpoint=${encodeURIComponent(options.dataType)}&since=${since}${includeDeletedParam}`;
     
     const response = await fetchWithRetry(url, {
       method: 'GET',
