@@ -431,7 +431,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(updated));
 
     try {
-      await syncData('leave_requests', updated, currentUser.id);
+      const synced = await syncData<LeaveRequest>('leave_requests', updated, currentUser.id);
+      const active = synced.filter((row) => !row.deleted);
+      setLeaveRequests(active);
+      await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(synced));
     } catch (error) {
       console.error('[LeaveContext] Failed to sync leave requests:', error);
     }
@@ -475,7 +478,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(updated));
 
     try {
-      await syncData('leave_requests', updated, currentUser.id);
+      const synced = await syncData<LeaveRequest>('leave_requests', updated, currentUser.id);
+      const active = synced.filter((row) => !row.deleted);
+      setLeaveRequests(active);
+      await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(synced));
     } catch (error) {
       console.error('[LeaveContext] Failed to sync leave requests:', error);
     }
@@ -491,7 +497,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(updated));
 
     try {
-      await syncData('leave_requests', updated, currentUser.id);
+      const synced = await syncData<LeaveRequest>('leave_requests', updated, currentUser.id);
+      const active = synced.filter((row) => !row.deleted);
+      setLeaveRequests(active);
+      await AsyncStorage.setItem(LEAVE_REQUESTS_KEY, JSON.stringify(synced));
     } catch (error) {
       console.error('[LeaveContext] Failed to sync leave requests:', error);
     }
@@ -527,7 +536,16 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(LEAVE_BALANCE_SECURITY_KEY, JSON.stringify(next));
 
     try {
-      await syncData('leave_balance_security_settings', [next], currentUser.id);
+      const syncedRows = await syncData<LeaveBalanceSecuritySettings>('leave_balance_security_settings', [next], currentUser.id);
+      const activeSecurity = [...syncedRows]
+        .filter((row) => !row.deleted)
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
+      setLeaveBalanceSecurity(activeSecurity);
+      if (activeSecurity) {
+        await AsyncStorage.setItem(LEAVE_BALANCE_SECURITY_KEY, JSON.stringify(activeSecurity));
+      } else {
+        await AsyncStorage.removeItem(LEAVE_BALANCE_SECURITY_KEY);
+      }
     } catch (error) {
       console.error('[LeaveContext] Failed to sync leave balance security:', error);
     }
@@ -593,7 +611,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(STAFF_LEAVE_BALANCES_KEY, JSON.stringify(allRows));
 
     try {
-      await syncData('staff_leave_balances', allRows, currentUser.id);
+      const synced = await syncData<StaffLeaveBalance>('staff_leave_balances', allRows, currentUser.id);
+      const active = synced.filter((row) => !row.deleted);
+      setStaffLeaveBalances(active);
+      await AsyncStorage.setItem(STAFF_LEAVE_BALANCES_KEY, JSON.stringify(synced));
     } catch (error) {
       console.error('[LeaveContext] Failed to sync staff leave balances:', error);
     }
@@ -609,7 +630,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem(STAFF_LEAVE_BALANCES_KEY, JSON.stringify(allRows));
 
     try {
-      await syncData('staff_leave_balances', allRows, currentUser.id);
+      const synced = await syncData<StaffLeaveBalance>('staff_leave_balances', allRows, currentUser.id);
+      const active = synced.filter((row) => !row.deleted);
+      setStaffLeaveBalances(active);
+      await AsyncStorage.setItem(STAFF_LEAVE_BALANCES_KEY, JSON.stringify(synced));
     } catch (error) {
       console.error('[LeaveContext] Failed to sync staff leave balances:', error);
     }

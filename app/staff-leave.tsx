@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { ArrowLeft, Check, ChevronDown, KeyRound, Pencil, ShieldCheck, X } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -65,12 +66,14 @@ export default function StaffLeaveScreen() {
     leaveRequests,
     staffLeaveBalances,
     hasLeaveBalancePassword,
+    syncAll: syncLeaveData,
     verifyLeaveBalancePassword,
     setLeaveBalancePassword,
     upsertStaffLeaveBalance,
   } = useLeave();
 
   const [yearText, setYearText] = useState(String(new Date().getFullYear()));
+  const [pageSearchText, setPageSearchText] = useState('');
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -81,6 +84,7 @@ export default function StaffLeaveScreen() {
   const [editorLeaveTypeId, setEditorLeaveTypeId] = useState('');
   const [editorTotalDays, setEditorTotalDays] = useState('');
   const [showStaffPicker, setShowStaffPicker] = useState(false);
+  const [staffSearchText, setStaffSearchText] = useState('');
   const [showLeaveTypePicker, setShowLeaveTypePicker] = useState(false);
 
   const canManage = isAdmin || isSuperAdmin;
@@ -99,9 +103,12 @@ export default function StaffLeaveScreen() {
     [staffMembers]
   );
 
-  useEffect(() => {
-    syncHRData(true);
-  }, [syncHRData]);
+  useFocusEffect(
+    useCallback(() => {
+      syncHRData(true);
+      syncLeaveData();
+    }, [syncHRData, syncLeaveData])
+  );
 
   useEffect(() => {
     if (!editorStaffId) return;
@@ -168,6 +175,15 @@ export default function StaffLeaveScreen() {
       return { staff, cells };
     });
   }, [activeStaff, leaveTypes, balancesByKey, usedByKey]);
+  const filteredMatrixRows = useMemo(() => {
+    const query = pageSearchText.trim().toLowerCase();
+    if (!query) return matrixRows;
+    return matrixRows.filter((row) => {
+      const fullName = String(row.staff.fullName || '').toLowerCase();
+      const userName = String(row.staff.userName || '').toLowerCase();
+      return fullName.includes(query) || userName.includes(query);
+    });
+  }, [matrixRows, pageSearchText]);
 
   const openEditor = (params?: { staffId?: string; leaveTypeId?: string; totalDays?: number }) => {
     if (!isUnlocked) return;
@@ -181,6 +197,21 @@ export default function StaffLeaveScreen() {
     () => activeStaff.find((row) => row.id === editorStaffId),
     [activeStaff, editorStaffId]
   );
+  const filteredEditorStaff = useMemo(() => {
+    const query = staffSearchText.trim().toLowerCase();
+    if (!query) return activeStaff;
+    return activeStaff.filter((row) => {
+      const fullName = String(row.fullName || '').toLowerCase();
+      const userName = String(row.userName || '').toLowerCase();
+      return fullName.includes(query) || userName.includes(query);
+    });
+  }, [activeStaff, staffSearchText]);
+
+  useEffect(() => {
+    if (!showStaffPicker) {
+      setStaffSearchText('');
+    }
+  }, [showStaffPicker]);
 
   const unlock = async () => {
     if (!canManage) return;
@@ -291,6 +322,17 @@ export default function StaffLeaveScreen() {
             <Text style={styles.addButtonText}>Add / Edit Leave</Text>
           </TouchableOpacity>
         </View>
+        <View style={styles.searchRow}>
+          <TextInput
+            style={styles.pageSearchInput}
+            value={pageSearchText}
+            onChangeText={setPageSearchText}
+            placeholder="Search staff by username or name"
+            placeholderTextColor={Colors.light.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
 
         {!isUnlocked ? (
           <View style={styles.centeredCard}>
@@ -351,10 +393,12 @@ export default function StaffLeaveScreen() {
                     ))}
                   </View>
 
-                  {matrixRows.length === 0 ? (
-                    <Text style={styles.emptyText}>No active staff found in HR module.</Text>
+                  {filteredMatrixRows.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      {pageSearchText.trim() ? 'No staff found for your search.' : 'No active staff found in HR module.'}
+                    </Text>
                   ) : (
-                    matrixRows.map((row) => (
+                    filteredMatrixRows.map((row) => (
                       <View key={row.staff.id} style={styles.tableRow}>
                         <Text style={[styles.cell, styles.staffCol]}>{row.staff.fullName}</Text>
                         <Text style={[styles.cell, styles.userCol]}>{row.staff.userName || '-'}</Text>
@@ -435,20 +479,36 @@ export default function StaffLeaveScreen() {
         <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setShowStaffPicker(false)}>
           <View style={styles.pickerCard}>
             <Text style={styles.pickerTitle}>Select Staff</Text>
+            <TextInput
+              style={styles.pickerSearchInput}
+              value={staffSearchText}
+              onChangeText={setStaffSearchText}
+              placeholder="Search by username or name"
+              placeholderTextColor={Colors.light.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
             <ScrollView style={styles.pickerList}>
-              {activeStaff.map((staff) => (
-                <TouchableOpacity
-                  key={staff.id}
-                  style={styles.pickerItem}
-                  onPress={() => {
-                    setEditorStaffId(staff.id);
-                    setShowStaffPicker(false);
-                  }}
-                >
-                  <Text style={styles.pickerText}>{staff.fullName}</Text>
-                  {editorStaffId === staff.id && <Check size={16} color={Colors.light.tint} />}
-                </TouchableOpacity>
-              ))}
+              {filteredEditorStaff.length === 0 ? (
+                <Text style={styles.pickerEmptyText}>No staff found.</Text>
+              ) : (
+                filteredEditorStaff.map((staff) => (
+                  <TouchableOpacity
+                    key={staff.id}
+                    style={styles.pickerItem}
+                    onPress={() => {
+                      setEditorStaffId(staff.id);
+                      setShowStaffPicker(false);
+                    }}
+                  >
+                    <View style={styles.pickerTextWrap}>
+                      <Text style={styles.pickerText}>{staff.fullName}</Text>
+                      <Text style={styles.pickerSubText}>{staff.userName || '-'}</Text>
+                    </View>
+                    {editorStaffId === staff.id && <Check size={16} color={Colors.light.tint} />}
+                  </TouchableOpacity>
+                ))
+              )}
             </ScrollView>
           </View>
         </TouchableOpacity>
@@ -516,6 +576,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 8,
+  },
+  searchRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  pageSearchInput: {
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    color: Colors.light.text,
+    fontSize: 14,
   },
   yearLabel: {
     fontSize: 13,
@@ -764,6 +838,16 @@ const styles = StyleSheet.create({
   pickerList: {
     maxHeight: 340,
   },
+  pickerSearchInput: {
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
   pickerTitle: {
     textAlign: 'center',
     color: Colors.light.text,
@@ -778,8 +862,22 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
   },
+  pickerTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
   pickerText: {
     color: Colors.light.text,
     fontSize: 14,
+  },
+  pickerSubText: {
+    color: Colors.light.muted,
+    fontSize: 12,
+  },
+  pickerEmptyText: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: Colors.light.muted,
+    fontSize: 13,
   },
 });

@@ -1,30 +1,33 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { useState, useMemo } from 'react';
-import { Calendar, Plus, Check, X, Clock, ChevronDown, Filter, ArrowLeft, KeyRound, ShieldCheck, Pencil, Trash2 } from 'lucide-react-native';
+import { useCallback, useEffect, useState, useMemo } from 'react';
+import { Calendar, Plus, Check, X, Clock, ChevronDown, ArrowLeft, KeyRound, ShieldCheck, Pencil, Trash2 } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLeave } from '@/contexts/LeaveContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useHR } from '@/contexts/HRContext';
 import { CalendarModal } from '@/components/CalendarModal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import Colors from '@/constants/colors';
-import { LeaveRequest, LeaveRequestStatus } from '@/types';
+import { LeaveRequest } from '@/types';
 
-type FilterStatus = 'all' | 'pending' | 'approved' | 'rejected';
+type FilterStatus = 'pending' | 'approved' | 'rejected';
 
 export default function LeaveScreen() {
   const router = useRouter();
   const { currentUser, isSuperAdmin, isAdmin } = useAuth();
-  const { staffMembers } = useHR();
+  const { staffMembers, syncAll: syncHRData } = useHR();
   const { 
     leaveTypes, 
     leaveRequests, 
     staffLeaveBalances,
     hasLeaveBalancePassword,
     isLoading, 
+    syncAll: syncLeaveData,
     addLeaveRequest, 
     updateLeaveRequestStatus,
+    deleteLeaveRequest,
     setLeaveBalancePassword,
     verifyLeaveBalancePassword,
     upsertStaffLeaveBalance,
@@ -36,6 +39,7 @@ export default function LeaveScreen() {
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState('');
   const [showStaffPicker, setShowStaffPicker] = useState(false);
+  const [staffPickerSearch, setStaffPickerSearch] = useState('');
   const [selectedLeaveType, setSelectedLeaveType] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -43,9 +47,10 @@ export default function LeaveScreen() {
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
   const [showLeaveTypePicker, setShowLeaveTypePicker] = useState(false);
+  const [showDayPortionPicker, setShowDayPortionPicker] = useState(false);
+  const [selectedDayPortion, setSelectedDayPortion] = useState<'full' | 'half'>('full');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
-  const [showFilterPicker, setShowFilterPicker] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('pending');
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmState] = useState<{
     title: string;
@@ -77,11 +82,101 @@ export default function LeaveScreen() {
       .sort((a, b) => a.fullName.localeCompare(b.fullName)),
     [staffMembers]
   );
+  const staffNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    staffMembers
+      .filter((row) => !row.deleted)
+      .forEach((row) => {
+        if (row.id) map.set(row.id, row.fullName || row.userName || row.id);
+      });
+    return map;
+  }, [staffMembers]);
 
   const selectedRequestStaff = useMemo(
     () => activeStaffMembers.find((row) => row.id === selectedStaffId),
     [activeStaffMembers, selectedStaffId]
   );
+  const filteredRequestPickerStaff = useMemo(() => {
+    const query = staffPickerSearch.trim().toLowerCase();
+    if (!query) return activeStaffMembers;
+    return activeStaffMembers.filter((row) => {
+      const userName = String(row.userName || '').toLowerCase();
+      const fullName = String(row.fullName || '').toLowerCase();
+      return userName.includes(query) || fullName.includes(query);
+    });
+  }, [activeStaffMembers, staffPickerSearch]);
+
+  const selectedDayPortionValue = useMemo(() => {
+    const isSingleDay = !!startDate && !!endDate && startDate === endDate;
+    if (!isSingleDay) return 1;
+    return selectedDayPortion === 'half' ? 0.5 : 1;
+  }, [startDate, endDate, selectedDayPortion]);
+
+  const latestLeaveBalanceByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    staffLeaveBalances
+      .filter((row) => !row.deleted)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .forEach((row) => {
+        const key = `${row.staffId}__${row.leaveTypeId}__${row.year}`;
+        if (!map.has(key)) {
+          map.set(key, Number(row.totalDays) || 0);
+        }
+      });
+    return map;
+  }, [staffLeaveBalances]);
+
+  const getWeightedRequestDaysByYear = (requestLike: { startDate: string; endDate: string; dayPortion?: number }) => {
+    const start = new Date(requestLike.startDate);
+    const end = new Date(requestLike.endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return {} as Record<number, number>;
+    const dayPortion =
+      requestLike.startDate === requestLike.endDate && requestLike.dayPortion === 0.5 ? 0.5 : 1;
+    const out: Record<number, number> = {};
+    const cursor = new Date(start.getTime());
+    while (cursor <= end) {
+      const year = cursor.getFullYear();
+      out[year] = (out[year] || 0) + dayPortion;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return out;
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      syncHRData(true);
+      syncLeaveData();
+    }, [syncHRData, syncLeaveData])
+  );
+
+  useEffect(() => {
+    if (!selectedStaffId) return;
+    const stillValid = activeStaffMembers.some((row) => row.id === selectedStaffId);
+    if (!stillValid) {
+      setSelectedStaffId(activeStaffMembers[0]?.id || '');
+    }
+  }, [activeStaffMembers, selectedStaffId]);
+
+  useEffect(() => {
+    if (!balanceStaffId) return;
+    const stillValid = activeStaffMembers.some((row) => row.id === balanceStaffId);
+    if (!stillValid) {
+      setBalanceStaffId(activeStaffMembers[0]?.id || '');
+    }
+  }, [activeStaffMembers, balanceStaffId]);
+
+  useEffect(() => {
+    if (!startDate || !endDate) return;
+    if (startDate !== endDate && selectedDayPortion !== 'full') {
+      setSelectedDayPortion('full');
+    }
+  }, [startDate, endDate, selectedDayPortion]);
+
+  useEffect(() => {
+    if (!showStaffPicker) {
+      setStaffPickerSearch('');
+    }
+  }, [showStaffPicker]);
 
   const leaveAvailabilityPreview = useMemo(() => {
     if (!selectedStaffId || !selectedLeaveType || !startDate || !endDate) return null;
@@ -90,8 +185,9 @@ export default function LeaveScreen() {
       leaveTypeId: selectedLeaveType,
       startDate,
       endDate,
+      dayPortion: selectedDayPortionValue,
     });
-  }, [selectedStaffId, selectedLeaveType, startDate, endDate, checkLeaveAvailability]);
+  }, [selectedStaffId, selectedLeaveType, startDate, endDate, checkLeaveAvailability, selectedDayPortionValue]);
 
   const selectedBalanceYear = useMemo(() => {
     const parsed = parseInt(balanceYear, 10);
@@ -112,26 +208,113 @@ export default function LeaveScreen() {
     [staffLeaveBalances, selectedBalanceYear, getLeaveTypeById]
   );
 
-  const filteredRequests = useMemo(() => {
-    let requests = isSuperAdmin ? leaveRequests : leaveRequests.filter(r => r.createdBy === currentUser?.id);
-    
-    if (filterStatus !== 'all') {
-      requests = requests.filter(r => r.status === filterStatus);
-    }
-    
-    return requests.sort((a, b) => b.createdAt - a.createdAt);
-  }, [leaveRequests, isSuperAdmin, currentUser, filterStatus]);
-
-  const pendingCount = useMemo(() => {
-    const requests = isSuperAdmin ? leaveRequests : leaveRequests.filter(r => r.createdBy === currentUser?.id);
-    return requests.filter(r => r.status === 'pending').length;
+  const visibleRequests = useMemo(() => {
+    const scoped = isSuperAdmin ? leaveRequests : leaveRequests.filter((r) => r.createdBy === currentUser?.id);
+    return scoped.filter((r) => !r.deleted);
   }, [leaveRequests, isSuperAdmin, currentUser]);
+
+  const statusCounts = useMemo(() => {
+    return {
+      pending: visibleRequests.filter((r) => r.status === 'pending').length,
+      approved: visibleRequests.filter((r) => r.status === 'approved').length,
+      rejected: visibleRequests.filter((r) => r.status === 'rejected').length,
+    };
+  }, [visibleRequests]);
+
+  const filteredRequests = useMemo(() => {
+    return visibleRequests
+      .filter((r) => r.status === filterStatus)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [visibleRequests, filterStatus]);
+
+  const groupedRequests = useMemo(() => {
+    const monthMap = new Map<
+      string,
+      {
+        monthKey: string;
+        monthLabel: string;
+        sortValue: number;
+        staffMap: Map<
+          string,
+          {
+            staffKey: string;
+            staffName: string;
+            userName: string;
+            totalDays: number;
+            requests: LeaveRequest[];
+          }
+        >;
+      }
+    >();
+
+    filteredRequests.forEach((request) => {
+      const monthDate = new Date(request.startDate || request.createdAt || Date.now());
+      const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+      const monthLabel = monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const monthSortValue = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).getTime();
+      const staffLookup = activeStaffMembers.find((row) => row.id === request.staffId);
+      const staffName = staffLookup?.fullName || request.employeeName || 'Unknown Staff';
+      const userName = staffLookup?.userName || '-';
+      const staffKey = request.staffId || request.employeeName || request.id;
+      const requestDays = (() => {
+        const start = new Date(request.startDate);
+        const end = new Date(request.endDate);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+        const diffMs = Math.abs(end.getTime() - start.getTime());
+        const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24)) + 1;
+        if (request.startDate === request.endDate && request.dayPortion === 0.5) return 0.5;
+        return days;
+      })();
+
+      if (!monthMap.has(monthKey)) {
+        monthMap.set(monthKey, {
+          monthKey,
+          monthLabel,
+          sortValue: monthSortValue,
+          staffMap: new Map(),
+        });
+      }
+
+      const monthGroup = monthMap.get(monthKey)!;
+      if (!monthGroup.staffMap.has(staffKey)) {
+        monthGroup.staffMap.set(staffKey, {
+          staffKey,
+          staffName,
+          userName,
+          totalDays: 0,
+          requests: [],
+        });
+      }
+
+      const staffGroup = monthGroup.staffMap.get(staffKey)!;
+      staffGroup.requests.push(request);
+      staffGroup.totalDays += Number(requestDays) || 0;
+    });
+
+    return Array.from(monthMap.values())
+      .sort((a, b) => b.sortValue - a.sortValue)
+      .map((monthGroup) => ({
+        monthKey: monthGroup.monthKey,
+        monthLabel: monthGroup.monthLabel,
+        staffGroups: Array.from(monthGroup.staffMap.values())
+          .map((staffGroup) => ({
+            ...staffGroup,
+            requests: staffGroup.requests.sort((a, b) => {
+              const aTime = new Date(a.startDate || a.createdAt).getTime();
+              const bTime = new Date(b.startDate || b.createdAt).getTime();
+              return bTime - aTime;
+            }),
+          }))
+          .sort((a, b) => a.staffName.localeCompare(b.staffName)),
+      }));
+  }, [filteredRequests, activeStaffMembers]);
 
   const resetForm = () => {
     setSelectedStaffId('');
     setSelectedLeaveType('');
     setStartDate('');
     setEndDate('');
+    setSelectedDayPortion('full');
     setReason('');
   };
 
@@ -169,6 +352,7 @@ export default function LeaveScreen() {
         leaveTypeId: selectedLeaveType,
         startDate,
         endDate,
+        dayPortion: selectedDayPortionValue,
         reason: reason.trim() || undefined,
       });
       Alert.alert('Success', 'Leave request submitted successfully');
@@ -205,6 +389,73 @@ export default function LeaveScreen() {
       const message = error instanceof Error && error.message ? error.message : 'Failed to update leave request';
       Alert.alert('Error', message);
     }
+  };
+
+  const handleDeleteRequestWithOptions = (request: LeaveRequest) => {
+    if (!isSuperAdmin) return;
+
+    const runDeleteOnly = async () => {
+      await deleteLeaveRequest(request.id);
+      Alert.alert('Deleted', 'Leave request deleted without giving back leave amount.');
+    };
+
+    const runDeleteAndGiveBack = async () => {
+      const staffId = String(request.staffId || '').trim();
+      if (!staffId) {
+        await deleteLeaveRequest(request.id);
+        Alert.alert('Deleted', 'Leave request deleted. Staff was not linked, so no leave amount was added back.');
+        return;
+      }
+      const staff = activeStaffMembers.find((row) => row.id === staffId);
+      const staffName = staff?.fullName || request.employeeName || 'Staff';
+      const byYear = getWeightedRequestDaysByYear(request);
+      const yearEntries = Object.entries(byYear).filter(([, days]) => Number(days) > 0);
+      for (const [yearText, days] of yearEntries) {
+        const year = Number(yearText);
+        const key = `${staffId}__${request.leaveTypeId}__${year}`;
+        const currentTotal = latestLeaveBalanceByKey.get(key) || 0;
+        await upsertStaffLeaveBalance({
+          staffId,
+          staffName,
+          leaveTypeId: request.leaveTypeId,
+          year,
+          totalDays: currentTotal + Number(days),
+        });
+      }
+      await deleteLeaveRequest(request.id);
+      Alert.alert('Deleted', 'Leave request deleted and leave amount added back.');
+    };
+
+    Alert.alert(
+      'Delete Leave Request',
+      'Delete this leave request?\n\nYes = add leave amount back to staff.\nNo = just delete without giving back.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'No (Just Delete)',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await runDeleteOnly();
+            } catch (error) {
+              const message = error instanceof Error && error.message ? error.message : 'Failed to delete leave request';
+              Alert.alert('Error', message);
+            }
+          },
+        },
+        {
+          text: 'Yes (Give Back)',
+          onPress: async () => {
+            try {
+              await runDeleteAndGiveBack();
+            } catch (error) {
+              const message = error instanceof Error && error.message ? error.message : 'Failed to delete leave request';
+              Alert.alert('Error', message);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const resetBalanceEditorForm = () => {
@@ -314,30 +565,13 @@ export default function LeaveScreen() {
     });
   };
 
-  const calculateDays = (start: string, end: string) => {
+  const calculateDays = (start: string, end: string, dayPortion?: number) => {
     const startDate = new Date(start);
     const endDate = new Date(end);
     const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    if (start === end && dayPortion === 0.5) return 0.5;
     return diffDays;
-  };
-
-  const getStatusColor = (status: LeaveRequestStatus) => {
-    switch (status) {
-      case 'pending': return '#F59E0B';
-      case 'approved': return '#10B981';
-      case 'rejected': return '#EF4444';
-      default: return Colors.light.muted;
-    }
-  };
-
-  const getStatusBgColor = (status: LeaveRequestStatus) => {
-    switch (status) {
-      case 'pending': return '#FEF3C7';
-      case 'approved': return '#D1FAE5';
-      case 'rejected': return '#FEE2E2';
-      default: return Colors.light.background;
-    }
   };
 
   if (isLoading) {
@@ -362,39 +596,45 @@ export default function LeaveScreen() {
           </View>
 
           <View style={styles.statsRow}>
-            <View style={[styles.statCard, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+            <TouchableOpacity
+              style={[
+                styles.statCard,
+                { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' },
+                filterStatus === 'pending' && styles.statCardActive,
+              ]}
+              onPress={() => setFilterStatus('pending')}
+            >
               <Clock size={20} color="#F59E0B" />
-              <Text style={[styles.statNumber, { color: '#F59E0B' }]}>{pendingCount}</Text>
+              <Text style={[styles.statNumber, { color: '#F59E0B' }]}>{statusCounts.pending}</Text>
               <Text style={styles.statLabel}>Pending</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: '#D1FAE5', borderColor: '#10B981' }]}>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.statCard,
+                { backgroundColor: '#D1FAE5', borderColor: '#10B981' },
+                filterStatus === 'approved' && styles.statCardActive,
+              ]}
+              onPress={() => setFilterStatus('approved')}
+            >
               <Check size={20} color="#10B981" />
-              <Text style={[styles.statNumber, { color: '#10B981' }]}>
-                {filteredRequests.filter(r => r.status === 'approved').length}
-              </Text>
+              <Text style={[styles.statNumber, { color: '#10B981' }]}>{statusCounts.approved}</Text>
               <Text style={styles.statLabel}>Approved</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: '#FEE2E2', borderColor: '#EF4444' }]}>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.statCard,
+                { backgroundColor: '#FEE2E2', borderColor: '#EF4444' },
+                filterStatus === 'rejected' && styles.statCardActive,
+              ]}
+              onPress={() => setFilterStatus('rejected')}
+            >
               <X size={20} color="#EF4444" />
-              <Text style={[styles.statNumber, { color: '#EF4444' }]}>
-                {filteredRequests.filter(r => r.status === 'rejected').length}
-              </Text>
+              <Text style={[styles.statNumber, { color: '#EF4444' }]}>{statusCounts.rejected}</Text>
               <Text style={styles.statLabel}>Rejected</Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={styles.filterButton}
-              onPress={() => setShowFilterPicker(true)}
-            >
-              <Filter size={18} color={Colors.light.tint} />
-              <Text style={styles.filterButtonText}>
-                {filterStatus === 'all' ? 'All' : filterStatus.charAt(0).toUpperCase() + filterStatus.slice(1)}
-              </Text>
-              <ChevronDown size={16} color={Colors.light.tint} />
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.newRequestButton}
               onPress={() => {
@@ -405,6 +645,7 @@ export default function LeaveScreen() {
                 if (!selectedStaffId) {
                   setSelectedStaffId(activeStaffMembers[0].id);
                 }
+                setSelectedDayPortion('full');
                 setShowRequestModal(true);
               }}
             >
@@ -424,89 +665,101 @@ export default function LeaveScreen() {
           </View>
 
           <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-            {filteredRequests.length === 0 ? (
+            {groupedRequests.length === 0 ? (
               <View style={styles.emptyState}>
                 <Calendar size={48} color={Colors.light.muted} />
                 <Text style={styles.emptyStateText}>No leave requests found</Text>
-                <Text style={styles.emptyStateSubtext}>
-                  {filterStatus !== 'all' ? 'Try changing the filter' : 'Tap "New Request" to submit one'}
-                </Text>
+                <Text style={styles.emptyStateSubtext}>Tap "New Request" to submit one</Text>
               </View>
             ) : (
-              filteredRequests.map((request) => {
-                const leaveType = getLeaveTypeById(request.leaveTypeId);
-                return (
-                  <View key={request.id} style={styles.requestCard}>
-                    <View style={styles.requestHeader}>
-                      <View style={styles.requestInfo}>
-                        <Text style={styles.employeeName}>{request.employeeName}</Text>
-                        <View style={[styles.leaveTypeBadge, { backgroundColor: leaveType?.color || Colors.light.muted }]}>
-                          <Text style={styles.leaveTypeBadgeText}>{leaveType?.name || 'Unknown'}</Text>
+              groupedRequests.map((monthGroup) => (
+                <View key={monthGroup.monthKey} style={styles.monthBlock}>
+                  <Text style={styles.monthTitle}>{monthGroup.monthLabel}</Text>
+
+                  {monthGroup.staffGroups.map((staffGroup) => (
+                    <View key={`${monthGroup.monthKey}-${staffGroup.staffKey}`} style={styles.staffGroupCard}>
+                      <View style={styles.staffGroupHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.employeeName}>{staffGroup.staffName}</Text>
+                          <Text style={styles.staffSubMeta}>
+                            {staffGroup.userName || '-'} • {staffGroup.requests.length} request(s) • {staffGroup.totalDays.toFixed(1)} day(s)
+                          </Text>
                         </View>
                       </View>
-                      <View style={[styles.statusBadge, { backgroundColor: getStatusBgColor(request.status) }]}>
-                        <Text style={[styles.statusText, { color: getStatusColor(request.status) }]}>
-                          {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
-                        </Text>
-                      </View>
+
+                      {staffGroup.requests.map((request) => {
+                        const leaveType = getLeaveTypeById(request.leaveTypeId);
+                        const isCompactApproved = filterStatus === 'approved';
+                        return (
+                          <View
+                            key={request.id}
+                            style={[
+                              styles.requestLineItem,
+                              isCompactApproved && styles.requestLineItemCompact,
+                            ]}
+                          >
+                            <View style={styles.requestLineMain}>
+                              <View style={[styles.leaveTypeBadge, { backgroundColor: leaveType?.color || Colors.light.muted }]}>
+                                <Text style={styles.leaveTypeBadgeText}>{leaveType?.name || 'Unknown'}</Text>
+                              </View>
+                              <Text style={styles.requestLineDate}>
+                                {formatDate(request.startDate)} - {formatDate(request.endDate)}
+                              </Text>
+                              <Text style={styles.requestLineDays}>
+                                {calculateDays(request.startDate, request.endDate, request.dayPortion)} day(s)
+                              </Text>
+                            </View>
+
+                            {!isCompactApproved && !!request.reason && (
+                              <Text style={styles.reasonText}>Reason: {request.reason}</Text>
+                            )}
+
+                            {request.reviewedBy && !isCompactApproved && (
+                              <View style={styles.reviewInfo}>
+                                <Text style={styles.reviewInfoText}>
+                                  {request.status === 'approved' ? 'Approved' : 'Rejected'} by {request.reviewedBy}
+                                  {request.reviewedAt && ` on ${new Date(request.reviewedAt).toLocaleDateString()}`}
+                                </Text>
+                                {request.reviewNotes && <Text style={styles.reviewNotes}>Note: {request.reviewNotes}</Text>}
+                              </View>
+                            )}
+
+                            {isSuperAdmin && (
+                              <View style={styles.requestLineActions}>
+                                {request.status === 'pending' && (
+                                  <>
+                                    <TouchableOpacity
+                                      style={[styles.miniActionBtn, styles.approveMiniBtn]}
+                                      onPress={() => handleReviewRequest(request, 'approve')}
+                                    >
+                                      <Check size={12} color="#FFFFFF" />
+                                      <Text style={styles.miniActionBtnText}>Approve</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={[styles.miniActionBtn, styles.rejectMiniBtn]}
+                                      onPress={() => handleReviewRequest(request, 'reject')}
+                                    >
+                                      <X size={12} color="#FFFFFF" />
+                                      <Text style={styles.miniActionBtnText}>Reject</Text>
+                                    </TouchableOpacity>
+                                  </>
+                                )}
+                                <TouchableOpacity
+                                  style={[styles.miniActionBtn, styles.deleteMiniBtn]}
+                                  onPress={() => handleDeleteRequestWithOptions(request)}
+                                >
+                                  <Trash2 size={12} color="#FFFFFF" />
+                                  <Text style={styles.miniActionBtnText}>Delete</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
                     </View>
-
-                    <View style={styles.dateRow}>
-                      <View style={styles.dateInfo}>
-                        <Text style={styles.dateLabel}>From</Text>
-                        <Text style={styles.dateValue}>{formatDate(request.startDate)}</Text>
-                      </View>
-                      <View style={styles.dateDivider} />
-                      <View style={styles.dateInfo}>
-                        <Text style={styles.dateLabel}>To</Text>
-                        <Text style={styles.dateValue}>{formatDate(request.endDate)}</Text>
-                      </View>
-                      <View style={styles.daysContainer}>
-                        <Text style={styles.daysNumber}>{calculateDays(request.startDate, request.endDate)}</Text>
-                        <Text style={styles.daysLabel}>days</Text>
-                      </View>
-                    </View>
-
-                    {request.reason && (
-                      <View style={styles.reasonContainer}>
-                        <Text style={styles.reasonLabel}>Reason:</Text>
-                        <Text style={styles.reasonText}>{request.reason}</Text>
-                      </View>
-                    )}
-
-                    {request.reviewedBy && (
-                      <View style={styles.reviewInfo}>
-                        <Text style={styles.reviewInfoText}>
-                          {request.status === 'approved' ? 'Approved' : 'Rejected'} by {request.reviewedBy}
-                          {request.reviewedAt && ` on ${new Date(request.reviewedAt).toLocaleDateString()}`}
-                        </Text>
-                        {request.reviewNotes && (
-                          <Text style={styles.reviewNotes}>Note: {request.reviewNotes}</Text>
-                        )}
-                      </View>
-                    )}
-
-                    {isSuperAdmin && request.status === 'pending' && (
-                      <View style={styles.actionButtons}>
-                        <TouchableOpacity
-                          style={[styles.actionButton, styles.approveButton]}
-                          onPress={() => handleReviewRequest(request, 'approve')}
-                        >
-                          <Check size={18} color="#FFFFFF" />
-                          <Text style={styles.actionButtonText}>Approve</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionButton, styles.rejectButton]}
-                          onPress={() => handleReviewRequest(request, 'reject')}
-                        >
-                          <X size={18} color="#FFFFFF" />
-                          <Text style={styles.actionButtonText}>Reject</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                );
-              })
+                  ))}
+                </View>
+              ))
             )}
           </ScrollView>
         </SafeAreaView>
@@ -535,7 +788,9 @@ export default function LeaveScreen() {
                   onPress={() => setShowStaffPicker(true)}
                 >
                   <Text style={[styles.selectButtonText, !selectedRequestStaff && { color: Colors.light.muted }]}>
-                    {selectedRequestStaff?.fullName || 'Select active staff'}
+                    {selectedRequestStaff
+                      ? `${selectedRequestStaff.userName || 'No Username'} - ${selectedRequestStaff.fullName}`
+                      : 'Select staff by username'}
                   </Text>
                   <ChevronDown size={20} color={Colors.light.muted} />
                 </TouchableOpacity>
@@ -587,10 +842,25 @@ export default function LeaveScreen() {
                 </View>
               </View>
 
+              {startDate && endDate && startDate === endDate && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Day Option</Text>
+                  <TouchableOpacity
+                    style={styles.selectButton}
+                    onPress={() => setShowDayPortionPicker(true)}
+                  >
+                    <Text style={styles.selectButtonText}>
+                      {selectedDayPortion === 'half' ? 'Half Day' : 'Full Day'}
+                    </Text>
+                    <ChevronDown size={20} color={Colors.light.muted} />
+                  </TouchableOpacity>
+                </View>
+              )}
+
               {startDate && endDate && new Date(endDate) >= new Date(startDate) && (
                 <View style={styles.durationInfo}>
                   <Text style={styles.durationText}>
-                    Duration: {calculateDays(startDate, endDate)} day(s)
+                    Duration: {calculateDays(startDate, endDate, selectedDayPortionValue)} day(s)
                   </Text>
                 </View>
               )}
@@ -665,31 +935,45 @@ export default function LeaveScreen() {
           activeOpacity={1}
           onPress={() => setShowStaffPicker(false)}
         >
-          <View style={styles.pickerContent}>
+          <TouchableOpacity style={styles.pickerContent} activeOpacity={1} onPress={() => {}}>
             <Text style={styles.pickerTitle}>Select Staff</Text>
+            <TextInput
+              style={styles.pickerSearchInput}
+              value={staffPickerSearch}
+              onChangeText={setStaffPickerSearch}
+              placeholder="Search by username or name"
+              placeholderTextColor={Colors.light.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
             {activeStaffMembers.length === 0 ? (
               <Text style={styles.emptyPickerText}>No active staff found in HR.</Text>
+            ) : filteredRequestPickerStaff.length === 0 ? (
+              <Text style={styles.emptyPickerText}>No staff found for that search.</Text>
             ) : (
               <ScrollView style={styles.pickerList}>
-                {activeStaffMembers.map((staff) => (
+                {filteredRequestPickerStaff.map((staff) => (
                   <TouchableOpacity
                     key={staff.id}
                     style={[
                       styles.pickerOption,
                       selectedStaffId === staff.id && styles.pickerOptionSelected
                     ]}
-                    onPress={() => {
+                  onPress={() => {
                       setSelectedStaffId(staff.id);
                       setShowStaffPicker(false);
                     }}
                   >
-                    <Text style={styles.pickerOptionText}>{staff.fullName}</Text>
+                    <View style={styles.pickerOptionMeta}>
+                      <Text style={styles.pickerOptionPrimaryText}>{staff.userName || '-'}</Text>
+                      <Text style={styles.pickerOptionSubText}>{staff.fullName}</Text>
+                    </View>
                     {selectedStaffId === staff.id && <Check size={20} color={Colors.light.tint} />}
                   </TouchableOpacity>
                 ))}
               </ScrollView>
             )}
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
@@ -722,6 +1006,44 @@ export default function LeaveScreen() {
                   <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
                   <Text style={styles.pickerOptionText}>{type.name}</Text>
                   {selectedLeaveType === type.id && <Check size={20} color={Colors.light.tint} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={showDayPortionPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDayPortionPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowDayPortionPicker(false)}
+        >
+          <View style={styles.pickerContent}>
+            <Text style={styles.pickerTitle}>Select Day Option</Text>
+            <ScrollView style={styles.pickerList}>
+              {[
+                { id: 'full', label: 'Full Day' },
+                { id: 'half', label: 'Half Day' },
+              ].map((option) => (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[
+                    styles.pickerOption,
+                    selectedDayPortion === option.id && styles.pickerOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedDayPortion(option.id as 'full' | 'half');
+                    setShowDayPortionPicker(false);
+                  }}
+                >
+                  <Text style={styles.pickerOptionText}>{option.label}</Text>
+                  {selectedDayPortion === option.id && <Check size={20} color={Colors.light.tint} />}
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -851,10 +1173,11 @@ export default function LeaveScreen() {
                   ) : (
                     balancesForYear.map((row) => {
                       const leaveType = getLeaveTypeById(row.leaveTypeId);
+                      const liveStaffName = staffNameById.get(row.staffId) || row.staffName;
                       return (
                         <View key={row.id} style={styles.balanceRowCard}>
                           <View style={{ flex: 1 }}>
-                            <Text style={styles.balanceRowTitle}>{row.staffName}</Text>
+                            <Text style={styles.balanceRowTitle}>{liveStaffName}</Text>
                             <Text style={styles.balanceRowMeta}>
                               {leaveType?.name || row.leaveTypeId} - {row.totalDays} day(s)
                             </Text>
@@ -951,43 +1274,6 @@ export default function LeaveScreen() {
                   <View style={[styles.leaveTypeColor, { backgroundColor: type.color }]} />
                   <Text style={styles.pickerOptionText}>{type.name}</Text>
                   {balanceLeaveTypeId === type.id && <Check size={20} color={Colors.light.tint} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <Modal
-        visible={showFilterPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowFilterPicker(false)}
-      >
-        <TouchableOpacity 
-          style={styles.pickerOverlay}
-          activeOpacity={1}
-          onPress={() => setShowFilterPicker(false)}
-        >
-          <View style={styles.pickerContent}>
-            <Text style={styles.pickerTitle}>Filter by Status</Text>
-            <ScrollView style={styles.pickerList}>
-              {(['all', 'pending', 'approved', 'rejected'] as FilterStatus[]).map((status) => (
-                <TouchableOpacity
-                  key={status}
-                  style={[
-                    styles.pickerOption,
-                    filterStatus === status && styles.pickerOptionSelected
-                  ]}
-                  onPress={() => {
-                    setFilterStatus(status);
-                    setShowFilterPicker(false);
-                  }}
-                >
-                  <Text style={styles.pickerOptionText}>
-                    {status === 'all' ? 'All Requests' : status.charAt(0).toUpperCase() + status.slice(1)}
-                  </Text>
-                  {filterStatus === status && <Check size={20} color={Colors.light.tint} />}
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -1131,6 +1417,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 4,
   },
+  statCardActive: {
+    borderWidth: 2,
+  },
   statNumber: {
     fontSize: 24,
     fontWeight: '700' as const,
@@ -1200,6 +1489,92 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingTop: 4,
+  },
+  monthBlock: {
+    marginBottom: 14,
+  },
+  monthTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  staffGroupCard: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 12,
+    marginBottom: 10,
+    gap: 8,
+  },
+  staffGroupHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+  },
+  staffSubMeta: {
+    fontSize: 12,
+    color: Colors.light.muted,
+    marginTop: 2,
+  },
+  requestLineItem: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 10,
+    gap: 8,
+  },
+  requestLineItemCompact: {
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    gap: 6,
+  },
+  requestLineMain: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+  },
+  requestLineDate: {
+    fontSize: 12,
+    color: Colors.light.text,
+    flex: 1,
+    minWidth: 140,
+  },
+  requestLineDays: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  requestLineActions: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 6,
+  },
+  miniActionBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    borderRadius: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  approveMiniBtn: {
+    backgroundColor: '#10B981',
+  },
+  rejectMiniBtn: {
+    backgroundColor: '#EF4444',
+  },
+  deleteMiniBtn: {
+    backgroundColor: '#B91C1C',
+  },
+  miniActionBtnText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
   },
   emptyState: {
     alignItems: 'center' as const,
@@ -1331,6 +1706,25 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     marginTop: 4,
     fontStyle: 'italic' as const,
+  },
+  superAdminActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: 10,
+  },
+  deleteRequestButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#B91C1C',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  deleteRequestButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   actionButtons: {
     flexDirection: 'row' as const,
@@ -1561,6 +1955,17 @@ const styles = StyleSheet.create({
   pickerList: {
     maxHeight: 340,
   },
+  pickerSearchInput: {
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+    color: Colors.light.text,
+    fontSize: 14,
+  },
   pickerTitle: {
     fontSize: 18,
     fontWeight: '700' as const,
@@ -1578,9 +1983,22 @@ const styles = StyleSheet.create({
   pickerOptionSelected: {
     backgroundColor: '#EBF5FF',
   },
+  pickerOptionMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  pickerOptionPrimaryText: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
   pickerOptionText: {
     flex: 1,
     fontSize: 16,
     color: Colors.light.text,
+  },
+  pickerOptionSubText: {
+    fontSize: 12,
+    color: Colors.light.muted,
   },
 });
