@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   LeaveType,
@@ -14,6 +14,7 @@ const LEAVE_TYPES_KEY = '@leave_types';
 const LEAVE_REQUESTS_KEY = '@leave_requests';
 const STAFF_LEAVE_BALANCES_KEY = '@staff_leave_balances';
 const LEAVE_BALANCE_SECURITY_KEY = '@leave_balance_security';
+const LEAVE_BACKGROUND_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 const DEFAULT_LEAVE_TYPES: LeaveType[] = [
   { id: 'annual', name: 'Annual Leave', color: '#3B82F6', createdAt: Date.now(), updatedAt: Date.now() },
@@ -145,6 +146,12 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
   const [leaveBalanceSecurity, setLeaveBalanceSecurity] = useState<LeaveBalanceSecuritySettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
+  const backgroundSyncInFlightRef = useRef(false);
+
+  useEffect(() => {
+    isSyncingRef.current = isSyncing;
+  }, [isSyncing]);
 
   const hasLeaveBalancePassword = useMemo(
     () => !!(leaveBalanceSecurity && !leaveBalanceSecurity.deleted && leaveBalanceSecurity.accessPasswordHash),
@@ -330,6 +337,102 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       setIsSyncing(false);
     }
   }, [currentUser, isSyncing]);
+
+  const runBackgroundDeltaSync = useCallback(async () => {
+    if (!currentUser?.id || isSyncingRef.current || backgroundSyncInFlightRef.current) return;
+
+    backgroundSyncInFlightRef.current = true;
+    try {
+      const [localTypesRaw, localRequestsRaw, localBalancesRaw, localSecurityRaw] = await Promise.all([
+        AsyncStorage.getItem(LEAVE_TYPES_KEY),
+        AsyncStorage.getItem(LEAVE_REQUESTS_KEY),
+        AsyncStorage.getItem(STAFF_LEAVE_BALANCES_KEY),
+        AsyncStorage.getItem(LEAVE_BALANCE_SECURITY_KEY),
+      ]);
+
+      const localTypes: LeaveType[] = localTypesRaw ? JSON.parse(localTypesRaw) : DEFAULT_LEAVE_TYPES;
+      const localRequests: LeaveRequest[] = localRequestsRaw ? JSON.parse(localRequestsRaw) : [];
+      const localBalances: StaffLeaveBalance[] = localBalancesRaw ? JSON.parse(localBalancesRaw) : [];
+      const localSecurityRows: LeaveBalanceSecuritySettings[] = localSecurityRaw
+        ? [JSON.parse(localSecurityRaw)].filter((row) => row && !row.deleted)
+        : [];
+
+      const [syncedTypes, syncedRequests, syncedBalances, syncedSecurityRows] = await Promise.all([
+        syncData<LeaveType>('leave_types', localTypes, currentUser.id, {
+          includeDeleted: true,
+        }),
+        syncData<LeaveRequest>('leave_requests', localRequests, currentUser.id, {
+          includeDeleted: true,
+        }),
+        syncData<StaffLeaveBalance>('staff_leave_balances', localBalances, currentUser.id, {
+          includeDeleted: true,
+        }),
+        syncData<LeaveBalanceSecuritySettings>('leave_balance_security_settings', localSecurityRows, currentUser.id, {
+          includeDeleted: true,
+        }),
+      ]);
+
+      const serializedTypes = JSON.stringify(syncedTypes);
+      const serializedRequests = JSON.stringify(syncedRequests);
+      const serializedBalances = JSON.stringify(syncedBalances);
+      const serializedSecurity = JSON.stringify(syncedSecurityRows);
+      const localSerializedTypes = localTypesRaw || JSON.stringify(DEFAULT_LEAVE_TYPES);
+      const localSerializedRequests = localRequestsRaw || '[]';
+      const localSerializedBalances = localBalancesRaw || '[]';
+      const localSerializedSecurity = localSecurityRaw ? JSON.stringify(localSecurityRows) : '[]';
+
+      if (
+        serializedTypes === localSerializedTypes &&
+        serializedRequests === localSerializedRequests &&
+        serializedBalances === localSerializedBalances &&
+        serializedSecurity === localSerializedSecurity
+      ) {
+        return;
+      }
+
+      const activeTypes = syncedTypes.filter((row) => !row.deleted);
+      const activeRequests = syncedRequests.filter((row) => !row.deleted);
+      const activeBalances = syncedBalances.filter((row) => !row.deleted);
+      const activeSecurity = [...syncedSecurityRows]
+        .filter((row) => !row.deleted)
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
+
+      setLeaveTypes(activeTypes.length > 0 ? activeTypes : DEFAULT_LEAVE_TYPES);
+      setLeaveRequests(activeRequests);
+      setStaffLeaveBalances(activeBalances);
+      setLeaveBalanceSecurity(activeSecurity);
+
+      await Promise.all([
+        AsyncStorage.setItem(LEAVE_TYPES_KEY, serializedTypes),
+        AsyncStorage.setItem(LEAVE_REQUESTS_KEY, serializedRequests),
+        AsyncStorage.setItem(STAFF_LEAVE_BALANCES_KEY, serializedBalances),
+        activeSecurity
+          ? AsyncStorage.setItem(LEAVE_BALANCE_SECURITY_KEY, JSON.stringify(activeSecurity))
+          : AsyncStorage.removeItem(LEAVE_BALANCE_SECURITY_KEY),
+      ]);
+    } catch (error) {
+      console.error('[LeaveContext] Background delta sync failed:', error);
+    } finally {
+      backgroundSyncInFlightRef.current = false;
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const initialTimer = setTimeout(() => {
+      runBackgroundDeltaSync().catch(() => {});
+    }, 45000);
+
+    const interval = setInterval(() => {
+      runBackgroundDeltaSync().catch(() => {});
+    }, LEAVE_BACKGROUND_SYNC_INTERVAL_MS);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
+  }, [currentUser?.id, runBackgroundDeltaSync]);
 
   const addLeaveType = useCallback(async (name: string, color: string) => {
     const newType: LeaveType = {
