@@ -495,16 +495,36 @@
     const TOKEN_KEY = 'feedback_admin_token';
     const TOKEN_BACKUP_KEY = 'feedback_admin_token_backup';
     const PIE_COLORS = ['#0f766e', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6'];
-    let token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_BACKUP_KEY) || '';
+    function safeStorageGet(storage, key) {
+      try {
+        return storage.getItem(key) || '';
+      } catch (_) {
+        return '';
+      }
+    }
+    function safeStorageSet(storage, key, value) {
+      try {
+        storage.setItem(key, value);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function safeStorageRemove(storage, key) {
+      try {
+        storage.removeItem(key);
+      } catch (_) {}
+    }
+    function readStoredToken() {
+      return safeStorageGet(sessionStorage, TOKEN_BACKUP_KEY) || safeStorageGet(localStorage, TOKEN_KEY) || '';
+    }
+    let token = readStoredToken();
     let currentPayload = null;
     let googleReviewsState = [];
     let googleReviewsMeta = { apiKeyConfigured: false, configuredOutlets: 0 };
 
-    if (token && !localStorage.getItem(TOKEN_KEY)) {
-      localStorage.setItem(TOKEN_KEY, token);
-    }
-    if (token && !sessionStorage.getItem(TOKEN_BACKUP_KEY)) {
-      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+    if (token && !safeStorageGet(sessionStorage, TOKEN_BACKUP_KEY)) {
+      safeStorageSet(sessionStorage, TOKEN_BACKUP_KEY, token);
     }
 
     function qs(id) { return document.getElementById(id); }
@@ -512,17 +532,17 @@
     function persistToken(value) {
       token = value || '';
       if (!token) return;
-      localStorage.setItem(TOKEN_KEY, token);
-      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+      safeStorageSet(sessionStorage, TOKEN_BACKUP_KEY, token);
+      safeStorageSet(localStorage, TOKEN_KEY, token);
     }
     function clearToken() {
       token = '';
-      localStorage.removeItem(TOKEN_KEY);
-      sessionStorage.removeItem(TOKEN_BACKUP_KEY);
+      safeStorageRemove(localStorage, TOKEN_KEY);
+      safeStorageRemove(sessionStorage, TOKEN_BACKUP_KEY);
     }
     function goHome() {
       if (token) {
-        sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+        safeStorageSet(sessionStorage, TOKEN_BACKUP_KEY, token);
       }
       if (window.opener) {
         window.close();

@@ -180,25 +180,45 @@
     const API = '../api/feedback-admin.php';
     const TOKEN_KEY = 'feedback_admin_token';
     const TOKEN_BACKUP_KEY = 'feedback_admin_token_backup';
-    let token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_BACKUP_KEY) || '';
-
-    if (token && !localStorage.getItem(TOKEN_KEY)) {
-      localStorage.setItem(TOKEN_KEY, token);
+    function safeStorageGet(storage, key) {
+      try {
+        return storage.getItem(key) || '';
+      } catch (_) {
+        return '';
+      }
     }
-    if (token && !sessionStorage.getItem(TOKEN_BACKUP_KEY)) {
-      sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+    function safeStorageSet(storage, key, value) {
+      try {
+        storage.setItem(key, value);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function safeStorageRemove(storage, key) {
+      try {
+        storage.removeItem(key);
+      } catch (_) {}
+    }
+    function readStoredToken() {
+      return safeStorageGet(sessionStorage, TOKEN_BACKUP_KEY) || safeStorageGet(localStorage, TOKEN_KEY) || '';
+    }
+    let token = readStoredToken();
+
+    if (token && !safeStorageGet(sessionStorage, TOKEN_BACKUP_KEY)) {
+      safeStorageSet(sessionStorage, TOKEN_BACKUP_KEY, token);
     }
 
     function qs(id) { return document.getElementById(id); }
     function setText(id, value) { qs(id).textContent = value; }
     function clearToken() {
       token = '';
-      localStorage.removeItem(TOKEN_KEY);
-      sessionStorage.removeItem(TOKEN_BACKUP_KEY);
+      safeStorageRemove(localStorage, TOKEN_KEY);
+      safeStorageRemove(sessionStorage, TOKEN_BACKUP_KEY);
     }
     function goHome() {
       if (token) {
-        sessionStorage.setItem(TOKEN_BACKUP_KEY, token);
+        safeStorageSet(sessionStorage, TOKEN_BACKUP_KEY, token);
       }
       const ref = document.referrer || '';
       if (ref) {
