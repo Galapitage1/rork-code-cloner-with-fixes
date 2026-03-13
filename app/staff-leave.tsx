@@ -322,17 +322,19 @@ export default function StaffLeaveScreen() {
             <Text style={styles.addButtonText}>Add / Edit Leave</Text>
           </TouchableOpacity>
         </View>
-        <View style={styles.searchRow}>
-          <TextInput
-            style={styles.pageSearchInput}
-            value={pageSearchText}
-            onChangeText={setPageSearchText}
-            placeholder="Search staff by username or name"
-            placeholderTextColor={Colors.light.muted}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </View>
+        {isUnlocked ? (
+          <View style={styles.searchRow}>
+            <TextInput
+              style={styles.pageSearchInput}
+              value={pageSearchText}
+              onChangeText={setPageSearchText}
+              placeholder="Search staff by username or name"
+              placeholderTextColor={Colors.light.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+        ) : null}
 
         {!isUnlocked ? (
           <View style={styles.centeredCard}>
