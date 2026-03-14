@@ -205,22 +205,39 @@ function ue_get_access_token(array $config): array {
         return ['success' => false, 'error' => 'Missing Uber Eats client ID or client secret'];
     }
 
-    $response = ue_http_request(
-        'https://login.uber.com/oauth/v2/token',
-        'POST',
-        [],
-        [
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret,
-            'grant_type' => 'client_credentials',
-            'scope' => 'eats.store eats.order eats.store.orders.read',
-        ],
-        true
-    );
+    $scopeSets = [
+        'eats.store eats.store.orders.read',
+        'eats.store',
+    ];
 
-    if (!$response['ok']) {
+    $response = null;
+    foreach ($scopeSets as $scopeSet) {
+        $response = ue_http_request(
+            'https://login.uber.com/oauth/v2/token',
+            'POST',
+            [],
+            [
+                'client_id' => $clientId,
+                'client_secret' => $clientSecret,
+                'grant_type' => 'client_credentials',
+                'scope' => $scopeSet,
+            ],
+            true
+        );
+
+        if ($response['ok']) {
+            break;
+        }
+
         $message = is_array($response['json']) ? ue_trim($response['json']['message'] ?? $response['json']['error'] ?? '', 300) : '';
-        return ['success' => false, 'error' => ($message !== '' ? $message : ($response['error'] ?: 'Failed to get OAuth token'))];
+        if (stripos($message, 'invalid_scope') === false) {
+            break;
+        }
+    }
+
+    if (!$response || !$response['ok']) {
+        $message = is_array($response['json'] ?? null) ? ue_trim(($response['json']['message'] ?? $response['json']['error'] ?? ''), 300) : '';
+        return ['success' => false, 'error' => ($message !== '' ? $message : (($response['error'] ?? '') ?: 'Failed to get OAuth token'))];
     }
 
     $payload = is_array($response['json']) ? $response['json'] : [];
