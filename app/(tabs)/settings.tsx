@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Switch } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trash2, Settings as SettingsIcon, Store, Plus, Edit2, X, Package, LogOut, Users as UsersIcon, RefreshCw, CloudOff, Cloud, ChevronDown, ChevronUp, Mail, Save, Check, AlertCircle, CheckCircle, MessageSquare, CalendarDays, Download } from 'lucide-react-native';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -28,6 +28,29 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { exportCriticalDataBackup, saveAutomaticCriticalDataBackup } from '@/utils/criticalDataBackup';
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
+
+function normalizeProductCategories(rawCategories: any): string[] {
+  if (!Array.isArray(rawCategories)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const next: string[] = [];
+  rawCategories.forEach((entry) => {
+    const value = String(entry || '').trim();
+    if (!value) {
+      return;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    next.push(value);
+  });
+
+  return next.sort((a, b) => a.localeCompare(b));
+}
 
 export default function SettingsScreen() {
   const { outlets, addOutlet, updateOutlet, deleteOutlet, clearAllProducts, clearAllOutlets, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, isSyncPaused } = useStock();
@@ -85,6 +108,11 @@ export default function SettingsScreen() {
   const [editingLeaveType, setEditingLeaveType] = useState<LeaveType | null>(null);
   const [newLeaveTypeName, setNewLeaveTypeName] = useState<string>('');
   const [newLeaveTypeColor, setNewLeaveTypeColor] = useState<string>('#3B82F6');
+  const [productCategoriesExpanded, setProductCategoriesExpanded] = useState<boolean>(false);
+  const [showProductCategoryModal, setShowProductCategoryModal] = useState<boolean>(false);
+  const [editingProductCategory, setEditingProductCategory] = useState<string | null>(null);
+  const [newProductCategoryName, setNewProductCategoryName] = useState<string>('');
+  const [productCategories, setProductCategories] = useState<string[]>([]);
   const [dataCleanupExpanded, setDataCleanupExpanded] = useState<boolean>(false);
   const [isDeletingData, setIsDeletingData] = useState<boolean>(false);
   const [isExportingCriticalBackup, setIsExportingCriticalBackup] = useState<boolean>(false);
@@ -104,6 +132,28 @@ export default function SettingsScreen() {
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
   const canManageAddDeleteInSettings = isSuperAdmin;
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const categoryPositionsRef = useRef<Record<'sync' | 'core' | 'integrations' | 'app', number>>({
+    sync: 0,
+    core: 0,
+    integrations: 0,
+    app: 0,
+  });
+  const [activeCategory, setActiveCategory] = useState<'sync' | 'core' | 'integrations' | 'app'>('sync');
+
+  const registerCategoryPosition = useCallback(
+    (key: 'sync' | 'core' | 'integrations' | 'app') =>
+      (event: any) => {
+        categoryPositionsRef.current[key] = event.nativeEvent.layout.y;
+      },
+    []
+  );
+
+  const jumpToCategory = useCallback((key: 'sync' | 'core' | 'integrations' | 'app') => {
+    setActiveCategory(key);
+    const y = Math.max((categoryPositionsRef.current[key] || 0) - 12, 0);
+    scrollViewRef.current?.scrollTo({ y, animated: true });
+  }, []);
 
   const normalizeUberOutletConfigs = useCallback((rawConfigs: any) => {
     const next: Record<string, { outletName: string; storeId: string; storeName: string }> = {};
@@ -146,9 +196,11 @@ export default function SettingsScreen() {
         setUberEatsClientId(localParsed.uberEatsClientId || '');
         setUberEatsClientSecret(localParsed.uberEatsClientSecret || '');
         setUberEatsOutletConfigs(normalizeUberOutletConfigs(localParsed.uberEatsOutletConfigs));
+        setProductCategories(normalizeProductCategories(localParsed.productCategories));
       } else {
         console.log('[SETTINGS] No local settings found');
         setUberEatsOutletConfigs(normalizeUberOutletConfigs({}));
+        setProductCategories([]);
       }
       
       if (currentUser) {
@@ -180,6 +232,7 @@ export default function SettingsScreen() {
             setUberEatsClientId(latest?.uberEatsClientId || '');
             setUberEatsClientSecret(latest?.uberEatsClientSecret || '');
             setUberEatsOutletConfigs(normalizeUberOutletConfigs(latest?.uberEatsOutletConfigs));
+            setProductCategories(normalizeProductCategories(latest?.productCategories));
           }
         } catch (syncError) {
           console.error('[SETTINGS] Failed to sync campaign settings from server:', syncError);
@@ -228,7 +281,7 @@ export default function SettingsScreen() {
     return () => clearInterval(interval);
   }, [loadSyncDiagnostics]);
 
-  const saveCampaignSettings = async () => {
+  const persistCampaignSettings = async (overrides?: Record<string, any>) => {
     try {
       setIsSavingSettings(true);
       setConnectionStatus(null);
@@ -236,6 +289,7 @@ export default function SettingsScreen() {
       const existingSettings = existingRaw ? JSON.parse(existingRaw) : {};
       const settings = {
         ...existingSettings,
+        ...overrides,
         emailApiKey,
         emailApiProvider,
         smsApiKey,
@@ -250,9 +304,16 @@ export default function SettingsScreen() {
         uberEatsClientId,
         uberEatsClientSecret,
         uberEatsOutletConfigs,
+        productCategories,
         updatedAt: Date.now(),
         id: existingSettings?.id || 'campaign_settings',
       };
+
+      if (Object.prototype.hasOwnProperty.call(overrides || {}, 'productCategories')) {
+        settings.productCategories = normalizeProductCategories(overrides?.productCategories);
+      } else {
+        settings.productCategories = normalizeProductCategories(productCategories);
+      }
       
       await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
       
@@ -276,6 +337,16 @@ export default function SettingsScreen() {
     } finally {
       setIsSavingSettings(false);
     }
+  };
+
+  const saveCampaignSettings = async () => {
+    await persistCampaignSettings();
+  };
+
+  const saveProductCategories = async (nextCategories: string[]) => {
+    const normalized = normalizeProductCategories(nextCategories);
+    setProductCategories(normalized);
+    await persistCampaignSettings({ productCategories: normalized });
   };
   
   const testEmailConnection = async () => {
@@ -623,10 +694,69 @@ export default function SettingsScreen() {
   console.log('Settings colors:', Colors.light.background, Colors.light.text, Colors.light.tint);
   
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
-      {/* Multi-Device Sync Section */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
+    <ScrollView ref={scrollViewRef} style={styles.container} contentContainerStyle={styles.scrollContent}>
+      <View style={styles.settingsIntroCard}>
+        <Text style={styles.settingsIntroTitle}>Settings</Text>
+        <Text style={styles.settingsIntroText}>
+          Everything is now grouped by purpose so it is easier to find sync tools, core setup, integrations, and app controls.
+        </Text>
+        <View style={styles.quickJumpCard}>
+          <Text style={styles.quickJumpTitle}>Quick Jump</Text>
+          <View style={styles.quickJumpGrid}>
+            <TouchableOpacity
+              style={[styles.quickJumpButton, activeCategory === 'sync' && styles.quickJumpButtonActive]}
+              onPress={() => jumpToCategory('sync')}
+            >
+              <Text style={[styles.quickJumpButtonText, activeCategory === 'sync' && styles.quickJumpButtonTextActive]}>Sync & Server</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.quickJumpButton, activeCategory === 'core' && styles.quickJumpButtonActive]}
+              onPress={() => jumpToCategory('core')}
+            >
+              <Text style={[styles.quickJumpButtonText, activeCategory === 'core' && styles.quickJumpButtonTextActive]}>Core Setup</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.quickJumpButton, activeCategory === 'integrations' && styles.quickJumpButtonActive]}
+              onPress={() => jumpToCategory('integrations')}
+            >
+              <Text style={[styles.quickJumpButtonText, activeCategory === 'integrations' && styles.quickJumpButtonTextActive]}>Integrations</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.quickJumpButton, activeCategory === 'app' && styles.quickJumpButtonActive]}
+              onPress={() => jumpToCategory('app')}
+            >
+              <Text style={[styles.quickJumpButtonText, activeCategory === 'app' && styles.quickJumpButtonTextActive]}>App Controls</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.categoryBadgeRow}>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>Sync & Server</Text>
+          </View>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>Core Setup</Text>
+          </View>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>Integrations</Text>
+          </View>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>App Controls</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.categorySection} onLayout={registerCategoryPosition('sync')}>
+        <View style={styles.categoryHeader}>
+          <Cloud size={20} color={Colors.light.tint} />
+          <View style={styles.categoryHeaderText}>
+            <Text style={styles.categoryTitle}>Sync & Server</Text>
+            <Text style={styles.categoryDescription}>Sync status, data usage, server checks, cleanup, and protection tools.</Text>
+          </View>
+        </View>
+
+        {/* Multi-Device Sync Section */}
+        <View style={styles.section}>
+      <View style={styles.sectionHeader}>
           {isSyncing ? (
             <Cloud size={24} color={Colors.light.tint} />
           ) : (
@@ -857,6 +987,7 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
+      </View>
       </View>
 
       {/* Data Cleanup Settings - Super Admin Only */}
@@ -1140,6 +1271,15 @@ export default function SettingsScreen() {
         </View>
       )}
 
+      <View style={styles.categorySection} onLayout={registerCategoryPosition('core')}>
+        <View style={styles.categoryHeader}>
+          <UsersIcon size={20} color={Colors.light.tint} />
+          <View style={styles.categoryHeaderText}>
+            <Text style={styles.categoryTitle}>Core Setup</Text>
+            <Text style={styles.categoryDescription}>Manage people, outlets, and other core records used across the tracker.</Text>
+          </View>
+        </View>
+
       {/* User Data Section */}
       {isAdmin && (
         <View style={styles.section}>
@@ -1149,7 +1289,7 @@ export default function SettingsScreen() {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
               <UsersIcon size={24} color={Colors.light.tint} />
-              <Text style={styles.sectionTitle}>User Data ({users.length})</Text>
+              <Text style={styles.sectionTitle}>Users & Access ({users.length})</Text>
             </View>
             {usersExpanded ? (
               <ChevronUp size={20} color={Colors.light.tint} />
@@ -1242,7 +1382,7 @@ export default function SettingsScreen() {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
               <Store size={24} color={Colors.light.tint} />
-              <Text style={styles.sectionTitle}>Outlets ({outlets.length})</Text>
+              <Text style={styles.sectionTitle}>Outlets & Locations ({outlets.length})</Text>
             </View>
             {outletsExpanded ? (
               <ChevronUp size={20} color={Colors.light.tint} />
@@ -1336,7 +1476,7 @@ export default function SettingsScreen() {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
               <CalendarDays size={24} color={Colors.light.tint} />
-              <Text style={styles.sectionTitle}>Leave Types ({leaveTypes.length})</Text>
+              <Text style={styles.sectionTitle}>HR Leave Types ({leaveTypes.length})</Text>
             </View>
             {leaveTypesExpanded ? (
               <ChevronUp size={20} color={Colors.light.tint} />
@@ -1411,6 +1551,102 @@ export default function SettingsScreen() {
         </View>
       )}
 
+      {isSuperAdmin && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setProductCategoriesExpanded(!productCategoriesExpanded)}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <Package size={24} color={Colors.light.tint} />
+              <Text style={styles.sectionTitle}>Product Categories ({productCategories.length})</Text>
+            </View>
+            {productCategoriesExpanded ? (
+              <ChevronUp size={20} color={Colors.light.tint} />
+            ) : (
+              <ChevronDown size={20} color={Colors.light.tint} />
+            )}
+          </TouchableOpacity>
+
+          {productCategoriesExpanded && (
+            <>
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>
+                  Add, edit, or remove the categories available in the product form dropdown.
+                </Text>
+              </View>
+
+              {productCategories.length === 0 ? (
+                <View style={styles.syncInfoCard}>
+                  <Text style={styles.syncInfoText}>No categories added yet.</Text>
+                </View>
+              ) : (
+                productCategories.map((category) => (
+                  <View key={category} style={styles.listItem}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.listItemTitle}>{category}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setEditingProductCategory(category);
+                          setNewProductCategoryName(category);
+                          setShowProductCategoryModal(true);
+                        }}
+                      >
+                        <Edit2 size={20} color={Colors.light.tint} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => {
+                          openConfirm({
+                            title: 'Delete Category',
+                            message: `Are you sure you want to delete "${category}" from the product dropdown list?`,
+                            destructive: true,
+                            testID: 'confirm-delete-product-category',
+                            onConfirm: async () => {
+                              try {
+                                await saveProductCategories(productCategories.filter((item) => item.toLowerCase() !== category.toLowerCase()));
+                                Alert.alert('Success', 'Category deleted successfully');
+                              } catch {
+                                Alert.alert('Error', 'Failed to delete category');
+                              }
+                            },
+                          });
+                        }}
+                      >
+                        <Trash2 size={20} color={Colors.light.danger} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton]}
+                onPress={() => {
+                  setEditingProductCategory(null);
+                  setNewProductCategoryName('');
+                  setShowProductCategoryModal(true);
+                }}
+              >
+                <Plus size={20} color={Colors.light.card} />
+                <Text style={styles.buttonText}>Add Category</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
+      </View>
+
+      <View style={styles.categorySection} onLayout={registerCategoryPosition('integrations')}>
+        <View style={styles.categoryHeader}>
+          <Mail size={20} color={Colors.light.tint} />
+          <View style={styles.categoryHeaderText}>
+            <Text style={styles.categoryTitle}>Integrations</Text>
+            <Text style={styles.categoryDescription}>Email, SMS, website orders, and delivery platform connections.</Text>
+          </View>
+        </View>
+
       {/* Campaign Services Section */}
       {isSuperAdmin && (
         <View style={styles.section}>
@@ -1420,7 +1656,7 @@ export default function SettingsScreen() {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
               <Mail size={24} color={Colors.light.tint} />
-              <Text style={styles.sectionTitle}>Campaign Services</Text>
+              <Text style={styles.sectionTitle}>Campaigns, SMS & Orders</Text>
             </View>
             {campaignsExpanded ? (
               <ChevronUp size={20} color={Colors.light.tint} />
@@ -1822,12 +2058,22 @@ export default function SettingsScreen() {
           )}
         </View>
       )}
+      </View>
+
+      <View style={styles.categorySection} onLayout={registerCategoryPosition('app')}>
+        <View style={styles.categoryHeader}>
+          <SettingsIcon size={20} color={Colors.light.tint} />
+          <View style={styles.categoryHeaderText}>
+            <Text style={styles.categoryTitle}>App Controls</Text>
+            <Text style={styles.categoryDescription}>General app behavior, product access, logout, and maintenance actions.</Text>
+          </View>
+        </View>
 
       {/* App Settings Section */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <SettingsIcon size={24} color={Colors.light.tint} />
-          <Text style={styles.sectionTitle}>App Settings</Text>
+          <Text style={styles.sectionTitle}>General App Controls</Text>
         </View>
 
         {isSuperAdmin && (
@@ -1921,6 +2167,7 @@ export default function SettingsScreen() {
           </Text>
         </View>
       )}
+      </View>
 
       {/* User Modal */}
       <Modal
@@ -2249,6 +2496,83 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={showProductCategoryModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowProductCategoryModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingProductCategory ? 'Edit Category' : 'Add Category'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowProductCategoryModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Category Name *</Text>
+              <TextInput
+                style={styles.input}
+                value={newProductCategoryName}
+                onChangeText={setNewProductCategoryName}
+                placeholder="e.g., Cakes, Drinks, Packaging"
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowProductCategoryModal(false)}
+              >
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, { flex: 1 }]}
+                onPress={async () => {
+                  const nextName = newProductCategoryName.trim();
+                  if (!nextName) {
+                    Alert.alert('Error', 'Please enter a category name');
+                    return;
+                  }
+
+                  const duplicateExists = productCategories.some((item) => {
+                    if (editingProductCategory && item.toLowerCase() === editingProductCategory.toLowerCase()) {
+                      return false;
+                    }
+                    return item.toLowerCase() === nextName.toLowerCase();
+                  });
+
+                  if (duplicateExists) {
+                    Alert.alert('Error', 'That category already exists');
+                    return;
+                  }
+
+                  try {
+                    const nextCategories = editingProductCategory
+                      ? productCategories.map((item) => (
+                        item.toLowerCase() === editingProductCategory.toLowerCase() ? nextName : item
+                      ))
+                      : [...productCategories, nextName];
+                    await saveProductCategories(nextCategories);
+                    setShowProductCategoryModal(false);
+                    Alert.alert('Success', editingProductCategory ? 'Category updated successfully' : 'Category added successfully');
+                  } catch {
+                    Alert.alert('Error', 'Failed to save category');
+                  }
+                }}
+              >
+                <Text style={styles.buttonText}>{editingProductCategory ? 'Update' : 'Add'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ConfirmDialog
         visible={!!confirmVisible}
         title={confirmState?.title ?? ''}
@@ -2282,6 +2606,111 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     flexGrow: 1,
+  },
+  settingsIntroCard: {
+    backgroundColor: '#F8FBFF',
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#C7DDF6',
+    gap: 10,
+  },
+  settingsIntroTitle: {
+    fontSize: 24,
+    fontWeight: '800' as const,
+    color: Colors.light.text,
+  },
+  settingsIntroText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.muted,
+  },
+  quickJumpCard: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#D8E6F3',
+    gap: 10,
+  },
+  quickJumpTitle: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.6,
+  },
+  quickJumpGrid: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+  },
+  quickJumpButton: {
+    backgroundColor: '#EEF5FC',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#D3E4F5',
+  },
+  quickJumpButtonActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  quickJumpButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  quickJumpButtonTextActive: {
+    color: Colors.light.card,
+  },
+  categoryBadgeRow: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+  },
+  categoryBadge: {
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: '#B7D4F2',
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  categoryBadgeText: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  categorySection: {
+    backgroundColor: '#FCFDFE',
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#D8E6F3',
+  },
+  categoryHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-start' as const,
+    gap: 10,
+    marginBottom: 18,
+  },
+  categoryHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  categoryTitle: {
+    fontSize: 18,
+    fontWeight: '800' as const,
+    color: Colors.light.text,
+  },
+  categoryDescription: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.muted,
   },
   section: {
     marginBottom: 32,
