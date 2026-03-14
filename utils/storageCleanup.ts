@@ -1,15 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveAutomaticCriticalDataBackup } from '@/utils/criticalDataBackup';
 
 const LAST_CLEANUP_KEY = '@last_storage_cleanup';
 const STORAGE_SIZE_LIMIT_MB = 4;
 const STORAGE_SIZE_LIMIT_BYTES = STORAGE_SIZE_LIMIT_MB * 1024 * 1024;
 const RETENTION_DAYS = 7;
-const APPROVED_REQUEST_RETENTION_DAYS = 90;
 const CLEANUP_INTERVAL_DAYS = 1;
 
 const DATA_LIMITS = {
   MAX_STOCK_CHECKS: 200,
-  MAX_REQUESTS: 300,
   MAX_SALES_DEDUCTIONS: 200,
   MAX_RECONCILE_HISTORY: 100,
   MAX_ACTIVITY_LOGS: 500,
@@ -65,6 +64,15 @@ export async function shouldCleanupToday(): Promise<boolean> {
 export async function cleanupOldData(): Promise<void> {
   try {
     console.log('[STORAGE CLEANUP] Starting cleanup...');
+
+    try {
+      const backup = await saveAutomaticCriticalDataBackup('before_cleanup');
+      console.log(
+        `[STORAGE CLEANUP] Backup saved before cleanup (${backup.id}) - local checks:${backup.localStockChecks}, local requests:${backup.localRequests}, approved:${backup.localApprovedRequests}, server checks:${backup.serverStockChecks}, server requests:${backup.serverRequests}`,
+      );
+    } catch (backupError) {
+      console.warn('[STORAGE CLEANUP] Backup before cleanup failed (continuing cleanup):', backupError);
+    }
     
     const allKeys = await AsyncStorage.getAllKeys();
     const keysToRemove: string[] = [];
@@ -90,14 +98,16 @@ export async function cleanupOldData(): Promise<void> {
           const stockChecks = JSON.parse(stockChecksData);
           if (Array.isArray(stockChecks)) {
             const filtered = stockChecks.filter((check: any) => {
+              // Keep FULL non-deleted stock check history.
+              // Removing historical checks causes random-looking disappearances in History.
+              if (!check || typeof check !== 'object') return false;
               if (check.deleted) return false;
-              if (!check.date) return true;
-              return check.date >= retentionDaysAgoStr;
+              return true;
             });
             
             if (filtered.length !== stockChecks.length) {
               await AsyncStorage.setItem(stockChecksKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${stockChecks.length - filtered.length} old stock checks (older than ${RETENTION_DAYS} days)`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${stockChecks.length - filtered.length} invalid/deleted stock checks (full active history preserved)`);
               totalItemsCleaned += stockChecks.length - filtered.length;
             }
           }
@@ -110,17 +120,45 @@ export async function cleanupOldData(): Promise<void> {
     const preservedKeys = [
       LAST_CLEANUP_KEY,
       stockChecksKey,
+      '@stock_app_sales_deductions',
+      '@stock_app_reconcile_history',
+      '@reconciliation_kitchen_stock_reports',
+      '@reconciliation_sales_reports',
+      '@reconciliation_pending_kitchen_stock_reports',
+      '@reconciliation_pending_sales_reports',
+      '@reconciliation_last_sync',
+      '@kitchen_stock_reports',
+      '@sales_reports',
       '@stock_app_outlets',
       '@stock_app_current_user',
       '@stock_app_users',
       '@stock_app_show_page_tabs',
       '@stock_app_currency',
       '@stock_app_products',
+      '@stock_app_customers',
+      '@stock_app_orders',
       '@stock_app_product_conversions',
       '@stock_app_recipes',
       '@stock_app_linked_products',
       '@stock_app_store_products',
+      '@stock_app_live_inventory_snapshots',
       '@stock_app_suppliers',
+      '@stock_app_grns',
+      '@leave_types',
+      '@leave_requests',
+      '@staff_leave_balances',
+      '@leave_balance_security',
+      '@hr_staff_members',
+      '@hr_attendance_imports',
+      '@hr_payroll_month_sheets',
+      '@hr_security_settings',
+      '@hr_fingerprint_portal_settings',
+      '@hr_holiday_calendar_settings',
+      '@hr_loan_records',
+      '@hr_service_charge_settings',
+      '@hr_service_charge_month_entries',
+      '@campaign_settings',
+      '@permanent_settings_lock',
       'customers',
     ];
     
@@ -131,28 +169,15 @@ export async function cleanupOldData(): Promise<void> {
         if (requestsData) {
           const requests = JSON.parse(requestsData);
           if (Array.isArray(requests)) {
-            const approvedRetentionDaysAgo = currentDate - (APPROVED_REQUEST_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-            
             const filtered = requests.filter((req: any) => {
+              if (!req || typeof req !== 'object') return false;
               if (req.deleted) return false;
-              if (!req.requestedAt && !req.date) return true;
-              const itemDate = req.requestedAt || new Date(req.date).getTime();
-              
-              // CRITICAL: Keep APPROVED requests for 90 days (needed for Live Inventory Before/After columns)
-              if (req.status === 'approved') {
-                return itemDate >= approvedRetentionDaysAgo;
-              }
-              
-              // Pending/rejected requests: keep for standard retention period
-              return itemDate >= retentionDaysAgo;
+              return true;
             });
             
             if (filtered.length !== requests.length) {
               await AsyncStorage.setItem(requestsKey, JSON.stringify(filtered));
-              const approvedKept = filtered.filter((r: any) => r.status === 'approved').length;
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${requests.length - filtered.length} old requests`);
-              console.log(`[STORAGE CLEANUP]   - Approved requests kept: ${approvedKept} (${APPROVED_REQUEST_RETENTION_DAYS} day retention for Live Inventory)`);
-              console.log(`[STORAGE CLEANUP]   - Other requests: ${RETENTION_DAYS} day retention`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${requests.length - filtered.length} deleted/invalid requests (full active history preserved)`);
               totalItemsCleaned += requests.length - filtered.length;
             }
           }
@@ -169,21 +194,15 @@ export async function cleanupOldData(): Promise<void> {
         if (deductionsData) {
           const deductions = JSON.parse(deductionsData);
           if (Array.isArray(deductions)) {
-            let filtered = deductions.filter((d: any) => {
+            const filtered = deductions.filter((d: any) => {
+              if (!d || typeof d !== 'object') return false;
               if (d.deleted) return false;
-              if (!d.salesDate) return true;
-              return d.salesDate >= retentionDaysAgoStr;
+              return true;
             });
-            
-            if (filtered.length > DATA_LIMITS.MAX_SALES_DEDUCTIONS) {
-              filtered = filtered
-                .sort((a: any, b: any) => (b.salesDate || '').localeCompare(a.salesDate || ''))
-                .slice(0, DATA_LIMITS.MAX_SALES_DEDUCTIONS);
-            }
             
             if (filtered.length !== deductions.length) {
               await AsyncStorage.setItem(salesDeductionsKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${deductions.length - filtered.length} sales deductions (limit: ${DATA_LIMITS.MAX_SALES_DEDUCTIONS})`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${deductions.length - filtered.length} deleted/invalid sales deductions (full active history preserved)`);
               totalItemsCleaned += deductions.length - filtered.length;
             }
           }
@@ -200,22 +219,15 @@ export async function cleanupOldData(): Promise<void> {
         if (historyData) {
           const history = JSON.parse(historyData);
           if (Array.isArray(history)) {
-            let filtered = history.filter((h: any) => {
+            const filtered = history.filter((h: any) => {
+              if (!h || typeof h !== 'object') return false;
               if (h.deleted) return false;
-              if (!h.date && !h.timestamp) return true;
-              const itemDate = h.date || new Date(h.timestamp).toISOString().split('T')[0];
-              return itemDate >= retentionDaysAgoStr;
+              return true;
             });
-            
-            if (filtered.length > DATA_LIMITS.MAX_RECONCILE_HISTORY) {
-              filtered = filtered
-                .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
-                .slice(0, DATA_LIMITS.MAX_RECONCILE_HISTORY);
-            }
             
             if (filtered.length !== history.length) {
               await AsyncStorage.setItem(reconcileHistoryKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${history.length - filtered.length} reconcile history (limit: ${DATA_LIMITS.MAX_RECONCILE_HISTORY})`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${history.length - filtered.length} deleted/invalid reconcile history items (full active history preserved)`);
               totalItemsCleaned += history.length - filtered.length;
             }
           }
@@ -232,20 +244,15 @@ export async function cleanupOldData(): Promise<void> {
         if (reportsData) {
           const reports = JSON.parse(reportsData);
           if (Array.isArray(reports)) {
-            let filtered = reports.filter((r: any) => {
-              if (!r.date) return true;
-              return r.date >= retentionDaysAgoStr;
+            const filtered = reports.filter((r: any) => {
+              if (!r || typeof r !== 'object') return false;
+              if (r.deleted) return false;
+              return true;
             });
-            
-            if (filtered.length > DATA_LIMITS.MAX_KITCHEN_REPORTS) {
-              filtered = filtered
-                .sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
-                .slice(0, DATA_LIMITS.MAX_KITCHEN_REPORTS);
-            }
             
             if (filtered.length !== reports.length) {
               await AsyncStorage.setItem(kitchenReportsKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${reports.length - filtered.length} kitchen reports`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${reports.length - filtered.length} deleted/invalid kitchen reports (full active history preserved)`);
               totalItemsCleaned += reports.length - filtered.length;
             }
           }
@@ -262,20 +269,15 @@ export async function cleanupOldData(): Promise<void> {
         if (reportsData) {
           const reports = JSON.parse(reportsData);
           if (Array.isArray(reports)) {
-            let filtered = reports.filter((r: any) => {
-              if (!r.date) return true;
-              return r.date >= retentionDaysAgoStr;
+            const filtered = reports.filter((r: any) => {
+              if (!r || typeof r !== 'object') return false;
+              if (r.deleted) return false;
+              return true;
             });
-            
-            if (filtered.length > DATA_LIMITS.MAX_SALES_REPORTS) {
-              filtered = filtered
-                .sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
-                .slice(0, DATA_LIMITS.MAX_SALES_REPORTS);
-            }
             
             if (filtered.length !== reports.length) {
               await AsyncStorage.setItem(salesReportsKey, JSON.stringify(filtered));
-              console.log(`[STORAGE CLEANUP] ✓ Cleaned ${reports.length - filtered.length} sales reports`);
+              console.log(`[STORAGE CLEANUP] ✓ Removed ${reports.length - filtered.length} deleted/invalid sales reports (full active history preserved)`);
               totalItemsCleaned += reports.length - filtered.length;
             }
           }
@@ -317,58 +319,12 @@ export async function cleanupOldData(): Promise<void> {
       }
     }
     
-    if (allKeys.includes(stockChecksKey)) {
-      try {
-        const checksData = await AsyncStorage.getItem(stockChecksKey);
-        if (checksData) {
-          const checks = JSON.parse(checksData);
-          if (Array.isArray(checks) && checks.length > DATA_LIMITS.MAX_STOCK_CHECKS) {
-            const sorted = checks
-              .filter((c: any) => !c.deleted)
-              .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
-              .slice(0, DATA_LIMITS.MAX_STOCK_CHECKS);
-            
-            await AsyncStorage.setItem(stockChecksKey, JSON.stringify(sorted));
-            console.log(`[STORAGE CLEANUP] ✓ Limited stock checks to ${DATA_LIMITS.MAX_STOCK_CHECKS} (was ${checks.length})`);
-            totalItemsCleaned += checks.length - sorted.length;
-          }
-        }
-      } catch (error) {
-        console.error('[STORAGE CLEANUP] ✗ Error limiting stock checks:', error);
-      }
-    }
-    
-    if (allKeys.includes(requestsKey)) {
-      try {
-        const reqData = await AsyncStorage.getItem(requestsKey);
-        if (reqData) {
-          const reqs = JSON.parse(reqData);
-          if (Array.isArray(reqs) && reqs.length > DATA_LIMITS.MAX_REQUESTS) {
-            // CRITICAL: When limiting, prioritize keeping APPROVED requests (needed for Live Inventory)
-            const activeReqs = reqs.filter((r: any) => !r.deleted);
-            const approvedReqs = activeReqs.filter((r: any) => r.status === 'approved');
-            const otherReqs = activeReqs.filter((r: any) => r.status !== 'approved');
-            
-            // Sort each group by timestamp
-            approvedReqs.sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0));
-            otherReqs.sort((a: any, b: any) => (b.requestedAt || 0) - (a.requestedAt || 0));
-            
-            // Keep all approved requests first, then fill remaining with other requests
-            const sorted = [...approvedReqs, ...otherReqs].slice(0, DATA_LIMITS.MAX_REQUESTS);
-            
-            await AsyncStorage.setItem(requestsKey, JSON.stringify(sorted));
-            console.log(`[STORAGE CLEANUP] ✓ Limited requests to ${DATA_LIMITS.MAX_REQUESTS} (was ${reqs.length})`);
-            console.log(`[STORAGE CLEANUP]   - Approved requests preserved: ${Math.min(approvedReqs.length, DATA_LIMITS.MAX_REQUESTS)}`);
-            totalItemsCleaned += reqs.length - sorted.length;
-          }
-        }
-      } catch (error) {
-        console.error('[STORAGE CLEANUP] ✗ Error limiting requests:', error);
-      }
-    }
+    // IMPORTANT: Do not limit stock checks by count.
+    // Full stock check history is required for history reliability and live inventory traceability.
     
     for (const key of allKeys) {
       if (preservedKeys.includes(key) ||
+          key.startsWith('@reconciliation_') ||
           key.startsWith('@jsonbin_') || 
           key.startsWith('@device_id') ||
           key.startsWith('@central_bin_map')) {
@@ -432,7 +388,7 @@ export async function cleanupOldData(): Promise<void> {
     console.log(`[STORAGE CLEANUP]   - Space freed: ${savedMB}MB`);
     console.log(`[STORAGE CLEANUP]   - Next cleanup: in ${CLEANUP_INTERVAL_DAYS} days`);
     console.log(`[STORAGE CLEANUP]   - General data retention: ${RETENTION_DAYS} days`);
-    console.log(`[STORAGE CLEANUP]   - Approved requests retention: ${APPROVED_REQUEST_RETENTION_DAYS} days (for Live Inventory Before/After)`);
+    console.log('[STORAGE CLEANUP]   - Requests: full active history preserved (only deleted/invalid removed)');
     
   } catch (error) {
     console.error('[STORAGE CLEANUP] ✗ Error during cleanup:', error);

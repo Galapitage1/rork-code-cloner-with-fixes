@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef, ReactNode, createContext, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Customer } from '@/types';
-import { saveToServer, getFromServer, mergeData } from '@/utils/directSync';
+import { saveDeltaToServer } from '@/utils/directSync';
+import { syncData } from '@/utils/syncData';
 
 const CUSTOMERS_KEY = '@stock_app_customers';
 const CUSTOMERS_META_KEY = '@stock_app_customers_meta';
@@ -11,13 +12,13 @@ type CustomerContextType = {
   isLoading: boolean;
   isSyncing: boolean;
   lastSyncTime: number;
-  addCustomer: (customerData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => Promise<void>;
+  addCustomer: (customerData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => Promise<Customer | null>;
   importCustomers: (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => Promise<number>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<void>;
   deleteCustomer: (id: string) => Promise<void>;
   deleteDuplicatesByPhone: () => Promise<{ duplicatesFound: number; duplicatesDeleted: number }>;
   searchCustomers: (query: string) => Customer[];
-  syncCustomers: (silent?: boolean) => Promise<void>;
+  syncCustomers: (silent?: boolean, forceFullSync?: boolean) => Promise<void>;
   clearAllCustomers: () => Promise<void>;
 };
 
@@ -44,17 +45,27 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     }
     
     try {
-      const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
-      const activeCustomers = remoteData.filter((customer: Customer) => customer.deleted !== true);
+      const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
+      const parsedLocal = stored ? JSON.parse(stored) : [];
+      if (Array.isArray(parsedLocal) && parsedLocal.length > 0) {
+        const activeCustomers = parsedLocal.filter((customer: Customer) => customer.deleted !== true);
+        setCustomers(activeCustomers);
+      }
+
+      const synced = await syncData<Customer>('customers', Array.isArray(parsedLocal) ? parsedLocal : [], currentUser.id, {
+        fetchOnly: true,
+        includeDeleted: true,
+        minDays: 3650,
+      });
+      const activeCustomers = synced.filter((customer: Customer) => customer.deleted !== true);
       setCustomers(activeCustomers);
-      
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(synced));
+
       const meta = {
         count: activeCustomers.length,
         lastLoaded: Date.now()
       };
       await AsyncStorage.setItem(CUSTOMERS_META_KEY, JSON.stringify(meta));
-      
-      await AsyncStorage.removeItem(CUSTOMERS_KEY);
     } catch {
       try {
         const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
@@ -80,13 +91,23 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
   const saveCustomers = useCallback(async (newCustomers: Customer[]) => {
     try {
-      setCustomers(newCustomers);
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(newCustomers));
+      setCustomers(newCustomers.filter(customer => customer.deleted !== true));
     } catch {
     }
   }, []);
 
+  const pushCustomerChanges = useCallback(async (changedCustomers: Customer[]) => {
+    if (!currentUser || changedCustomers.length === 0) return;
+    try {
+      await saveDeltaToServer(changedCustomers, { userId: currentUser.id, dataType: 'customers' });
+    } catch {
+      // Keep local save as source of truth; auto/manual sync can retry later.
+    }
+  }, [currentUser]);
+
   const addCustomer = useCallback(async (customerData: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => {
-    if (!currentUser) return;
+    if (!currentUser) return null;
 
     const newCustomer: Customer = {
       ...customerData,
@@ -98,7 +119,9 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
     const updated = [...customers, newCustomer];
     await saveCustomers(updated);
-  }, [currentUser, customers, saveCustomers]);
+    await pushCustomerChanges([newCustomer]);
+    return newCustomer;
+  }, [currentUser, customers, saveCustomers, pushCustomerChanges]);
 
   const importCustomers = useCallback(async (customerDataList: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>[]) => {
     if (!currentUser) return 0;
@@ -114,14 +137,14 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
     const updated = [...customers, ...newCustomers];
     try {
-      const synced = await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
-      setCustomers(synced.filter(c => c.deleted !== true));
+      await saveCustomers(updated);
+      await pushCustomerChanges(newCustomers);
     } catch {
       await saveCustomers(updated);
     }
     
     return newCustomers.length;
-  }, [currentUser, customers, saveCustomers]);
+  }, [currentUser, customers, saveCustomers, pushCustomerChanges]);
 
   const updateCustomer = useCallback(async (id: string, updates: Partial<Customer>) => {
     const updated = customers.map(customer =>
@@ -130,7 +153,11 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
         : customer
     );
     await saveCustomers(updated);
-  }, [customers, saveCustomers]);
+    const changedCustomer = updated.find(customer => customer.id === id);
+    if (changedCustomer) {
+      await pushCustomerChanges([changedCustomer]);
+    }
+  }, [customers, saveCustomers, pushCustomerChanges]);
 
   const deleteCustomer = useCallback(async (id: string) => {
     const updated = customers.map(customer =>
@@ -141,11 +168,15 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     const activeCustomers = updated.filter(c => c.deleted !== true);
     try {
       setCustomers(activeCustomers);
-      await saveToServer(updated, { userId: currentUser?.id || '', dataType: 'customers' });
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(updated));
+      const changedCustomer = updated.find(customer => customer.id === id);
+      if (changedCustomer) {
+        await pushCustomerChanges([changedCustomer]);
+      }
     } catch (error) {
       throw error;
     }
-  }, [customers, currentUser]);
+  }, [customers, pushCustomerChanges]);
 
   const searchCustomers = useCallback((query: string): Customer[] => {
     if (!query.trim()) return customers;
@@ -161,13 +192,22 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
 
   const syncInProgressRef = useRef(false);
 
-  const syncCustomers = useCallback(async (silent: boolean = false) => {
+  const syncCustomers = useCallback(async (silent: boolean = false, forceFullSync: boolean = false) => {
     if (!currentUser) {
       return;
     }
     
     if (syncInProgressRef.current) {
-      return;
+      if (silent && !forceFullSync) {
+        return;
+      }
+      const waitStart = Date.now();
+      while (syncInProgressRef.current && Date.now() - waitStart < 15000) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+      if (syncInProgressRef.current) {
+        throw new Error('Customer sync is still in progress. Please retry.');
+      }
     }
     
     try {
@@ -176,11 +216,18 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
         setIsSyncing(true);
       }
       
-      const remoteData = await getFromServer<Customer>({ userId: currentUser.id, dataType: 'customers' });
-      const merged = mergeData(customers, remoteData);
-      const synced = await saveToServer(merged, { userId: currentUser.id, dataType: 'customers' });
+      const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
+      const localCustomers: Customer[] = stored ? JSON.parse(stored) : customers;
+      const includeDeleted = forceFullSync || !silent;
+      const minDays = forceFullSync || !silent ? 90 : undefined;
+      const synced = await syncData('customers', localCustomers, currentUser.id, {
+        fetchOnly: forceFullSync,
+        includeDeleted,
+        minDays,
+      });
       
-      const activeCustomers = synced.filter(customer => customer.deleted !== true);
+      const activeCustomers = (synced as Customer[]).filter(customer => customer.deleted !== true);
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(synced));
       setCustomers(activeCustomers);
       setLastSyncTime(Date.now());
     } catch (error) {
@@ -194,6 +241,26 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       }
     }
   }, [currentUser, customers]);
+
+  const hasAttemptedRecoveryRef = useRef(false);
+
+  useEffect(() => {
+    if (!currentUser || isLoading || isSyncing) {
+      return;
+    }
+    if (customers.length > 0) {
+      hasAttemptedRecoveryRef.current = false;
+      return;
+    }
+    if (hasAttemptedRecoveryRef.current) {
+      return;
+    }
+
+    hasAttemptedRecoveryRef.current = true;
+    syncCustomers(true, true).catch((error) => {
+      console.error('[CustomerContext] Background recovery sync failed:', error);
+    });
+  }, [currentUser, customers.length, isLoading, isSyncing, syncCustomers]);
 
 
 
@@ -236,12 +303,14 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
     const activeCustomers = updated.filter(c => c.deleted !== true);
     try {
       setCustomers(activeCustomers);
-      await saveToServer(updated, { userId: currentUser.id, dataType: 'customers' });
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(updated));
+      const changedCustomers = updated.filter(customer => idsToDelete.has(customer.id));
+      await pushCustomerChanges(changedCustomers);
       return { duplicatesFound, duplicatesDeleted: idsToDelete.size };
     } catch (error) {
       throw error;
     }
-  }, [customers, currentUser]);
+  }, [customers, currentUser, pushCustomerChanges]);
 
   const clearAllCustomers = useCallback(async () => {
     try {

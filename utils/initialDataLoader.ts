@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFromServer } from './directSync';
 
 const DATA_TYPES_TO_LOAD = [
+  'users',
   'outlets',
   'products',
   'stockChecks',
@@ -20,6 +21,15 @@ const DATA_TYPES_TO_LOAD = [
   'orders',
   'recipes',
   'linkedProducts',
+  'liveInventorySnapshots',
+  'leave_types',
+  'leave_requests',
+  'staff_leave_balances',
+  'hr_staff_members',
+  'hr_attendance_imports',
+  'hr_payroll_month_sheets',
+  'hr_loan_records',
+  'hr_service_charge_month_entries',
 ];
 
 const STORAGE_KEY_MAP: Record<string, string> = {
@@ -42,6 +52,15 @@ const STORAGE_KEY_MAP: Record<string, string> = {
   orders: '@stock_app_orders',
   recipes: '@stock_app_recipes',
   linkedProducts: '@stock_app_linked_products',
+  liveInventorySnapshots: '@stock_app_live_inventory_snapshots',
+  leave_types: '@leave_types',
+  leave_requests: '@leave_requests',
+  staff_leave_balances: '@staff_leave_balances',
+  hr_staff_members: '@hr_staff_members',
+  hr_attendance_imports: '@hr_attendance_imports',
+  hr_payroll_month_sheets: '@hr_payroll_month_sheets',
+  hr_loan_records: '@hr_loan_records',
+  hr_service_charge_month_entries: '@hr_service_charge_month_entries',
 };
 
 async function hasLocalData(dataType: string): Promise<boolean> {
@@ -53,7 +72,13 @@ async function hasLocalData(dataType: string): Promise<boolean> {
     if (!data) return false;
 
     const parsed = JSON.parse(data);
-    return Array.isArray(parsed) && parsed.length > 0;
+    if (Array.isArray(parsed)) {
+      return parsed.length > 0;
+    }
+    if (parsed && typeof parsed === 'object') {
+      return Object.keys(parsed).length > 0;
+    }
+    return !!parsed;
   } catch {
     return false;
   }
@@ -63,30 +88,36 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
   try {
     onProgress?.('Checking local data...');
 
-    const hasOutlets = await hasLocalData('outlets');
-    const hasProducts = await hasLocalData('products');
-    const hasUsers = await hasLocalData('users');
+    const missingTypes: string[] = [];
+    for (const dataType of DATA_TYPES_TO_LOAD) {
+      const hasData = await hasLocalData(dataType);
+      if (!hasData) {
+        missingTypes.push(dataType);
+      }
+    }
 
-    if (hasOutlets && hasProducts && hasUsers) {
+    if (missingTypes.length === 0) {
       onProgress?.('Data already loaded');
       return;
     }
 
-    const priorityTypes = ['users', 'outlets'];
-    onProgress?.('Loading users and outlets...');
+    const priorityTypes = ['users', 'outlets', 'products'].filter((dataType) => missingTypes.includes(dataType));
+    if (priorityTypes.length > 0) {
+      onProgress?.(`Loading ${priorityTypes.join(', ')}...`);
     
-    await Promise.all(priorityTypes.map(async (dataType) => {
-      try {
-        const data = await getFromServer({ userId, dataType });
-        const storageKey = STORAGE_KEY_MAP[dataType];
-        if (storageKey) {
-          await AsyncStorage.setItem(storageKey, JSON.stringify(data));
+      await Promise.all(priorityTypes.map(async (dataType) => {
+        try {
+          const data = await getFromServer({ userId, dataType, minDays: 3650, includeDeleted: true });
+          const storageKey = STORAGE_KEY_MAP[dataType];
+          if (storageKey) {
+            await AsyncStorage.setItem(storageKey, JSON.stringify(data));
+          }
+        } catch {
         }
-      } catch {
-      }
-    }));
+      }));
+    }
 
-    const remainingTypes = DATA_TYPES_TO_LOAD.filter(t => !priorityTypes.includes(t));
+    const remainingTypes = missingTypes.filter(t => !priorityTypes.includes(t));
     
     const total = remainingTypes.length;
     const batchSize = 5;
@@ -98,7 +129,7 @@ export async function loadInitialDataIfNeeded(userId: string, onProgress?: (stat
       
       await Promise.all(batch.map(async (dataType) => {
         try {
-          const data = await getFromServer({ userId, dataType });
+          const data = await getFromServer({ userId, dataType, minDays: 3650, includeDeleted: true });
           const storageKey = STORAGE_KEY_MAP[dataType];
           if (storageKey) {
             await AsyncStorage.setItem(storageKey, JSON.stringify(data));
@@ -118,7 +149,7 @@ export async function forceReloadAllData(userId: string): Promise<void> {
   try {
     for (const dataType of DATA_TYPES_TO_LOAD) {
       try {
-        const data = await getFromServer({ userId, dataType });
+        const data = await getFromServer({ userId, dataType, minDays: 3650, includeDeleted: true });
         const storageKey = STORAGE_KEY_MAP[dataType];
         if (storageKey) {
           await AsyncStorage.setItem(storageKey, JSON.stringify(data));
