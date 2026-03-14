@@ -280,6 +280,7 @@ export default function ProductsScreen() {
       console.log('[processExcelFile] Reading ALL products from storage (including deleted) to check for conflicts');
       const allProductsData = await AsyncStorage.getItem('@stock_app_products');
       const allProducts: Product[] = allProductsData ? JSON.parse(allProductsData) : [];
+      const nextAllProducts: Product[] = [...allProducts];
       console.log('[processExcelFile] Found', allProducts.length, 'total products in storage (active + deleted)');
       
       // Filter active products for Excel parser
@@ -318,10 +319,11 @@ export default function ProductsScreen() {
         processedKeys.add(productKey);
         
         // Check in ALL products (including deleted ones) to prevent conflicts
-        const existing = allProducts.find(
+        const existingIndex = nextAllProducts.findIndex(
           p => p.name.toLowerCase().trim() === parsedProduct.name.toLowerCase().trim() &&
                p.unit.toLowerCase().trim() === parsedProduct.unit.toLowerCase().trim()
         );
+        const existing = existingIndex >= 0 ? nextAllProducts[existingIndex] : undefined;
 
         if (existing && existing.deleted) {
           // Product was previously deleted - reactivate it with new data
@@ -335,13 +337,7 @@ export default function ProductsScreen() {
           };
           
           // Update in the allProducts array
-          const updatedAllProducts = allProducts.map(p =>
-            p.id === existing.id ? reactivated : p
-          );
-          await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedAllProducts));
-          
-          // Update local allProducts array for next iterations
-          allProducts.splice(allProducts.findIndex(p => p.id === existing.id), 1, reactivated);
+          nextAllProducts.splice(existingIndex, 1, reactivated);
           reactivatedCount++;
         } else if (existing) {
           const changes: string[] = [];
@@ -364,11 +360,7 @@ export default function ProductsScreen() {
             
             // Update in allProducts array directly
             const updatedProduct = { ...existing, ...updates, updatedAt: Date.now() };
-            const updatedAllProducts = allProducts.map(p => p.id === existing.id ? updatedProduct : p);
-            await AsyncStorage.setItem('@stock_app_products', JSON.stringify(updatedAllProducts));
-            
-            // Update local allProducts array for next iterations
-            allProducts.splice(allProducts.findIndex(p => p.id === existing.id), 1, updatedProduct);
+            nextAllProducts.splice(existingIndex, 1, updatedProduct);
             
             updatedProducts.push({ name: parsedProduct.name, unit: parsedProduct.unit, changes });
             updatedCount++;
@@ -382,10 +374,13 @@ export default function ProductsScreen() {
             updatedAt: Date.now(),
           };
           
-          allProducts.push(newProduct);
-          await AsyncStorage.setItem('@stock_app_products', JSON.stringify(allProducts));
+          nextAllProducts.push(newProduct);
           newCount++;
         }
+      }
+
+      if (newCount > 0 || updatedCount > 0 || reactivatedCount > 0) {
+        await AsyncStorage.setItem('@stock_app_products', JSON.stringify(nextAllProducts));
       }
 
       // Trigger sync to reload products and update server
@@ -434,7 +429,7 @@ export default function ProductsScreen() {
       );
     } catch (error) {
       console.error('Process error:', error);
-      Alert.alert('Error', 'Failed to process Excel file.');
+      Alert.alert('Error', `Failed to process Excel file.${error instanceof Error && error.message ? `\n\n${error.message}` : ''}`);
     } finally {
       setIsImporting(false);
     }
