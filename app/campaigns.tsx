@@ -385,8 +385,11 @@ export default function CampaignsScreen() {
 
     try {
       console.log('[CAMPAIGNS] Saving campaign settings...');
+      const existingRaw = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
+      const existingSettings = existingRaw ? JSON.parse(existingRaw) : {};
       const settings = {
-        id: 'campaign_settings',
+        ...existingSettings,
+        id: existingSettings?.id || 'campaign_settings',
         smtpHost,
         smtpPort,
         smtpUsername,

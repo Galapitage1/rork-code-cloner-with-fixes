@@ -319,6 +319,44 @@ export interface WebsiteOrder {
   deviceId?: string;
 }
 
+export interface UberEatsOrderItem {
+  id?: string;
+  title: string;
+  quantity: number;
+  price?: number;
+  customizations?: string[];
+  specialInstructions?: string;
+}
+
+export interface UberEatsOrder {
+  id: string;
+  displayId?: string;
+  storeId: string;
+  storeName?: string;
+  outletName?: string;
+  currentState?: string;
+  fulfillmentType?: string;
+  orderDate: string;
+  orderTime: string;
+  placedAt?: string;
+  scheduledAt?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerAddress?: string;
+  currency?: string;
+  totalAmount?: number;
+  subtotalAmount?: number;
+  taxAmount?: number;
+  deliveryFee?: number;
+  items: UberEatsOrderItem[];
+  raw?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  deleted?: boolean;
+  deviceId?: string;
+}
+
 export interface StoreProduct {
   id: string;
   name: string;
@@ -666,6 +704,14 @@ export interface HRStaffMember {
   employeeCode?: string;
   position?: string;
   epfNumber?: string;
+  contactNumber?: string;
+  residentialAddress?: string;
+  permanentAddress?: string;
+  nicNumber?: string;
+  dateOfBirth?: string;
+  emailAddress?: string;
+  emergencyContactName?: string;
+  emergencyContactNumber?: string;
   active?: boolean;
   payrollDefaults?: Record<string, string | number | null>;
   notes?: string;

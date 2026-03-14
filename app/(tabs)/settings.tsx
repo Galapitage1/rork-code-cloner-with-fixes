@@ -71,6 +71,9 @@ export default function SettingsScreen() {
   const [websiteOrdersUsername, setWebsiteOrdersUsername] = useState<string>('');
   const [websiteOrdersPassword, setWebsiteOrdersPassword] = useState<string>('');
   const [websiteOrdersBizId, setWebsiteOrdersBizId] = useState<string>('');
+  const [uberEatsClientId, setUberEatsClientId] = useState<string>('');
+  const [uberEatsClientSecret, setUberEatsClientSecret] = useState<string>('');
+  const [uberEatsOutletConfigs, setUberEatsOutletConfigs] = useState<Record<string, { outletName: string; storeId: string; storeName: string }>>({});
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [isTestingEmail, setIsTestingEmail] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -102,6 +105,26 @@ export default function SettingsScreen() {
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
   const canManageAddDeleteInSettings = isSuperAdmin;
 
+  const normalizeUberOutletConfigs = useCallback((rawConfigs: any) => {
+    const next: Record<string, { outletName: string; storeId: string; storeName: string }> = {};
+    const source = rawConfigs && typeof rawConfigs === 'object' ? rawConfigs : {};
+    outlets
+      .filter((outlet) => outlet.outletType === 'sales' && !outlet.deleted)
+      .forEach((outlet) => {
+        const byName = source[outlet.name];
+        const byId = source[outlet.id];
+        const current = byName && typeof byName === 'object'
+          ? byName
+          : (byId && typeof byId === 'object' ? byId : {});
+        next[outlet.name] = {
+          outletName: outlet.name,
+          storeId: String(current?.storeId || '').trim(),
+          storeName: String(current?.storeName || '').trim(),
+        };
+      });
+    return next;
+  }, [outlets]);
+
   const loadCampaignSettings = useCallback(async () => {
     try {
       console.log('[SETTINGS] Loading campaign settings from local storage...');
@@ -120,8 +143,12 @@ export default function SettingsScreen() {
         setWebsiteOrdersUsername(localParsed.websiteOrdersUsername || '');
         setWebsiteOrdersPassword(localParsed.websiteOrdersPassword || '');
         setWebsiteOrdersBizId(localParsed.websiteOrdersBizId || '');
+        setUberEatsClientId(localParsed.uberEatsClientId || '');
+        setUberEatsClientSecret(localParsed.uberEatsClientSecret || '');
+        setUberEatsOutletConfigs(normalizeUberOutletConfigs(localParsed.uberEatsOutletConfigs));
       } else {
         console.log('[SETTINGS] No local settings found');
+        setUberEatsOutletConfigs(normalizeUberOutletConfigs({}));
       }
       
       if (currentUser) {
@@ -150,6 +177,9 @@ export default function SettingsScreen() {
             setWebsiteOrdersUsername(latest?.websiteOrdersUsername || '');
             setWebsiteOrdersPassword(latest?.websiteOrdersPassword || '');
             setWebsiteOrdersBizId(latest?.websiteOrdersBizId || '');
+            setUberEatsClientId(latest?.uberEatsClientId || '');
+            setUberEatsClientSecret(latest?.uberEatsClientSecret || '');
+            setUberEatsOutletConfigs(normalizeUberOutletConfigs(latest?.uberEatsOutletConfigs));
           }
         } catch (syncError) {
           console.error('[SETTINGS] Failed to sync campaign settings from server:', syncError);
@@ -158,11 +188,21 @@ export default function SettingsScreen() {
     } catch (error) {
       console.error('[SETTINGS] Failed to load campaign settings:', error);
     }
-  }, [currentUser]);
+  }, [currentUser, normalizeUberOutletConfigs]);
 
   useEffect(() => {
     loadCampaignSettings();
   }, [loadCampaignSettings]);
+
+  useEffect(() => {
+    setUberEatsOutletConfigs((prev) => {
+      const normalized = normalizeUberOutletConfigs(prev);
+      if (JSON.stringify(normalized) === JSON.stringify(prev || {})) {
+        return prev;
+      }
+      return normalized;
+    });
+  }, [normalizeUberOutletConfigs]);
 
   const loadSyncDiagnostics = useCallback(async (silent: boolean = false) => {
     try {
@@ -192,7 +232,10 @@ export default function SettingsScreen() {
     try {
       setIsSavingSettings(true);
       setConnectionStatus(null);
+      const existingRaw = await AsyncStorage.getItem(CAMPAIGN_SETTINGS_KEY);
+      const existingSettings = existingRaw ? JSON.parse(existingRaw) : {};
       const settings = {
+        ...existingSettings,
         emailApiKey,
         emailApiProvider,
         smsApiKey,
@@ -204,8 +247,11 @@ export default function SettingsScreen() {
         websiteOrdersUsername,
         websiteOrdersPassword,
         websiteOrdersBizId,
+        uberEatsClientId,
+        uberEatsClientSecret,
+        uberEatsOutletConfigs,
         updatedAt: Date.now(),
-        id: 'campaign_settings',
+        id: existingSettings?.id || 'campaign_settings',
       };
       
       await AsyncStorage.setItem(CAMPAIGN_SETTINGS_KEY, JSON.stringify(settings));
@@ -1607,6 +1653,89 @@ export default function SettingsScreen() {
                   Orders tab will use these saved credentials to pull website orders from the last 7 days to next 7 days.
                 </Text>
               </View>
+
+              <Text style={styles.sectionSubtitle}>Uber Eats Official API</Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Uber Client ID</Text>
+                <TextInput
+                  style={styles.input}
+                  value={uberEatsClientId}
+                  onChangeText={setUberEatsClientId}
+                  placeholder="Enter Uber Developer Client ID"
+                  placeholderTextColor={Colors.light.muted}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Uber Client Secret</Text>
+                <TextInput
+                  style={styles.input}
+                  value={uberEatsClientSecret}
+                  onChangeText={setUberEatsClientSecret}
+                  placeholder="Enter Uber Developer Client Secret"
+                  placeholderTextColor={Colors.light.muted}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>
+                  Webhook URL for Uber: https://tracker.tecclk.com/Tracker/api/uber-eats-webhook.php
+                  {'\n'}Use official Uber app credentials above, then map each sales outlet to its Uber Store ID below.
+                </Text>
+              </View>
+
+              <Text style={styles.sectionSubtitle}>Uber Outlet Mapping</Text>
+              {outlets.filter((outlet) => outlet.outletType === 'sales' && !outlet.deleted).map((outlet) => {
+                const config = uberEatsOutletConfigs[outlet.name] || {
+                  outletName: outlet.name,
+                  storeId: '',
+                  storeName: '',
+                };
+                return (
+                  <View key={`uber_${outlet.id}`} style={styles.syncInfoCard}>
+                    <Text style={[styles.inputLabel, { marginBottom: 10 }]}>{outlet.name}</Text>
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>Uber Store ID</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={config.storeId}
+                        onChangeText={(value) => setUberEatsOutletConfigs((prev) => ({
+                          ...prev,
+                          [outlet.name]: {
+                            outletName: outlet.name,
+                            storeId: value,
+                            storeName: prev[outlet.name]?.storeName || config.storeName || '',
+                          },
+                        }))}
+                        placeholder="Store ID from Uber"
+                        placeholderTextColor={Colors.light.muted}
+                        autoCapitalize="none"
+                      />
+                    </View>
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>Store Name (Optional)</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={config.storeName}
+                        onChangeText={(value) => setUberEatsOutletConfigs((prev) => ({
+                          ...prev,
+                          [outlet.name]: {
+                            outletName: outlet.name,
+                            storeId: prev[outlet.name]?.storeId || config.storeId || '',
+                            storeName: value,
+                          },
+                        }))}
+                        placeholder="Helpful label from Uber"
+                        placeholderTextColor={Colors.light.muted}
+                      />
+                    </View>
+                  </View>
+                );
+              })}
 
               <View style={{ flexDirection: 'row', gap: 12 }}>
                 <TouchableOpacity

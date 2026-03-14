@@ -9,19 +9,20 @@ import { useOrders } from '@/contexts/OrderContext';
 import { useCustomers } from '@/contexts/CustomerContext';
 import { useStock } from '@/contexts/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { CustomerOrder, DeliveryMethod, OrderProduct, OrderReceivedFrom, WebsiteOrder, WebsiteOrderItem } from '@/types';
+import { CustomerOrder, DeliveryMethod, OrderProduct, OrderReceivedFrom, UberEatsOrder, WebsiteOrder, WebsiteOrderItem } from '@/types';
 import { CalendarModal } from '@/components/CalendarModal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { syncData } from '@/utils/syncData';
 import { getFromServer } from '@/utils/directSync';
 
 const WEBSITE_ORDERS_KEY = '@stock_app_website_orders';
+const UBER_EATS_ORDERS_KEY = '@stock_app_uber_eats_orders';
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 const WEBSITE_PRODUCT_MAP_KEY = '@website_order_product_map_v1';
 const WEBSITE_SOURCE = 'website' as const;
 const WEBSITE_NOTE_PREFIX = 'Website TX:';
 
-type OrdersViewMode = 'active' | 'fulfilled' | 'website';
+type OrdersViewMode = 'active' | 'fulfilled' | 'website' | 'uber';
 
 type RemoteWebsiteOrder = {
   transactionId?: unknown;
@@ -85,6 +86,21 @@ type CampaignSettings = {
   websiteOrdersUsername?: string;
   websiteOrdersPassword?: string;
   websiteOrdersBizId?: string;
+  uberEatsClientId?: string;
+  uberEatsClientSecret?: string;
+  uberEatsOutletConfigs?: Record<string, { outletName?: string; storeId?: string; storeName?: string }>;
+};
+
+type UberEatsSyncResponse = {
+  success?: boolean;
+  error?: string;
+  savedCount?: number;
+  counts?: Array<{
+    outletName?: string;
+    storeId?: string;
+    loaded?: number;
+    error?: string;
+  }>;
 };
 
 type WebsitePullOptions = {
@@ -375,6 +391,10 @@ export default function OrdersScreen() {
   const [websiteMatchModalVisible, setWebsiteMatchModalVisible] = useState<boolean>(false);
   const [websiteMatchChoices, setWebsiteMatchChoices] = useState<WebsiteUnmatchedChoice[]>([]);
   const [websiteMatchSelections, setWebsiteMatchSelections] = useState<Record<string, string>>({});
+  const [uberEatsOrders, setUberEatsOrders] = useState<UberEatsOrder[]>([]);
+  const [uberEatsOrdersLoading, setUberEatsOrdersLoading] = useState<boolean>(false);
+  const [uberEatsOrdersSyncing, setUberEatsOrdersSyncing] = useState<boolean>(false);
+  const [uberOutletFilter, setUberOutletFilter] = useState<string>('');
 
   const websiteMatchResolverRef = useRef<((value: WebsiteMappingPromptResult) => void) | null>(null);
   const lastWebsitePingAtRef = useRef<number>(0);
@@ -408,6 +428,20 @@ export default function OrdersScreen() {
 
   const mergeWebsiteOrders = useCallback((existing: WebsiteOrder[], incoming: WebsiteOrder[]) => {
     const byId = new Map<string, WebsiteOrder>();
+    existing.forEach((order) => {
+      byId.set(order.id, order);
+    });
+    incoming.forEach((order) => {
+      const current = byId.get(order.id);
+      if (!current || (order.updatedAt || 0) >= (current.updatedAt || 0)) {
+        byId.set(order.id, order);
+      }
+    });
+    return Array.from(byId.values());
+  }, []);
+
+  const mergeUberEatsOrders = useCallback((existing: UberEatsOrder[], incoming: UberEatsOrder[]) => {
+    const byId = new Map<string, UberEatsOrder>();
     existing.forEach((order) => {
       byId.set(order.id, order);
     });
@@ -482,6 +516,67 @@ export default function OrdersScreen() {
     loadWebsiteOrders().catch(() => {});
   }, [loadWebsiteOrders]);
 
+  const persistUberEatsOrders = useCallback(async (next: UberEatsOrder[], changedItems?: UberEatsOrder[]) => {
+    const sorted = [...next].sort((a, b) => {
+      const aTs = a.updatedAt || a.createdAt || 0;
+      const bTs = b.updatedAt || b.createdAt || 0;
+      return bTs - aTs;
+    });
+    await AsyncStorage.setItem(UBER_EATS_ORDERS_KEY, JSON.stringify(sorted));
+
+    if (!currentUser) {
+      setUberEatsOrders(sorted.filter((o) => o.deleted !== true));
+      return;
+    }
+
+    const syncOptions: {
+      includeDeleted: boolean;
+      minDays: number;
+      changedItems?: UberEatsOrder[];
+    } = {
+      includeDeleted: true,
+      minDays: 365,
+    };
+    if (Array.isArray(changedItems) && changedItems.length > 0) {
+      syncOptions.changedItems = changedItems;
+    }
+
+    const synced = await syncData<UberEatsOrder>('uber_eats_orders', sorted, currentUser.id, syncOptions);
+    await AsyncStorage.setItem(UBER_EATS_ORDERS_KEY, JSON.stringify(synced));
+    const visible = synced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    setUberEatsOrders(visible);
+  }, [currentUser]);
+
+  const loadUberEatsOrders = useCallback(async () => {
+    if (!currentUser) {
+      setUberEatsOrders([]);
+      return;
+    }
+
+    setUberEatsOrdersLoading(true);
+    try {
+      const storedRaw = await AsyncStorage.getItem(UBER_EATS_ORDERS_KEY);
+      const localOrders: UberEatsOrder[] = storedRaw ? JSON.parse(storedRaw) : [];
+      const safeLocalOrders = Array.isArray(localOrders) ? localOrders : [];
+
+      const synced = await syncData<UberEatsOrder>('uber_eats_orders', safeLocalOrders, currentUser.id, {
+        includeDeleted: true,
+        minDays: 365,
+      });
+      await AsyncStorage.setItem(UBER_EATS_ORDERS_KEY, JSON.stringify(synced));
+      const visible = synced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      setUberEatsOrders(visible);
+    } catch (error) {
+      console.error('Failed to load Uber Eats orders:', error);
+    } finally {
+      setUberEatsOrdersLoading(false);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    loadUberEatsOrders().catch(() => {});
+  }, [loadUberEatsOrders]);
+
   const groupedWebsiteOrders = useMemo(() => {
     const grouped = new Map<string, WebsiteOrder[]>();
     websiteOrders.forEach((order) => {
@@ -502,6 +597,35 @@ export default function OrdersScreen() {
         }),
       ] as const);
   }, [websiteOrders]);
+
+  const filteredUberEatsOrders = useMemo(() => {
+    const selectedOutlet = String(uberOutletFilter || '').trim();
+    if (!selectedOutlet) {
+      return uberEatsOrders;
+    }
+    return uberEatsOrders.filter((order) => String(order.outletName || '').trim() === selectedOutlet);
+  }, [uberEatsOrders, uberOutletFilter]);
+
+  const groupedUberEatsOrders = useMemo(() => {
+    const grouped = new Map<string, UberEatsOrder[]>();
+    filteredUberEatsOrders.forEach((order) => {
+      const dateKey = order.orderDate || 'Unknown Date';
+      const existing = grouped.get(dateKey) || [];
+      existing.push(order);
+      grouped.set(dateKey, existing);
+    });
+
+    return Array.from(grouped.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, rows]) => [
+        date,
+        [...rows].sort((a, b) => {
+          const aTs = new Date(`${a.orderDate}T${a.orderTime || '00:00'}`).getTime();
+          const bTs = new Date(`${b.orderDate}T${b.orderTime || '00:00'}`).getTime();
+          return bTs - aTs;
+        }),
+      ] as const);
+  }, [filteredUberEatsOrders]);
 
   const toggleWebsiteRaw = useCallback((orderId: string) => {
     setWebsiteRawVisible((prev) => ({ ...prev, [orderId]: !prev[orderId] }));
@@ -543,6 +667,11 @@ export default function OrdersScreen() {
         websiteOrdersUsername: String(selected.websiteOrdersUsername || ''),
         websiteOrdersPassword: String(selected.websiteOrdersPassword || ''),
         websiteOrdersBizId: String(selected.websiteOrdersBizId || ''),
+        uberEatsClientId: String(selected.uberEatsClientId || ''),
+        uberEatsClientSecret: String(selected.uberEatsClientSecret || ''),
+        uberEatsOutletConfigs: (selected.uberEatsOutletConfigs && typeof selected.uberEatsOutletConfigs === 'object')
+          ? selected.uberEatsOutletConfigs
+          : {},
       };
     } catch {
       return {};
@@ -1015,6 +1144,59 @@ export default function OrdersScreen() {
       source: 'manual',
     });
   }, [pullWebsiteOrders]);
+
+  const pullUberEatsOrders = useCallback(async (): Promise<boolean> => {
+    if (!currentUser) {
+      Alert.alert('Error', 'You must be logged in to pull Uber Eats orders');
+      return false;
+    }
+
+    const settings = await loadWebsiteConnectionSettings();
+    const clientId = String(settings.uberEatsClientId || '').trim();
+    const clientSecret = String(settings.uberEatsClientSecret || '').trim();
+    const outletConfigs = settings.uberEatsOutletConfigs && typeof settings.uberEatsOutletConfigs === 'object'
+      ? settings.uberEatsOutletConfigs
+      : {};
+    const hasMappedStore = Object.values(outletConfigs).some((row: any) => String(row?.storeId || '').trim() !== '');
+    if (!clientId || !clientSecret || !hasMappedStore) {
+      Alert.alert(
+        'Missing Uber Eats Setup',
+        'Please add Uber Client ID, Client Secret, and at least one Uber Store ID mapping in Settings > Campaign Services.'
+      );
+      return false;
+    }
+
+    setUberEatsOrdersSyncing(true);
+    try {
+      const endpoint = `${getApiBaseUrl()}/Tracker/api/uber-eats-orders.php?action=sync`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outletName: uberOutletFilter || '',
+        }),
+      });
+      const data = (await response.json()) as UberEatsSyncResponse;
+      if (!response.ok || data.success !== true) {
+        throw new Error(data.error || `Failed to pull Uber Eats orders (HTTP ${response.status})`);
+      }
+
+      await loadUberEatsOrders();
+      const counts = Array.isArray(data.counts) ? data.counts : [];
+      const summaryText = counts.map((row) => `${row.outletName || 'Outlet'}: ${Number(row.loaded || 0)}`).join('\n');
+      Alert.alert(
+        'Uber Eats Orders Synced',
+        `Saved ${Number(data.savedCount || 0)} order(s).${summaryText ? `\n\n${summaryText}` : ''}`
+      );
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to pull Uber Eats orders';
+      Alert.alert('Uber Eats Sync Failed', message);
+      return false;
+    } finally {
+      setUberEatsOrdersSyncing(false);
+    }
+  }, [currentUser, loadWebsiteConnectionSettings, getApiBaseUrl, uberOutletFilter, loadUberEatsOrders]);
 
   const getKnownWebsiteTransactionIds = useCallback(() => {
     const known = new Set<string>();
@@ -1526,6 +1708,14 @@ export default function OrdersScreen() {
               Website ({websiteOrders.length})
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleButton, showViewMode === 'uber' && styles.toggleButtonActive]}
+            onPress={() => setShowViewMode('uber')}
+          >
+            <Text style={[styles.toggleText, showViewMode === 'uber' && styles.toggleTextActive]}>
+              Uber Eats ({uberEatsOrders.length})
+            </Text>
+          </TouchableOpacity>
         </View>
         {showViewMode === 'fulfilled' && fulfilledOrders.length > 0 && (
           <TouchableOpacity style={styles.exportButton} onPress={handleExportFulfilledOrders}>
@@ -1547,11 +1737,46 @@ export default function OrdersScreen() {
             </TouchableOpacity>
           </View>
         )}
+        {showViewMode === 'uber' && (
+          <View style={styles.websiteActions}>
+            <TouchableOpacity
+              style={[styles.exportButton, uberEatsOrdersSyncing && styles.disabledActionButton]}
+              onPress={() => {
+                pullUberEatsOrders().catch(() => {});
+              }}
+              disabled={uberEatsOrdersSyncing}
+            >
+              {uberEatsOrdersSyncing ? (
+                <ActivityIndicator size="small" color={Colors.light.tint} />
+              ) : (
+                <RefreshCw size={18} color={Colors.light.tint} />
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {showViewMode === 'website' && websiteRangeLabel ? (
         <View style={styles.websiteConfigCard}>
           <Text style={styles.websiteConfigHint}>Last pulled range: {websiteRangeLabel}</Text>
+        </View>
+      ) : null}
+
+      {showViewMode === 'uber' ? (
+        <View style={styles.websiteConfigCard}>
+          <Text style={styles.websiteConfigHint}>Show Uber Eats orders for the selected sales outlet.</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={uberOutletFilter}
+              onValueChange={(value: string) => setUberOutletFilter(value)}
+              style={styles.picker}
+            >
+              <Picker.Item label="All Outlets" value="" />
+              {salesOutlets.map((outlet) => (
+                <Picker.Item key={`uber_filter_${outlet.id}`} label={outlet.name} value={outlet.name} />
+              ))}
+            </Picker>
+          </View>
         </View>
       ) : null}
 
@@ -1665,6 +1890,100 @@ export default function OrdersScreen() {
                         </Text>
                       </View>
                     ) : null}
+                  </View>
+                ))}
+              </View>
+            ))}
+          </ScrollView>
+        )
+      ) : showViewMode === 'uber' ? (
+        uberEatsOrdersLoading ? (
+          <View style={styles.emptyContainer}>
+            <ActivityIndicator size="large" color={Colors.light.tint} />
+          </View>
+        ) : filteredUberEatsOrders.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <ShoppingBag size={64} color={Colors.light.muted} />
+            <Text style={styles.emptyTitle}>No Uber Eats Orders</Text>
+            <Text style={styles.emptyText}>Use the refresh button to sync Uber Eats orders for the selected outlet.</Text>
+          </View>
+        ) : (
+          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+            {groupedUberEatsOrders.map(([date, dateOrders]) => (
+              <View key={`uber_${date}`} style={styles.dateGroup}>
+                <Text style={styles.dateGroupTitle}>{date}</Text>
+                {dateOrders.map((order) => (
+                  <View key={order.id} style={styles.orderCard}>
+                    <View style={styles.orderHeader}>
+                      <View style={styles.orderHeaderLeft}>
+                        <Text style={styles.customerName}>{order.customerName || order.displayId || order.id}</Text>
+                        <Text style={styles.orderDateTime}>
+                          {order.orderDate} at {order.orderTime}
+                          {order.displayId ? `  |  ${order.displayId}` : ''}
+                        </Text>
+                      </View>
+                      <View style={styles.websiteStatusChip}>
+                        <Text style={styles.websiteStatusText}>{order.currentState || 'UNKNOWN'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.orderDetails}>
+                      <View style={styles.orderDetailRow}>
+                        <Package size={14} color={Colors.light.muted} />
+                        <Text style={styles.orderDetailText}>
+                          Outlet: {order.outletName || '-'} | Store: {order.storeName || order.storeId || '-'}
+                        </Text>
+                      </View>
+                      <View style={styles.orderDetailRow}>
+                        <ShoppingBag size={14} color={Colors.light.muted} />
+                        <Text style={styles.orderDetailText}>
+                          Type: {order.fulfillmentType || '-'}
+                          {order.scheduledAt ? ` | Scheduled: ${order.scheduledAt}` : ''}
+                        </Text>
+                      </View>
+                      {order.customerPhone ? (
+                        <View style={styles.orderDetailRow}>
+                          <Phone size={14} color={Colors.light.muted} />
+                          <Text style={styles.orderDetailText}>{order.customerPhone}</Text>
+                        </View>
+                      ) : null}
+                      {order.customerAddress ? (
+                        <View style={styles.orderDetailRow}>
+                          <MapPin size={14} color={Colors.light.muted} />
+                          <Text style={styles.orderDetailText}>{order.customerAddress}</Text>
+                        </View>
+                      ) : null}
+                      <View style={styles.orderDetailRow}>
+                        <Text style={styles.websiteMoneyLabel}>Total:</Text>
+                        <Text style={styles.websiteMoneyValue}>
+                          {order.currency || 'LKR'} {typeof order.totalAmount === 'number' ? order.totalAmount.toFixed(2) : '0.00'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.productsSection}>
+                      <Text style={styles.productsSectionTitle}>Items:</Text>
+                      {order.items.length === 0 ? (
+                        <Text style={styles.notesText}>No item rows found.</Text>
+                      ) : (
+                        order.items.map((item, idx) => (
+                          <View key={`${order.id}_uber_${idx}`} style={styles.productItem}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.productName}>{item.title}</Text>
+                              {item.customizations && item.customizations.length > 0 ? (
+                                <Text style={styles.notesText}>{item.customizations.join(', ')}</Text>
+                              ) : null}
+                              {item.specialInstructions ? (
+                                <Text style={styles.notesText}>{item.specialInstructions}</Text>
+                              ) : null}
+                            </View>
+                            <Text style={styles.productQuantity}>
+                              {item.quantity} x {typeof item.price === 'number' ? item.price.toFixed(2) : '0.00'}
+                            </Text>
+                          </View>
+                        ))
+                      )}
+                    </View>
                   </View>
                 ))}
               </View>
@@ -1800,7 +2119,7 @@ export default function OrdersScreen() {
         </ScrollView>
       )}
 
-      {showViewMode !== 'website' && (
+      {showViewMode !== 'website' && showViewMode !== 'uber' && (
         <TouchableOpacity
           style={styles.fab}
           onPress={() => {
@@ -2235,14 +2554,17 @@ const styles = StyleSheet.create({
   },
   toggleContainer: {
     flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
     backgroundColor: Colors.light.background,
     borderRadius: 8,
     padding: 4,
+    gap: 4,
   },
   toggleButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
+    flexShrink: 1,
   },
   toggleButtonActive: {
     backgroundColor: Colors.light.tint,
