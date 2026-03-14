@@ -29,11 +29,14 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
       const nameIndex = headers.findIndex((h: string) => h.includes('name') || h.includes('product'));
       const typeIndex = headers.findIndex((h: string) => h.includes('type'));
       const unitIndex = headers.findIndex((h: string) => h.includes('unit'));
+      const descriptionIndex = headers.findIndex((h: string) => h.includes('description'));
       const categoryIndex = headers.findIndex((h: string) => h.includes('category'));
       const minStockIndex = headers.findIndex((h: string) => h.includes('min') || h.includes('minimum'));
       const sellingPriceIndex = headers.findIndex((h: string) => h.includes('selling') && h.includes('price'));
       const showInStockIndex = headers.findIndex((h: string) => h.includes('show') && (h.includes('stock') || h.includes('requests')));
       const salesBasedIndex = headers.findIndex((h: string) => h.includes('sales') && h.includes('raw'));
+      const kotIndex = headers.findIndex((h: string) => h.includes('kot'));
+      const botIndex = headers.findIndex((h: string) => h.includes('bot'));
       
       
 
@@ -62,9 +65,14 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
 
         const salesBasedVal = salesBasedIndex !== -1 && row[salesBasedIndex] !== undefined && row[salesBasedIndex] !== null ? String(row[salesBasedIndex]).toLowerCase().trim() : '';
         const salesBasedRawCalc = ['true','yes','y','1'].includes(salesBasedVal);
+        const kotVal = kotIndex !== -1 && row[kotIndex] !== undefined && row[kotIndex] !== null ? String(row[kotIndex]).toLowerCase().trim() : '';
+        const kotEnabled = ['true','yes','y','1'].includes(kotVal);
+        const botVal = botIndex !== -1 && row[botIndex] !== undefined && row[botIndex] !== null ? String(row[botIndex]).toLowerCase().trim() : '';
+        const botEnabled = ['true','yes','y','1'].includes(botVal);
 
         const parsedName = String(name).trim();
         const parsedUnit = unitIndex !== -1 && row[unitIndex] ? String(row[unitIndex]).trim() : 'units';
+        const parsedDescription = descriptionIndex !== -1 && row[descriptionIndex] ? String(row[descriptionIndex]).trim() : undefined;
         const parsedCategory = categoryIndex !== -1 && row[categoryIndex] ? String(row[categoryIndex]).trim() : undefined;
         const parsedMinStock = minStockIndex !== -1 && row[minStockIndex] ? Number(row[minStockIndex]) : undefined;
         
@@ -82,11 +90,14 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
           const updatedProduct: Product = {
             ...existingProduct,
             type,
+            description: parsedDescription,
             category: parsedCategory,
             minStock: parsedMinStock,
             sellingPrice: parsedSellingPrice,
             showInStock,
             salesBasedRawCalc,
+            kotEnabled,
+            botEnabled,
           };
           
           products.push(updatedProduct);
@@ -96,11 +107,14 @@ export function parseExcelFile(base64Data: string, existingProducts?: Product[])
             name: parsedName,
             type,
             unit: parsedUnit,
+            description: parsedDescription,
             category: parsedCategory,
             minStock: parsedMinStock,
             sellingPrice: parsedSellingPrice,
             showInStock,
             salesBasedRawCalc,
+            kotEnabled,
+            botEnabled,
           };
           products.push(product);
         }
@@ -517,17 +531,17 @@ export function parseStockCheckExcelFile(
 
 export function generateSampleExcelBase64(): string {
   const sampleData = [
-    ['Product Name', 'Type', 'Unit', 'Category', 'Min Stock', 'Selling Price', 'Show in Stock & Requests (TRUE/FALSE)', 'Sales Based Raw Calc (TRUE/FALSE)'],
-    ['Chocolate Cake', 'menu', 'whole', 'Cakes', 5, 2500, true, true],
-    ['Chocolate Cake', 'menu', 'slice', 'Cakes', '', 350, true, true],
-    ['Vanilla Cupcake', 'menu', 'pieces', 'Cupcakes', 12, 150, true, true],
-    ['Croissant', 'menu', 'pieces', 'Pastries', 20, 200, true, false],
-    ['Flour', 'raw', 'kg', 'Ingredients', 10, '', true, false],
-    ['Sugar', 'raw', 'kg', 'Ingredients', 5, '', false, false],
-    ['Butter', 'raw', 'kg', 'Ingredients', 3, '', true, false],
-    ['Eggs', 'raw', 'dozen', 'Ingredients', 5, '', true, false],
-    ['Milk', 'raw', 'liters', 'Ingredients', 10, '', true, false],
-    ['Frosting', 'kitchen', 'kg', 'Prepared Items', 5, '', true, false],
+    ['Product Name', 'Description', 'Type', 'Unit', 'Category', 'Min Stock', 'Selling Price', 'Show in Stock & Requests (TRUE/FALSE)', 'Sales Based Raw Calc (TRUE/FALSE)', 'KOT Enabled (TRUE/FALSE)', 'BOT Enabled (TRUE/FALSE)'],
+    ['Chocolate Cake', 'Signature chocolate cake sold as whole', 'menu', 'whole', 'Cakes', 5, 2500, true, true, true, false],
+    ['Chocolate Cake', 'Signature chocolate cake sold by slice', 'menu', 'slice', 'Cakes', '', 350, true, true, true, false],
+    ['Vanilla Cupcake', 'Single vanilla cupcake', 'menu', 'pieces', 'Cupcakes', 12, 150, true, true, true, false],
+    ['Croissant', 'Butter croissant', 'menu', 'pieces', 'Pastries', 20, 200, true, false, false, false],
+    ['Flour', 'Base flour for baking', 'raw', 'kg', 'Ingredients', 10, '', true, false, false, false],
+    ['Sugar', 'White sugar', 'raw', 'kg', 'Ingredients', 5, '', false, false, false, false],
+    ['Butter', 'Unsalted butter', 'raw', 'kg', 'Ingredients', 3, '', true, false, false, false],
+    ['Eggs', 'Fresh eggs', 'raw', 'dozen', 'Ingredients', 5, '', true, false, false, false],
+    ['Milk', 'Fresh milk', 'raw', 'liters', 'Ingredients', 10, '', true, false, false, false],
+    ['Frosting', 'Prepared frosting mix', 'kitchen', 'kg', 'Prepared Items', 5, '', true, false, false, true],
   ];
 
   const conversionData = [

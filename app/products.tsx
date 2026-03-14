@@ -347,6 +347,8 @@ export default function ProductsScreen() {
           if (existing.sellingPrice !== parsedProduct.sellingPrice) changes.push(`price: ${currency} ${existing.sellingPrice || 0} → ${currency} ${parsedProduct.sellingPrice || 0}`);
           if (existing.showInStock !== parsedProduct.showInStock) changes.push(`show in stock: ${existing.showInStock} → ${parsedProduct.showInStock}`);
           if (existing.salesBasedRawCalc !== parsedProduct.salesBasedRawCalc) changes.push(`sales based calc: ${existing.salesBasedRawCalc} → ${parsedProduct.salesBasedRawCalc}`);
+          if (existing.kotEnabled !== parsedProduct.kotEnabled) changes.push(`KOT enabled: ${existing.kotEnabled === true} → ${parsedProduct.kotEnabled === true}`);
+          if (existing.botEnabled !== parsedProduct.botEnabled) changes.push(`BOT enabled: ${existing.botEnabled === true} → ${parsedProduct.botEnabled === true}`);
 
           if (changes.length > 0) {
             const updates: Partial<Product> = {
@@ -356,6 +358,8 @@ export default function ProductsScreen() {
               sellingPrice: parsedProduct.sellingPrice,
               showInStock: parsedProduct.showInStock,
               salesBasedRawCalc: parsedProduct.salesBasedRawCalc,
+              kotEnabled: parsedProduct.kotEnabled,
+              botEnabled: parsedProduct.botEnabled,
             };
             
             // Update in allProducts array directly
@@ -467,7 +471,7 @@ export default function ProductsScreen() {
         if (!FileSystem.documentDirectory) {
           Alert.alert(
             'Sample Format',
-            'Sample file format:\n\nColumns:\n- Product Name (required)\n- Description (optional)\n- Type (menu/raw)\n- Unit (kg, pieces, etc.)\n- Category (optional)\n- Min Stock (optional)\n- Show in Stock & Requests (TRUE/FALSE, optional; defaults to TRUE)\n\nCreate an Excel file with these columns and your products.'
+            'Sample file format:\n\nColumns:\n- Product Name (required)\n- Description (optional)\n- Type (menu/raw/kitchen)\n- Unit (kg, pieces, etc.)\n- Category (optional)\n- Min Stock (optional)\n- Selling Price (optional)\n- Show in Stock & Requests (TRUE/FALSE, optional; defaults to TRUE)\n- Sales Based Raw Calc (TRUE/FALSE, optional)\n- KOT Enabled (TRUE/FALSE, optional)\n- BOT Enabled (TRUE/FALSE, optional)\n\nCreate an Excel file with these columns and your products.'
           );
           return;
         }
@@ -513,6 +517,8 @@ export default function ProductsScreen() {
         'Selling Price': p.type === 'menu' && p.sellingPrice ? p.sellingPrice : '',
         'Show in Stock & Requests': p.showInStock !== false,
         'Sales Based Raw Calc': p.salesBasedRawCalc === true,
+        'KOT Enabled': p.kotEnabled === true,
+        'BOT Enabled': p.botEnabled === true,
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(data);
