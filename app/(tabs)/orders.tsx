@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ShoppingBag, Plus, X, Download, Edit2, Check, Clock, AlertCircle, Phone, Mail, MapPin, Package, Trash2, Calendar, Search, RefreshCw, Globe } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useOrders } from '@/contexts/OrderContext';
 import { useCustomers } from '@/contexts/CustomerContext';
@@ -350,6 +351,8 @@ function toWebsiteOrder(remote: RemoteWebsiteOrder, now: number, userId: string)
 }
 
 export default function OrdersScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ from?: string }>();
   const { orders, addOrder, updateOrder, deleteOrder, fulfillOrder, getActiveOrders, getFulfilledOrders, isLoading } = useOrders();
   const { customers, addCustomer, importCustomers } = useCustomers();
   const { products, outlets, addRequest } = useStock();
@@ -360,6 +363,7 @@ export default function OrdersScreen() {
   const [editingOrder, setEditingOrder] = useState<string | null>(null);
 
   const [selectedCustomer, setSelectedCustomer] = useState<string>('new');
+  const [customerSearchQuery, setCustomerSearchQuery] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [customerEmail, setCustomerEmail] = useState<string>('');
@@ -391,6 +395,8 @@ export default function OrdersScreen() {
   const [websiteMatchModalVisible, setWebsiteMatchModalVisible] = useState<boolean>(false);
   const [websiteMatchChoices, setWebsiteMatchChoices] = useState<WebsiteUnmatchedChoice[]>([]);
   const [websiteMatchSelections, setWebsiteMatchSelections] = useState<Record<string, string>>({});
+  const [websiteProductPickerChoice, setWebsiteProductPickerChoice] = useState<WebsiteUnmatchedChoice | null>(null);
+  const [websiteProductPickerQuery, setWebsiteProductPickerQuery] = useState<string>('');
   const [uberEatsOrders, setUberEatsOrders] = useState<UberEatsOrder[]>([]);
   const [uberEatsOrdersLoading, setUberEatsOrdersLoading] = useState<boolean>(false);
   const [uberEatsOrdersSyncing, setUberEatsOrdersSyncing] = useState<boolean>(false);
@@ -405,8 +411,29 @@ export default function OrdersScreen() {
   const salesOutlets = useMemo(() => outlets.filter(o => o.outletType === 'sales'), [outlets]);
 
   const menuProducts = useMemo(() => {
-    return products.filter(p => p.type === 'menu' && p.showInStock !== false);
+    return products
+      .filter(p => p.type === 'menu' && p.showInStock !== false)
+      .sort((a, b) => {
+        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        if (byName !== 0) return byName;
+        return a.unit.localeCompare(b.unit, undefined, { sensitivity: 'base' });
+      });
   }, [products]);
+
+  const websiteMatchPickerProducts = useMemo(() => {
+    const query = websiteProductPickerQuery.trim().toLowerCase();
+    if (!query) {
+      return menuProducts;
+    }
+    return menuProducts.filter((product) => {
+      const haystacks = [
+        product.name,
+        product.unit,
+        product.category || '',
+      ];
+      return haystacks.some((value) => value.toLowerCase().includes(query));
+    });
+  }, [menuProducts, websiteProductPickerQuery]);
 
   const filteredMenuProducts = useMemo(() => {
     if (!productSearchQuery.trim()) return menuProducts;
@@ -416,6 +443,21 @@ export default function OrdersScreen() {
       p.category?.toLowerCase().includes(query)
     );
   }, [menuProducts, productSearchQuery]);
+
+  const filteredCustomers = useMemo(() => {
+    const query = customerSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return customers.slice(0, 12);
+    }
+    return customers
+      .filter((customer) => {
+        const name = String(customer.name || '').toLowerCase();
+        const phone = String(customer.phone || '').toLowerCase();
+        const email = String(customer.email || '').toLowerCase();
+        return name.includes(query) || phone.includes(query) || email.includes(query);
+      })
+      .slice(0, 20);
+  }, [customers, customerSearchQuery]);
 
   const getApiBaseUrl = useCallback(() => {
     const envBase = process.env.EXPO_PUBLIC_RORK_API_BASE_URL;
@@ -1285,6 +1327,7 @@ export default function OrdersScreen() {
 
   const resetForm = useCallback(() => {
     setSelectedCustomer('new');
+    setCustomerSearchQuery('');
     setCustomerName('');
     setCustomerPhone('');
     setCustomerEmail('');
@@ -1468,6 +1511,16 @@ export default function OrdersScreen() {
     }
   }, [currentUser, fulfillOrder]);
 
+  const handlePayOrderAtPOS = useCallback((orderId: string, action: 'pay' | 'pay_and_fulfill') => {
+    router.push({
+      pathname: '/pos-sale',
+      params: {
+        orderId,
+        orderAction: action,
+      },
+    });
+  }, [router]);
+
   const handleDeleteOrder = useCallback((orderId: string) => {
     setOrderToDelete(orderId);
     setDeleteConfirmVisible(true);
@@ -1493,6 +1546,7 @@ export default function OrdersScreen() {
 
     setEditingOrder(orderId);
     setSelectedCustomer(order.customerId || 'new');
+    setCustomerSearchQuery(order.customerName || order.customerPhone || '');
     setCustomerName(order.customerName);
     setCustomerPhone(order.customerPhone);
     setCustomerEmail(order.customerEmail || '');
@@ -1655,6 +1709,8 @@ export default function OrdersScreen() {
   }, [websiteMatchChoices, websiteMatchSelections]);
 
   const handleCancelWebsiteMapping = useCallback(() => {
+    setWebsiteProductPickerChoice(null);
+    setWebsiteProductPickerQuery('');
     closeWebsiteMappingPrompt({ proceed: false, mappings: {} });
   }, [closeWebsiteMappingPrompt]);
 
@@ -1669,6 +1725,24 @@ export default function OrdersScreen() {
     });
   }, [allWebsiteMappingsSelected, closeWebsiteMappingPrompt, websiteMatchSelections]);
 
+  const openWebsiteProductPicker = useCallback((choice: WebsiteUnmatchedChoice) => {
+    setWebsiteProductPickerChoice(choice);
+    setWebsiteProductPickerQuery('');
+  }, []);
+
+  const closeWebsiteProductPicker = useCallback(() => {
+    setWebsiteProductPickerChoice(null);
+    setWebsiteProductPickerQuery('');
+  }, []);
+
+  const handleSelectWebsiteMatchProduct = useCallback((choiceKey: string, productId: string) => {
+    setWebsiteMatchSelections((prev) => ({
+      ...prev,
+      [choiceKey]: productId,
+    }));
+    closeWebsiteProductPicker();
+  }, [closeWebsiteProductPicker]);
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -1679,10 +1753,16 @@ export default function OrdersScreen() {
 
   const displayOrders = showViewMode === 'active' ? activeOrders : fulfilledOrders;
   const groupedOrders = groupOrdersByDate(displayOrders);
+  const launchedFromPOS = params.from === 'pos';
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
+        {launchedFromPOS ? (
+          <TouchableOpacity style={styles.backToPOSButton} onPress={() => router.replace('/pos-sale')}>
+            <Text style={styles.backToPOSText}>Back to POS</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.toggleContainer}>
           <TouchableOpacity
             style={[styles.toggleButton, showViewMode === 'active' && styles.toggleButtonActive]}
@@ -2059,6 +2139,15 @@ export default function OrdersScreen() {
                             : `Collection from: ${order.collectionOutlet}`}
                         </Text>
                       </View>
+                      {(order.paymentStatus || order.paymentMethod) ? (
+                        <View style={styles.orderDetailRow}>
+                          <ShoppingBag size={14} color={Colors.light.muted} />
+                          <Text style={styles.orderDetailText}>
+                            Payment: {order.paymentStatus || '-'}
+                            {order.paymentMethod ? ` (${order.paymentMethod})` : ''}
+                          </Text>
+                        </View>
+                      ) : null}
                       <View style={styles.orderDetailRow}>
                         <Package size={14} color={Colors.light.muted} />
                         <Text style={styles.orderDetailText}>Outlet: {order.outlet}</Text>
@@ -2094,13 +2183,31 @@ export default function OrdersScreen() {
                     )}
 
                     {showViewMode === 'active' && (
-                      <TouchableOpacity
-                        style={styles.fulfillButton}
-                        onPress={() => handleFulfillOrder(order.id)}
-                      >
-                        <Check size={18} color="#fff" />
-                        <Text style={styles.fulfillButtonText}>Mark as Fulfilled</Text>
-                      </TouchableOpacity>
+                      <View style={styles.orderActionColumn}>
+                        {order.paymentStatus !== 'paid' ? (
+                          <View style={styles.orderActionRow}>
+                            <TouchableOpacity
+                              style={styles.posPayButton}
+                              onPress={() => handlePayOrderAtPOS(order.id, 'pay')}
+                            >
+                              <Text style={styles.posPayButtonText}>Pay</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.posPayAndFulfillButton}
+                              onPress={() => handlePayOrderAtPOS(order.id, 'pay_and_fulfill')}
+                            >
+                              <Text style={styles.posPayAndFulfillText}>Pay and Fulfill</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : null}
+                        <TouchableOpacity
+                          style={styles.fulfillButton}
+                          onPress={() => handleFulfillOrder(order.id)}
+                        >
+                          <Check size={18} color="#fff" />
+                          <Text style={styles.fulfillButtonText}>Mark as Fulfilled</Text>
+                        </TouchableOpacity>
+                      </View>
                     )}
 
                     {showViewMode === 'fulfilled' && order.fulfilledAt && (
@@ -2156,38 +2263,75 @@ export default function OrdersScreen() {
 
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollContent}>
             <Text style={styles.sectionTitle}>Customer Details</Text>
-            
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={selectedCustomer}
-                onValueChange={(value: string) => {
-                  setSelectedCustomer(value);
-                  if (value !== 'new') {
-                    const customer = customers.find(c => c.id === value);
-                    if (customer) {
-                      setCustomerName(customer.name);
-                      setCustomerPhone(customer.phone || '');
-                      setCustomerEmail(customer.email || '');
-                      setCustomerAddress(customer.address || '');
-                    }
-                  } else {
-                    setCustomerName('');
-                    setCustomerPhone('');
-                    setCustomerEmail('');
-                    setCustomerAddress('');
-                  }
+
+            <Text style={styles.label}>Search Customer</Text>
+            <View style={styles.searchInputContainer}>
+              <Search size={18} color={Colors.light.muted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by name, phone, or email"
+                value={customerSearchQuery}
+                onChangeText={setCustomerSearchQuery}
+                placeholderTextColor={Colors.light.muted}
+              />
+              {customerSearchQuery ? (
+                <TouchableOpacity onPress={() => setCustomerSearchQuery('')}>
+                  <X size={18} color={Colors.light.muted} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <View style={styles.customerPickerActions}>
+              <TouchableOpacity
+                style={[styles.customerQuickAction, selectedCustomer === 'new' && styles.customerQuickActionActive]}
+                onPress={() => {
+                  setSelectedCustomer('new');
+                  setCustomerSearchQuery('');
+                  setCustomerName('');
+                  setCustomerPhone('');
+                  setCustomerEmail('');
+                  setCustomerAddress('');
                 }}
-                style={styles.picker}
               >
-                <Picker.Item label="New Customer" value="new" />
-                {customers.map(customer => (
-                  <Picker.Item
-                    key={customer.id}
-                    label={`${customer.name} (${customer.phone})`}
-                    value={customer.id}
-                  />
-                ))}
-              </Picker>
+                <Text style={[styles.customerQuickActionText, selectedCustomer === 'new' && styles.customerQuickActionTextActive]}>New Customer</Text>
+              </TouchableOpacity>
+              {selectedCustomer !== 'new' ? (
+                <View style={styles.selectedCustomerChip}>
+                  <Text style={styles.selectedCustomerChipText}>Selected customer loaded below</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.customerResultsContainer}>
+              {filteredCustomers.length > 0 ? (
+                filteredCustomers.map((customer) => {
+                  const isSelected = selectedCustomer === customer.id;
+                  return (
+                    <TouchableOpacity
+                      key={customer.id}
+                      style={[styles.customerResultItem, isSelected && styles.customerResultItemSelected]}
+                      onPress={() => {
+                        setSelectedCustomer(customer.id);
+                        setCustomerSearchQuery(`${customer.name}${customer.phone ? ` (${customer.phone})` : ''}`);
+                        setCustomerName(customer.name);
+                        setCustomerPhone(customer.phone || '');
+                        setCustomerEmail(customer.email || '');
+                        setCustomerAddress(customer.address || '');
+                      }}
+                    >
+                      <View style={styles.customerResultTextWrap}>
+                        <Text style={[styles.customerResultName, isSelected && styles.customerResultNameSelected]}>{customer.name}</Text>
+                        <Text style={styles.customerResultMeta}>
+                          {customer.phone || 'No phone'}{customer.email ? ` • ${customer.email}` : ''}
+                        </Text>
+                      </View>
+                      {isSelected ? <Check size={16} color={Colors.light.tint} /> : null}
+                    </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <Text style={styles.customerResultsEmpty}>No matching customers found.</Text>
+              )}
             </View>
 
             <Text style={styles.label}>Name *</Text>
@@ -2465,27 +2609,20 @@ export default function OrdersScreen() {
                   <Text style={styles.websiteMatchMeta}>
                     {choice.sizeHint ? `Size hint: ${choice.sizeHint} • ` : ''}Count: {choice.count}
                   </Text>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={websiteMatchSelections[choice.key] || ''}
-                      onValueChange={(value: string) => {
-                        setWebsiteMatchSelections((prev) => ({
-                          ...prev,
-                          [choice.key]: value,
-                        }));
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Select menu product" value="" />
-                      {menuProducts.map((product) => (
-                        <Picker.Item
-                          key={`map_${choice.key}_${product.id}`}
-                          label={`${product.name} (${product.unit})`}
-                          value={product.id}
-                        />
-                      ))}
-                    </Picker>
-                  </View>
+                  <TouchableOpacity
+                    style={styles.websiteMatchSelectButton}
+                    onPress={() => openWebsiteProductPicker(choice)}
+                  >
+                    <Text style={websiteMatchSelections[choice.key] ? styles.websiteMatchSelectValue : styles.websiteMatchSelectPlaceholder}>
+                      {websiteMatchSelections[choice.key]
+                        ? (() => {
+                            const selectedProduct = menuProducts.find((product) => product.id === websiteMatchSelections[choice.key]);
+                            return selectedProduct ? `${selectedProduct.name} (${selectedProduct.unit})` : 'Select menu product';
+                          })()
+                        : 'Select menu product'}
+                    </Text>
+                    <Search size={16} color={Colors.light.muted} />
+                  </TouchableOpacity>
                 </View>
               ))}
             </ScrollView>
@@ -2500,6 +2637,85 @@ export default function OrdersScreen() {
                 disabled={!allWebsiteMappingsSelected}
               >
                 <Text style={styles.submitButtonText}>Continue Import</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!websiteProductPickerChoice}
+        animationType="slide"
+        transparent
+        onRequestClose={closeWebsiteProductPicker}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.websiteProductPickerCard}>
+            <View style={styles.websiteMatchHeader}>
+              <Text style={styles.websiteMatchTitle}>Select System Product</Text>
+              <Text style={styles.websiteMatchSubtitle}>
+                {websiteProductPickerChoice
+                  ? `${websiteProductPickerChoice.itemName}${websiteProductPickerChoice.variantName ? ` (${websiteProductPickerChoice.variantName})` : ''}`
+                  : 'Choose a matching menu product.'}
+              </Text>
+            </View>
+
+            <View style={styles.searchInputContainer}>
+              <Search size={18} color={Colors.light.muted} />
+              <TextInput
+                style={styles.searchInput}
+                value={websiteProductPickerQuery}
+                onChangeText={setWebsiteProductPickerQuery}
+                placeholder="Search products..."
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <ScrollView style={styles.websiteProductPickerScroll}>
+              <TouchableOpacity
+                style={styles.websiteProductPickerRow}
+                onPress={() => {
+                  if (!websiteProductPickerChoice) return;
+                  handleSelectWebsiteMatchProduct(websiteProductPickerChoice.key, '');
+                }}
+              >
+                <Text style={styles.websiteProductPickerTitle}>Clear selection</Text>
+              </TouchableOpacity>
+
+              {websiteMatchPickerProducts.map((product) => {
+                const isSelected = websiteProductPickerChoice
+                  ? websiteMatchSelections[websiteProductPickerChoice.key] === product.id
+                  : false;
+                return (
+                  <TouchableOpacity
+                    key={`website-picker-${product.id}`}
+                    style={[styles.websiteProductPickerRow, isSelected && styles.websiteProductPickerRowSelected]}
+                    onPress={() => {
+                      if (!websiteProductPickerChoice) return;
+                      handleSelectWebsiteMatchProduct(websiteProductPickerChoice.key, product.id);
+                    }}
+                  >
+                    <Text style={styles.websiteProductPickerTitle}>{product.name}</Text>
+                    <Text style={styles.websiteProductPickerMeta}>
+                      {product.unit}{product.category ? ` • ${product.category}` : ''}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+
+              {websiteMatchPickerProducts.length === 0 && (
+                <View style={styles.websiteProductPickerEmpty}>
+                  <Text style={styles.websiteProductPickerEmptyText}>No matching products found.</Text>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={styles.websiteMatchActions}>
+              <TouchableOpacity
+                style={[styles.submitButton, styles.websiteMatchCancelButton, { flex: 1 }]}
+                onPress={closeWebsiteProductPicker}
+              >
+                <Text style={styles.submitButtonText}>Close</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2547,10 +2763,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     justifyContent: 'space-between' as const,
+    flexWrap: 'wrap' as const,
+    gap: 10,
     backgroundColor: Colors.light.card,
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
+  },
+  backToPOSButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: Colors.light.secondary,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  backToPOSText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
   },
   toggleContainer: {
     flexDirection: 'row' as const,
@@ -2830,6 +3061,41 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : Platform.OS === 'android' ? 'monospace' : 'monospace',
   },
+  orderActionColumn: {
+    gap: 10,
+    marginTop: 12,
+  },
+  orderActionRow: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 10,
+  },
+  posPayButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#EAF4EC',
+    borderWidth: 1,
+    borderColor: '#276749',
+  },
+  posPayButtonText: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: '#276749',
+  },
+  posPayAndFulfillButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFF5E8',
+    borderWidth: 1,
+    borderColor: '#C05621',
+  },
+  posPayAndFulfillText: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: '#C05621',
+  },
   fulfillButton: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
@@ -2838,7 +3104,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.success,
     paddingVertical: 12,
     borderRadius: 8,
-    marginTop: 12,
   },
   fulfillButtonText: {
     fontSize: 16,
@@ -3000,6 +3265,90 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
   },
+  customerPickerActions: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    marginBottom: 12,
+    flexWrap: 'wrap' as const,
+  },
+  customerQuickAction: {
+    backgroundColor: Colors.light.card,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  customerQuickActionActive: {
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
+  },
+  customerQuickActionText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: Colors.light.tint,
+  },
+  customerQuickActionTextActive: {
+    color: '#fff',
+  },
+  selectedCustomerChip: {
+    backgroundColor: '#EEF6FF',
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  selectedCustomerChipText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.tint,
+  },
+  customerResultsContainer: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    maxHeight: 220,
+    marginBottom: 12,
+    overflow: 'hidden' as const,
+  },
+  customerResultItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  customerResultItemSelected: {
+    backgroundColor: '#F0F7FF',
+  },
+  customerResultTextWrap: {
+    flex: 1,
+  },
+  customerResultName: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  customerResultNameSelected: {
+    color: Colors.light.tint,
+  },
+  customerResultMeta: {
+    fontSize: 13,
+    color: Colors.light.muted,
+    marginTop: 3,
+  },
+  customerResultsEmpty: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 14,
+    color: Colors.light.muted,
+  },
   productAddRow: {
     flexDirection: 'row' as const,
     gap: 8,
@@ -3149,5 +3498,69 @@ const styles = StyleSheet.create({
   },
   websiteMatchCancelButton: {
     backgroundColor: Colors.light.muted,
+  },
+  websiteMatchSelectButton: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 10,
+    backgroundColor: Colors.light.background,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    gap: 12,
+  },
+  websiteMatchSelectValue: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  websiteMatchSelectPlaceholder: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.light.muted,
+  },
+  websiteProductPickerCard: {
+    width: '100%',
+    maxWidth: 760,
+    maxHeight: '88%',
+    backgroundColor: Colors.light.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    overflow: 'hidden' as const,
+  },
+  websiteProductPickerScroll: {
+    maxHeight: 420,
+  },
+  websiteProductPickerRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border + '70',
+    gap: 4,
+  },
+  websiteProductPickerRowSelected: {
+    backgroundColor: Colors.light.secondary + '55',
+  },
+  websiteProductPickerTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  websiteProductPickerMeta: {
+    fontSize: 12,
+    color: Colors.light.muted,
+  },
+  websiteProductPickerEmpty: {
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    alignItems: 'center' as const,
+  },
+  websiteProductPickerEmptyText: {
+    fontSize: 14,
+    color: Colors.light.muted,
   },
 });
