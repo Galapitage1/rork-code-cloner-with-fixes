@@ -219,7 +219,7 @@ export function CustomerProvider({ children, currentUser }: { children: ReactNod
       const stored = await AsyncStorage.getItem(CUSTOMERS_KEY);
       const localCustomers: Customer[] = stored ? JSON.parse(stored) : customers;
       const includeDeleted = forceFullSync || !silent;
-      const minDays = forceFullSync || !silent ? 90 : undefined;
+      const minDays = forceFullSync || !silent ? 3650 : undefined;
       const synced = await syncData('customers', localCustomers, currentUser.id, {
         fetchOnly: forceFullSync,
         includeDeleted,

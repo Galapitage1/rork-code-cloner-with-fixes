@@ -21,6 +21,206 @@ const STORAGE_KEYS = {
 };
 const LINKED_PRODUCTS_STORAGE_KEY = '@stock_app_linked_products';
 
+function isStorageQuotaExceeded(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const lower = message.toLowerCase();
+  return lower.includes('quota') || lower.includes('exceeded');
+}
+
+function stockCheckSortScore(check: StockCheck): number {
+  return check.updatedAt || check.timestamp || 0;
+}
+
+function stockCheckDateKey(check: StockCheck): string {
+  const rawDate = typeof check.date === 'string' ? check.date.slice(0, 10) : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    return rawDate;
+  }
+
+  const fallbackTs = check.timestamp || check.updatedAt || 0;
+  if (fallbackTs > 0) {
+    try {
+      return new Date(fallbackTs).toISOString().slice(0, 10);
+    } catch {
+      return '1970-01-01';
+    }
+  }
+
+  return '1970-01-01';
+}
+
+function dedupeStockChecksByLatest(checks: StockCheck[]): StockCheck[] {
+  const latestById = new Map<string, StockCheck>();
+  for (const check of checks) {
+    const dedupeKey = check.id || `${check.outlet || ''}-${stockCheckDateKey(check)}-${check.timestamp || 0}`;
+    const existing = latestById.get(dedupeKey);
+    if (!existing || stockCheckSortScore(check) >= stockCheckSortScore(existing)) {
+      latestById.set(dedupeKey, check);
+    }
+  }
+  return Array.from(latestById.values());
+}
+
+function stockCheckLogicalKey(check: StockCheck): string | null {
+  const outletKey = String(check.outlet || '').trim().toLowerCase();
+  const dateKey = stockCheckDateKey(check);
+  if (!outletKey || !dateKey) return null;
+  return `${outletKey}||${dateKey}`;
+}
+
+function collapseStockChecksByLogicalKey(checks: StockCheck[]): StockCheck[] {
+  const byLogicalKey = new Map<string, StockCheck[]>();
+  const dedupedById = dedupeStockChecksByLatest(checks);
+
+  for (const check of dedupedById) {
+    const logicalKey = stockCheckLogicalKey(check) || `id::${check.id || `${check.timestamp || 0}`}`;
+    const existing = byLogicalKey.get(logicalKey) || [];
+    existing.push(check);
+    byLogicalKey.set(logicalKey, existing);
+  }
+
+  const collapsed: StockCheck[] = [];
+  for (const group of byLogicalKey.values()) {
+    const activeChecks = group.filter((check) => !check.deleted);
+    const candidates = activeChecks.length > 0 ? activeChecks : group;
+    candidates.sort((a, b) => stockCheckSortScore(b) - stockCheckSortScore(a));
+    collapsed.push(candidates[0]);
+  }
+
+  return collapsed;
+}
+
+function sortStockChecksNewestFirst(checks: StockCheck[]): StockCheck[] {
+  return [...checks].sort((a, b) => {
+    const dateCompare = stockCheckDateKey(b).localeCompare(stockCheckDateKey(a));
+    if (dateCompare !== 0) return dateCompare;
+    return stockCheckSortScore(b) - stockCheckSortScore(a);
+  });
+}
+
+function trimStockChecksBalancedByOutlet(checks: StockCheck[], maxItems: number): StockCheck[] {
+  if (checks.length <= maxItems) {
+    return sortStockChecksNewestFirst(checks);
+  }
+
+  const grouped = new Map<string, StockCheck[]>();
+  sortStockChecksNewestFirst(checks).forEach((check) => {
+    const outletKey = String(check.outlet || 'Unknown').trim() || 'Unknown';
+    const current = grouped.get(outletKey) || [];
+    current.push(check);
+    grouped.set(outletKey, current);
+  });
+
+  const outletKeys = Array.from(grouped.keys()).sort((a, b) => {
+    const aNewest = grouped.get(a)?.[0];
+    const bNewest = grouped.get(b)?.[0];
+    return stockCheckSortScore(bNewest || ({} as StockCheck)) - stockCheckSortScore(aNewest || ({} as StockCheck));
+  });
+
+  const selected: StockCheck[] = [];
+  let index = 0;
+  while (selected.length < maxItems) {
+    let addedInRound = false;
+    for (const outletKey of outletKeys) {
+      const outletChecks = grouped.get(outletKey) || [];
+      if (index < outletChecks.length) {
+        selected.push(outletChecks[index]);
+        addedInRound = true;
+        if (selected.length >= maxItems) break;
+      }
+    }
+    if (!addedInRound) break;
+    index += 1;
+  }
+
+  return sortStockChecksNewestFirst(selected);
+}
+
+function buildStockCheckStorageCandidate(
+  checks: StockCheck[],
+  daysToKeep: number | null,
+  maxItems: number | null,
+): StockCheck[] {
+  const deduped = collapseStockChecksByLogicalKey(checks);
+
+  const deletedRetentionCutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+  const cutoffDate = new Date();
+  if (daysToKeep !== null) {
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  }
+  const cutoffDateKey = cutoffDate.toISOString().slice(0, 10);
+
+  const filtered = deduped.filter((check) => {
+    if (check.deleted) {
+      return (check.updatedAt || check.timestamp || 0) >= deletedRetentionCutoff;
+    }
+    if (daysToKeep === null) {
+      return true;
+    }
+    return stockCheckDateKey(check) >= cutoffDateKey;
+  });
+
+  const sorted = sortStockChecksNewestFirst(filtered);
+
+  if (maxItems !== null && sorted.length > maxItems) {
+    return trimStockChecksBalancedByOutlet(sorted, maxItems);
+  }
+  return sorted;
+}
+
+async function persistStockChecksWithQuotaGuard(
+  stockChecks: StockCheck[],
+  contextLabel: string,
+): Promise<StockCheck[]> {
+  const attempts: Array<{ daysToKeep: number | null; maxItems: number | null; label: string }> = [
+    { daysToKeep: null, maxItems: null, label: 'full' },
+    { daysToKeep: null, maxItems: 1400, label: 'all-dates/1400' },
+    { daysToKeep: null, maxItems: 1000, label: 'all-dates/1000' },
+    { daysToKeep: null, maxItems: 700, label: 'all-dates/700' },
+    { daysToKeep: null, maxItems: 500, label: 'all-dates/500' },
+    { daysToKeep: null, maxItems: 360, label: 'all-dates/360' },
+    { daysToKeep: null, maxItems: 320, label: 'all-dates/320' },
+    { daysToKeep: null, maxItems: 240, label: 'all-dates/240' },
+    { daysToKeep: null, maxItems: 180, label: 'all-dates/180' },
+    { daysToKeep: null, maxItems: 130, label: 'all-dates/130' },
+    { daysToKeep: null, maxItems: 90, label: 'all-dates/90' },
+  ];
+
+  let lastQuotaError: unknown = null;
+
+  for (const attempt of attempts) {
+    const candidate = buildStockCheckStorageCandidate(stockChecks, attempt.daysToKeep, attempt.maxItems);
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(candidate));
+      if (attempt.label !== 'full') {
+        console.warn(
+          `${contextLabel}: Stock checks cache exceeded quota, persisted reduced local cache (${attempt.label}) with ${candidate.length} checks.`,
+        );
+      }
+      return candidate;
+    } catch (error) {
+      if (!isStorageQuotaExceeded(error)) {
+        throw error;
+      }
+      lastQuotaError = error;
+    }
+  }
+
+  const emergency = buildStockCheckStorageCandidate(stockChecks, null, 50);
+  try {
+    await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(emergency));
+    console.warn(
+      `${contextLabel}: Persisted emergency minimal stock-check cache (${emergency.length} checks) due to storage quota.`,
+    );
+    return emergency;
+  } catch (error) {
+    if (!isStorageQuotaExceeded(error)) {
+      throw error;
+    }
+    throw lastQuotaError || error;
+  }
+}
+
 type StockContextType = {
   products: Product[];
   stockChecks: StockCheck[];
@@ -45,7 +245,7 @@ type StockContextType = {
   deleteProduct: (productId: string) => Promise<void>;
   saveStockCheck: (stockCheck: StockCheck, skipInventoryUpdate?: boolean) => Promise<void>;
   deleteStockCheck: (checkId: string) => Promise<void>;
-  updateStockCheck: (checkId: string, newCounts: StockCount[], newOutlet?: string, outletChanged?: boolean, replaceAllInventory?: boolean) => Promise<void>;
+  updateStockCheck: (checkId: string, newCounts: StockCount[], newOutlet?: string, outletChanged?: boolean, replaceAllInventory?: boolean, newDate?: string) => Promise<void>;
   addRequest: (request: ProductRequest) => Promise<void>;
   updateRequestStatus: (requestId: string, status: ProductRequest['status']) => Promise<void>;
   deleteRequest: (requestId: string) => Promise<void>;
@@ -63,6 +263,7 @@ type StockContextType = {
   addInventoryStock: (stock: InventoryStock) => Promise<void>;
   deductInventoryFromApproval: (request: ProductRequest) => Promise<{ success: boolean; message?: string }>;
   deductInventoryFromSales: (outletName: string, productId: string, salesDate: string, wholeDeducted: number, slicesDeducted: number) => Promise<void>;
+  reverseInventoryFromSales: (outletName: string, productId: string, salesDate: string, wholeRestored: number, slicesRestored: number) => Promise<void>;
   addReconcileHistory: (history: SalesReconciliationHistory) => Promise<void>;
   deleteReconcileHistory: (historyId: string) => Promise<void>;
   clearAllReconcileHistory: () => Promise<void>;
@@ -79,6 +280,7 @@ type StockContextType = {
   toggleShowProductList: (value: boolean) => Promise<void>;
   setViewMode: (mode: 'search' | 'button') => Promise<void>;
   syncAll: (silent?: boolean, forceFullSync?: boolean) => Promise<void>;
+  refreshHistoryLocal: () => Promise<void>;
   getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
   restoreRequests: (requestIds: string[]) => Promise<number>;
   // Live Inventory Snapshot functions
@@ -402,12 +604,13 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         
         // Check if local data is empty (cache was cleared) OR if stock check history doesn't cover 40 days
         // - trigger immediate full sync from server to restore ALL data
-        const [freshProductsData, freshStockChecksData, freshRequestsData, freshOutletsData, freshInventoryData] = await Promise.all([
+        const [freshProductsData, freshStockChecksData, freshRequestsData, freshOutletsData, freshInventoryData, freshConversionsData] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
           AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
           AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
           AsyncStorage.getItem(STORAGE_KEYS.OUTLETS),
           AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS),
+          AsyncStorage.getItem(STORAGE_KEYS.PRODUCT_CONVERSIONS),
         ]);
         
         const hasProducts = freshProductsData && JSON.parse(freshProductsData).length > 0;
@@ -415,6 +618,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         const hasRequests = freshRequestsData && JSON.parse(freshRequestsData).length > 0;
         const hasOutlets = freshOutletsData && JSON.parse(freshOutletsData).length > 0;
         const hasInventory = freshInventoryData && JSON.parse(freshInventoryData).length > 0;
+        const hasConversions = freshConversionsData && JSON.parse(freshConversionsData).length > 0;
         
         // CRITICAL: Check if stock check history covers at least 40 days
         // If not, we need to fetch from server to ensure full history is available
@@ -462,11 +666,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         // CRITICAL: Detect cache cleared if STOCK CHECKS are empty (most important for history)
         // Stock checks are the primary indicator because they contain the 40-day history we need to restore
         const cacheCleared = !hasStockChecks && currentUser?.id;
-        const partialCacheCleared = (!hasProducts || !hasStockChecks || !hasRequests || !hasOutlets || !hasInventory) && currentUser?.id;
+        const partialCacheCleared = (!hasProducts || !hasStockChecks || !hasRequests || !hasOutlets || !hasInventory || !hasConversions) && currentUser?.id;
         
         if (cacheCleared || partialCacheCleared || needsFullHistorySync) {
           console.log('StockContext loadData: ⚠️', needsFullHistorySync ? 'INCOMPLETE HISTORY DETECTED' : 'CACHE CLEARED DETECTED');
-          console.log('StockContext loadData: Data status - products:', hasProducts, 'stockChecks:', hasStockChecks, 'requests:', hasRequests, 'outlets:', hasOutlets, 'inventory:', hasInventory);
+          console.log('StockContext loadData: Data status - products:', hasProducts, 'stockChecks:', hasStockChecks, 'requests:', hasRequests, 'outlets:', hasOutlets, 'inventory:', hasInventory, 'conversions:', hasConversions);
           console.log('StockContext loadData: Triggering IMMEDIATE FULL SYNC to restore ALL data (40 days history) from server...');
           
           // Clear ALL last sync timestamps to force full fetch from server
@@ -499,26 +703,28 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           try {
             const parsedProducts = JSON.parse(freshProductsData);
             if (Array.isArray(parsedProducts) && parsedProducts.length > 0) {
-              console.log('StockContext loadData: Products loaded -', parsedProducts.length, 'items');
-              console.log('StockContext loadData: SYNCING OUT to server to preserve local product data...');
-              
-              syncData('products', parsedProducts, currentUser.id, { 
-                isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
-              }).then((syncedProducts) => {
-                console.log('StockContext loadData: ✓ Products synced OUT to server successfully');
-                console.log('StockContext loadData: Server now has latest product data including selling prices');
-                
-                AsyncStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(syncedProducts)).then(() => {
-                  console.log('StockContext loadData: ✓ Synced products saved back to local storage');
-                });
-                
-                setProducts((syncedProducts as any[]).filter((p: any) => !p?.deleted));
-              }).catch((syncError) => {
-                console.error('StockContext loadData: Failed to sync products OUT:', syncError);
-              }).finally(() => {
-                console.log('StockContext loadData: RESUMING automatic sync');
+              const activeProducts = parsedProducts.filter((p: any) => !p?.deleted);
+              console.log('StockContext loadData: Products loaded - total:', parsedProducts.length, 'active:', activeProducts.length);
+
+              if (activeProducts.length === 0 && parsedProducts.length > 0 && syncAllRef.current) {
+                console.log('StockContext loadData: ⚠️ All local products are marked deleted - forcing full server restore');
+                const timestampKeys = [
+                  '@last_sync_products_' + currentUser.id,
+                  '@last_sync_stockChecks_' + currentUser.id,
+                  '@last_sync_requests_' + currentUser.id,
+                  '@last_sync_outlets_' + currentUser.id,
+                  '@last_sync_productConversions_' + currentUser.id,
+                ];
+                await Promise.all(timestampKeys.map(key => AsyncStorage.removeItem(key).catch(() => {})));
                 syncInProgressRef.current = false;
-              });
+                (syncAllRef.current as any)(false, true).catch((syncError: any) => {
+                  console.error('StockContext loadData: Forced full restore failed:', syncError);
+                });
+              } else {
+                // Keep local state for fast startup; scheduled/manual sync will reconcile with server.
+                setProducts(activeProducts);
+                syncInProgressRef.current = false;
+              }
             } else {
               console.log('StockContext loadData: No products to sync, resuming sync');
               syncInProgressRef.current = false;
@@ -539,7 +745,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
 
 
 
-  const saveProducts = useCallback(async (newProducts: Product[]) => {
+  const saveProducts = useCallback(async (newProducts: Product[], changedProducts: Product[] = []) => {
     try {
       const productsWithTimestamp = newProducts.map(p => ({
         ...p,
@@ -548,12 +754,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }));
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(productsWithTimestamp));
       setProducts(productsWithTimestamp.filter(p => !p.deleted));
-      console.log('saveProducts: Saved locally, will sync on next interval');
+      if (currentUser?.id) {
+        const changedIds = new Set(changedProducts.map(item => item.id));
+        const changedWithTimestamp = productsWithTimestamp.filter(item => changedIds.has(item.id));
+        await syncData('products', productsWithTimestamp, currentUser.id, {
+          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin',
+          pushOnly: true,
+          changedItems: changedWithTimestamp,
+        });
+        console.log('saveProducts: Saved locally and pushed changed products immediately');
+      } else {
+        console.log('saveProducts: Saved locally (no user logged in, skipped immediate sync)');
+      }
     } catch (error) {
       console.error('Failed to save products:', error);
       throw error;
     }
-  }, []);
+  }, [currentUser]);
 
   const importProducts = useCallback(async (newProducts: Product[]) => {
     console.log('[importProducts] Importing', newProducts.length, 'products');
@@ -576,19 +793,23 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         return;
       }
       
-      productsToAdd.push(newProduct);
+      productsToAdd.push({
+        ...newProduct,
+        updatedAt: newProduct.updatedAt || Date.now(),
+      });
     });
     
     console.log('[importProducts] Adding', productsToAdd.length, 'new products');
     const updatedProducts = [...products, ...productsToAdd];
     
-    await saveProducts(updatedProducts);
+    await saveProducts(updatedProducts, productsToAdd);
     return productsToAdd.length;
   }, [products, saveProducts]);
 
   const addProduct = useCallback(async (product: Product) => {
-    const updatedProducts = [...products, product];
-    await saveProducts(updatedProducts);
+    const productWithTimestamp = { ...product, updatedAt: product.updatedAt || Date.now() };
+    const updatedProducts = [...products, productWithTimestamp];
+    await saveProducts(updatedProducts, [productWithTimestamp]);
   }, [products, saveProducts]);
 
   const updateProduct = useCallback(async (productId: string, updates: Partial<Product>) => {
@@ -600,26 +821,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     );
     
     console.log('[StockContext] updateProduct: Saving', updatedProducts.length, 'products to AsyncStorage');
-    await saveProducts(updatedProducts);
-    
-    console.log('[StockContext] updateProduct: Triggering immediate sync to preserve changes');
-    if (currentUser && syncAllRef.current && !syncInProgressRef.current) {
-      try {
-        await syncData('products', updatedProducts, currentUser.id, { 
-          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin' 
-        });
-        console.log('[StockContext] updateProduct: ✓ Successfully synced product update to server');
-      } catch (syncError) {
-        console.error('[StockContext] updateProduct: Sync failed, but product is saved locally:', syncError);
-      }
-    }
+    const changedProduct = updatedProducts.find(p => p.id === productId);
+    await saveProducts(updatedProducts, changedProduct ? [changedProduct] : []);
     
     console.log('[StockContext] updateProduct: Complete');
-  }, [products, saveProducts, currentUser]);
+  }, [products, saveProducts]);
 
   const deleteProduct = useCallback(async (productId: string) => {
     const updatedProducts = products.map(p => p.id === productId ? { ...p, deleted: true as const, updatedAt: Date.now() } : p);
-    await saveProducts(updatedProducts as any);
+    const deletedProduct = updatedProducts.find(p => p.id === productId);
+    await saveProducts(updatedProducts as any, deletedProduct ? [deletedProduct as Product] : []);
   }, [products, saveProducts]);
 
   const getConversionFactor = useCallback((fromProductId: string, toProductId: string): number | null => {
@@ -642,7 +853,59 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     return null;
   }, [productConversions]);
 
-  const saveInventoryStocks = useCallback(async (stocks: InventoryStock[], immediateSync = false) => {
+  const getLatestOutlets = useCallback(async (): Promise<Outlet[]> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.OUTLETS);
+      if (!stored) return outlets;
+      const parsed = JSON.parse(stored);
+      return Array.isArray(parsed) ? parsed : outlets;
+    } catch (error) {
+      console.error('getLatestOutlets: Failed to read local storage, using state fallback:', error);
+      return outlets;
+    }
+  }, [outlets]);
+
+  const getLatestInventoryStocks = useCallback(async (): Promise<InventoryStock[]> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS);
+      if (!stored) return inventoryStocks;
+      const parsed = JSON.parse(stored);
+      return Array.isArray(parsed) ? parsed : inventoryStocks;
+    } catch (error) {
+      console.error('getLatestInventoryStocks: Failed to read local storage, using state fallback:', error);
+      return inventoryStocks;
+    }
+  }, [inventoryStocks]);
+
+  const getLatestReconcileHistory = useCallback(async (): Promise<SalesReconciliationHistory[]> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.RECONCILE_HISTORY);
+      if (!stored) return reconcileHistory;
+      const parsed = JSON.parse(stored);
+      return Array.isArray(parsed) ? parsed : reconcileHistory;
+    } catch (error) {
+      console.error('getLatestReconcileHistory: Failed to read local storage, using state fallback:', error);
+      return reconcileHistory;
+    }
+  }, [reconcileHistory]);
+
+  const getLatestProductConversions = useCallback(async (): Promise<ProductConversion[]> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.PRODUCT_CONVERSIONS);
+      if (!stored) return productConversions;
+      const parsed = JSON.parse(stored);
+      return Array.isArray(parsed) ? parsed : productConversions;
+    } catch (error) {
+      console.error('getLatestProductConversions: Failed to read local storage, using state fallback:', error);
+      return productConversions;
+    }
+  }, [productConversions]);
+
+  const saveInventoryStocks = useCallback(async (
+    stocks: InventoryStock[],
+    immediateSync = false,
+    changedStocks: InventoryStock[] = []
+  ) => {
     try {
       const stocksWithTimestamp = stocks.map(s => ({ ...s, updatedAt: s.updatedAt || Date.now() }));
       console.log('saveInventoryStocks: Saving', stocksWithTimestamp.length, 'stocks to AsyncStorage');
@@ -653,7 +916,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       if (immediateSync && currentUser?.id) {
         console.log('saveInventoryStocks: Immediate sync requested - syncing OUT to server NOW...');
         try {
-          await syncData('inventoryStocks', stocksWithTimestamp, currentUser.id);
+          const changedIds = new Set(changedStocks.map(item => item.id));
+          const changedWithTimestamp = stocksWithTimestamp.filter(item => changedIds.has(item.id));
+          await syncData('inventoryStocks', stocksWithTimestamp, currentUser.id, {
+            pushOnly: true,
+            changedItems: changedWithTimestamp,
+          });
           console.log('saveInventoryStocks: ✓ Immediately synced to server to prevent sync resurrection');
         } catch (syncError) {
           console.error('saveInventoryStocks: Immediate sync failed:', syncError);
@@ -668,9 +936,34 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   }, [currentUser]);
 
   const addInventoryStock = useCallback(async (stock: InventoryStock) => {
-    const updated = [...inventoryStocks, stock];
-    await saveInventoryStocks(updated);
-  }, [inventoryStocks, saveInventoryStocks]);
+    const baseStocks = await getLatestInventoryStocks();
+    const stockWithTimestamp = { ...stock, updatedAt: stock.updatedAt || Date.now() };
+    const updated = [...baseStocks, stockWithTimestamp];
+    await saveInventoryStocks(updated, true, [stockWithTimestamp]);
+  }, [getLatestInventoryStocks, saveInventoryStocks]);
+
+  const syncRequestsNow = useCallback(async (
+    fallbackRequests: ProductRequest[],
+    contextLabel: string,
+    changedRequests: ProductRequest[] = []
+  ) => {
+    if (!currentUser?.id) {
+      console.log(`${contextLabel}: Skipping immediate request sync (no user logged in)`);
+      return;
+    }
+
+    try {
+      const requestsRaw = await AsyncStorage.getItem(STORAGE_KEYS.REQUESTS);
+      const requestsToSync: ProductRequest[] = requestsRaw ? JSON.parse(requestsRaw) : fallbackRequests;
+      await syncData('requests', requestsToSync, currentUser.id, {
+        pushOnly: true,
+        changedItems: changedRequests,
+      });
+      console.log(`${contextLabel}: ✓ Requests synced to server immediately`);
+    } catch (syncError) {
+      console.error(`${contextLabel}: Immediate request sync failed:`, syncError);
+    }
+  }, [currentUser]);
 
   const saveStockCheck = useCallback(async (stockCheck: StockCheck, skipInventoryUpdate = false) => {
     try {
@@ -696,35 +989,52 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         completedBy: isAutoGeneratedStockCheck ? 'AUTO' : completedByName,
         updatedAt: stockCheck.updatedAt || Date.now(),
       };
-      
-      const existingIndex = stockChecks.findIndex(c => c.id === stockCheck.id);
+
+      // Use the latest persisted list to avoid stale state overwriting during bulk imports.
+      let baseChecks: StockCheck[] = stockChecks;
+      try {
+        const storedChecksRaw = await AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS);
+        if (storedChecksRaw) {
+          const parsed = JSON.parse(storedChecksRaw);
+          if (Array.isArray(parsed)) {
+            baseChecks = parsed;
+          }
+        }
+      } catch (storageReadError) {
+        console.error('saveStockCheck: Failed to read latest stock checks from storage:', storageReadError);
+      }
+
+      const existingIndex = baseChecks.findIndex(c => c.id === stockCheck.id);
       let updatedChecks: StockCheck[];
       
       if (existingIndex >= 0) {
         console.log('saveStockCheck: Updating existing stock check with ID:', stockCheck.id);
         updatedChecks = [
-          ...stockChecks.slice(0, existingIndex),
+          ...baseChecks.slice(0, existingIndex),
           checkWithTimestamp,
-          ...stockChecks.slice(existingIndex + 1),
+          ...baseChecks.slice(existingIndex + 1),
         ];
       } else {
         console.log('saveStockCheck: Adding new stock check with ID:', stockCheck.id);
-        updatedChecks = [...stockChecks, checkWithTimestamp];
+        updatedChecks = [...baseChecks, checkWithTimestamp];
       }
       
       // CRITICAL: Sync OUT first before updating local storage
       console.log('saveStockCheck: Syncing to server BEFORE updating local storage...');
-      if (currentUser?.id && syncAllRef.current && !syncInProgressRef.current) {
+      if (currentUser?.id) {
         try {
-          await syncData('stockChecks', updatedChecks, currentUser.id);
+          await syncData('stockChecks', updatedChecks, currentUser.id, {
+            pushOnly: true,
+            changedItems: [checkWithTimestamp],
+          });
           console.log('saveStockCheck: Successfully synced to server');
         } catch (syncError) {
           console.error('saveStockCheck: Sync failed, but continuing with local update:', syncError);
         }
       }
       
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(updatedChecks));
-      setStockChecks(updatedChecks);
+      const persistedChecks = await persistStockChecksWithQuotaGuard(updatedChecks, 'saveStockCheck');
+      setStockChecks(persistedChecks.filter(c => !c.deleted));
       
       const stockMap = new Map<string, number>();
       stockCheck.counts.forEach((count: StockCount) => {
@@ -1049,7 +1359,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
 
       console.log('=== saveStockCheck COMPLETE ===\n');
 
-      console.log('saveStockCheck: Saved locally, will sync on next interval');
+      console.log('saveStockCheck: Saved locally with immediate stock-check sync attempt');
     } catch (error) {
       console.error('Failed to save stock check:', error);
       syncInProgressRef.current = false;
@@ -1652,19 +1962,32 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         ...request,
         updatedAt: request.updatedAt || Date.now(),
       };
-      const updatedRequests = [...requests, requestWithTimestamp];
+
+      // Use latest persisted requests to prevent stale overwrites in bulk imports.
+      let baseRequests: ProductRequest[] = requests;
+      try {
+        const allRequestsRaw = await AsyncStorage.getItem(STORAGE_KEYS.REQUESTS);
+        if (allRequestsRaw) {
+          const parsed = JSON.parse(allRequestsRaw);
+          if (Array.isArray(parsed)) {
+            baseRequests = parsed;
+          }
+        }
+      } catch (storageReadError) {
+        console.error('addRequest: Failed to read latest requests from storage:', storageReadError);
+      }
+
+      const updatedRequests = [...baseRequests, requestWithTimestamp];
       await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
-      setRequests(updatedRequests);
+      setRequests(updatedRequests.filter(r => !r.deleted));
 
       console.log('addRequest: Saved locally, syncing immediately...');
-      if (currentUser && syncAllRef.current && !syncInProgressRef.current) {
-        syncAllRef.current().catch(e => console.error('addRequest: Sync failed', e));
-      }
+      await syncRequestsNow(updatedRequests, 'addRequest', [requestWithTimestamp]);
     } catch (error) {
       console.error('Failed to add request:', error);
       throw error;
     }
-  }, [requests, currentUser]);
+  }, [requests, syncRequestsNow]);
 
   const updateRequestStatus = useCallback(async (
     requestId: string,
@@ -1685,7 +2008,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('updateRequestStatus: Syncing OUT to server immediately...');
       if (currentUser?.id) {
         try {
-          const synced = await syncData('requests', updatedRequests, currentUser.id);
+          const changedRequest = updatedRequests.find(r => r.id === requestId);
+          const synced = await syncData('requests', updatedRequests, currentUser.id, {
+            pushOnly: true,
+            changedItems: changedRequest ? [changedRequest] : [],
+          });
           console.log('updateRequestStatus: ✓ Successfully synced to server');
           await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(synced));
           setRequests((synced as any[]).filter(r => !r?.deleted));
@@ -1744,12 +2071,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('StockContext deleteRequest: ✓ React state updated');
 
       console.log('StockContext deleteRequest: Triggering immediate sync...');
-      if (currentUser && syncAllRef.current && !syncInProgressRef.current) {
-        console.log('StockContext deleteRequest: Calling syncAll...');
-        syncAllRef.current().catch(e => console.error('StockContext deleteRequest: Sync error', e));
-      } else {
-        console.log('StockContext deleteRequest: Sync skipped - currentUser:', !!currentUser, 'syncAllRef:', !!syncAllRef.current, 'syncInProgress:', syncInProgressRef.current);
-      }
+      const changedRequest = updatedRequests.find(r => r.id === requestId);
+      await syncRequestsNow(updatedRequests, 'deleteRequest', changedRequest ? [changedRequest] : []);
       
       console.log('StockContext deleteRequest: ✓✓✓ COMPLETE - request successfully deleted');
       console.log('========================================');
@@ -1759,7 +2082,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.error('========================================');
       throw error;
     }
-  }, [currentUser]);
+  }, [syncRequestsNow]);
 
   const getDeletedRequests = useCallback(async (startDate?: string, endDate?: string): Promise<ProductRequest[]> => {
     try {
@@ -1802,16 +2125,15 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const activeRequests = updatedRequests.filter(r => !r.deleted);
       setRequests(activeRequests);
       
-      if (currentUser && syncAllRef.current && !syncInProgressRef.current) {
-        syncAllRef.current().catch(e => console.error('Restore sync error:', e));
-      }
+      const restoredRequests = updatedRequests.filter(r => requestIds.includes(r.id) && !r.deleted);
+      await syncRequestsNow(updatedRequests, 'restoreRequests', restoredRequests);
       
       return restoredCount;
     } catch (error) {
       console.error('Failed to restore requests:', error);
       throw error;
     }
-  }, [currentUser]);
+  }, [syncRequestsNow]);
 
   const updateRequest = useCallback(async (requestId: string, updates: Partial<ProductRequest>) => {
     try {
@@ -1821,25 +2143,43 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
       setRequests(updatedRequests);
 
-      console.log('updateRequest: Saved locally, will sync on next interval');
+      console.log('updateRequest: Saved locally, syncing immediately...');
+      const changedRequest = updatedRequests.find(r => r.id === requestId);
+      await syncRequestsNow(updatedRequests, 'updateRequest', changedRequest ? [changedRequest] : []);
     } catch (error) {
       console.error('Failed to update request:', error);
       throw error;
     }
-  }, [requests]);
+  }, [requests, syncRequestsNow]);
 
   const addRequestsToDate = useCallback(async (date: string, newRequests: ProductRequest[]) => {
     try {
-      const updatedRequests = [...requests, ...newRequests];
-      await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
-      setRequests(updatedRequests);
+      // Use latest persisted requests to prevent stale overwrites in bulk imports.
+      let baseRequests: ProductRequest[] = requests;
+      try {
+        const allRequestsRaw = await AsyncStorage.getItem(STORAGE_KEYS.REQUESTS);
+        if (allRequestsRaw) {
+          const parsed = JSON.parse(allRequestsRaw);
+          if (Array.isArray(parsed)) {
+            baseRequests = parsed;
+          }
+        }
+      } catch (storageReadError) {
+        console.error('addRequestsToDate: Failed to read latest requests from storage:', storageReadError);
+      }
 
-      console.log('addRequestsToDate: Saved locally, will sync on next interval');
+      const newRequestsWithTimestamp = newRequests.map(r => ({ ...r, updatedAt: r.updatedAt || Date.now() }));
+      const updatedRequests = [...baseRequests, ...newRequestsWithTimestamp];
+      await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(updatedRequests));
+      setRequests(updatedRequests.filter(r => !r.deleted));
+
+      console.log('addRequestsToDate: Saved locally, syncing immediately...');
+      await syncRequestsNow(updatedRequests, 'addRequestsToDate', newRequestsWithTimestamp);
     } catch (error) {
       console.error('Failed to add requests:', error);
       throw error;
     }
-  }, [requests]);
+  }, [requests, syncRequestsNow]);
 
   const deleteStockCheck = useCallback(async (checkId: string) => {
     try {
@@ -1854,15 +2194,19 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('deleteStockCheck: Syncing deletion to server BEFORE updating local storage...');
       if (currentUser?.id) {
         try {
-          await syncData('stockChecks', updatedChecks, currentUser.id);
+          const changedCheck = updatedChecks.find(c => c.id === checkId);
+          await syncData('stockChecks', updatedChecks, currentUser.id, {
+            pushOnly: true,
+            changedItems: changedCheck ? [changedCheck] : [],
+          });
           console.log('deleteStockCheck: Successfully synced deletion to server');
         } catch (syncError) {
           console.error('deleteStockCheck: Sync failed, but continuing with local deletion:', syncError);
         }
       }
       
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(updatedChecks));
-      const activeChecks = updatedChecks.filter(c => !c.deleted);
+      const persistedChecks = await persistStockChecksWithQuotaGuard(updatedChecks, 'deleteStockCheck');
+      const activeChecks = persistedChecks.filter(c => !c.deleted);
       setStockChecks(activeChecks);
 
       console.log('deleteStockCheck: Deleted locally and synced to server');
@@ -1888,7 +2232,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     }
   }, [stockChecks, currentUser]);
 
-  const updateStockCheck = useCallback(async (checkId: string, newCounts: StockCount[], newOutlet?: string, outletChanged?: boolean, replaceAllInventory?: boolean) => {
+  const updateStockCheck = useCallback(async (checkId: string, newCounts: StockCount[], newOutlet?: string, outletChanged?: boolean, replaceAllInventory?: boolean, newDate?: string) => {
     try {
       console.log('\n=== updateStockCheck START ===');
       console.log('Updating stock check ID:', checkId);
@@ -1908,22 +2252,36 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('New outlet:', newOutlet);
       console.log('replaceAllInventory flag (from param):', replaceAllInventory);
       console.log('replaceAllInventory flag (original):', originalCheck.replaceAllInventory);
+      console.log('New date (optional):', newDate);
       
       // CRITICAL: Read fresh data from AsyncStorage to prevent race conditions
       console.log('updateStockCheck: Reading fresh stock checks from storage to prevent data loss...');
       const storedChecks = await AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS);
-      const freshStockChecks = storedChecks ? JSON.parse(storedChecks) : stockChecks;
+      const freshStockChecks: StockCheck[] = storedChecks ? JSON.parse(storedChecks) : stockChecks;
       console.log('updateStockCheck: Using', freshStockChecks.length, 'stock checks from storage');
       
       const updatedChecks = freshStockChecks.map((check: StockCheck) =>
-        check.id === checkId ? { ...check, counts: newCounts, outlet: newOutlet !== undefined ? newOutlet : check.outlet, replaceAllInventory: replaceAllInventory !== undefined ? replaceAllInventory : check.replaceAllInventory, updatedAt: Date.now() } : check
+        check.id === checkId ? {
+          ...check,
+          counts: newCounts,
+          outlet: newOutlet !== undefined ? newOutlet : check.outlet,
+          date: newDate !== undefined ? newDate : check.date,
+          // If date changes, refresh timestamp so ordering and history grouping remain stable.
+          timestamp: newDate !== undefined ? Date.now() : check.timestamp,
+          replaceAllInventory: replaceAllInventory !== undefined ? replaceAllInventory : check.replaceAllInventory,
+          updatedAt: Date.now(),
+        } : check
       );
       
       // CRITICAL: Sync OUT first before updating local storage
       console.log('updateStockCheck: Syncing update to server BEFORE updating local storage...');
       if (currentUser?.id) {
         try {
-          await syncData('stockChecks', updatedChecks, currentUser.id);
+          const changedCheck = updatedChecks.find(c => c.id === checkId);
+          await syncData('stockChecks', updatedChecks, currentUser.id, {
+            pushOnly: true,
+            changedItems: changedCheck ? [changedCheck] : [],
+          });
           console.log('updateStockCheck: Successfully synced update to server');
         } catch (syncError) {
           console.error('updateStockCheck: Sync failed, but continuing with local update:', syncError);
@@ -1932,8 +2290,8 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       // Batch state and storage updates
       console.log('updateStockCheck: Updating local storage and state...');
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(updatedChecks));
-      setStockChecks(updatedChecks);
+      const persistedChecks = await persistStockChecksWithQuotaGuard(updatedChecks, 'updateStockCheck');
+      setStockChecks(persistedChecks.filter(c => !c.deleted));
       
       console.log('updateStockCheck: Stock check updated for date:', originalCheck.date);
       console.log('updateStockCheck: Next day will use this closing stock as opening stock (including product conversions)');
@@ -2039,11 +2397,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           }
         }
         
-        await saveInventoryStocks(updatedInventoryStocks);
+        await saveInventoryStocks(updatedInventoryStocks, true, updatedInventoryStocks);
         console.log('updateStockCheck: Inventory stocks updated successfully');
       }
 
-      console.log('updateStockCheck: Saved locally, will sync on next interval');
+      console.log('updateStockCheck: Saved locally with immediate sync for updated stock check');
       
       const sortedChecks = [...updatedChecks].sort((a: StockCheck, b: StockCheck) => b.timestamp - a.timestamp);
       if (sortedChecks.length > 0 && sortedChecks[0].id === checkId) {
@@ -2084,48 +2442,77 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
 
   const addOutlet = useCallback(async (outlet: Outlet) => {
     try {
+      const baseOutlets = await getLatestOutlets();
       const outletWithTimestamp = {
         ...outlet,
         updatedAt: outlet.updatedAt || Date.now(),
       };
-      const updatedOutlets = [...outlets, outletWithTimestamp];
+      const updatedOutlets = [...baseOutlets, outletWithTimestamp];
       await AsyncStorage.setItem(STORAGE_KEYS.OUTLETS, JSON.stringify(updatedOutlets));
       setOutlets(updatedOutlets.filter(o => !o.deleted));
 
-      console.log('addOutlet: Saved locally, will sync on next interval');
+      if (currentUser?.id) {
+        await syncData('outlets', updatedOutlets, currentUser.id, {
+          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin',
+          pushOnly: true,
+          changedItems: [outletWithTimestamp],
+        });
+      }
+
+      console.log('addOutlet: Saved locally and synced immediately');
     } catch (error) {
       console.error('Failed to add outlet:', error);
       throw error;
     }
-  }, [outlets, currentUser]);
+  }, [getLatestOutlets, currentUser]);
 
   const updateOutlet = useCallback(async (outletId: string, updates: Partial<Outlet>) => {
     try {
-      const updatedOutlets = outlets.map(o =>
+      const baseOutlets = await getLatestOutlets();
+      const updatedOutlets = baseOutlets.map(o =>
         o.id === outletId ? { ...o, ...updates, updatedAt: Date.now() } : o
       );
       await AsyncStorage.setItem(STORAGE_KEYS.OUTLETS, JSON.stringify(updatedOutlets));
       setOutlets(updatedOutlets.filter(o => !o.deleted));
 
-      console.log('updateOutlet: Saved locally, will sync on next interval');
+      if (currentUser?.id) {
+        const changedOutlet = updatedOutlets.find(o => o.id === outletId);
+        await syncData('outlets', updatedOutlets, currentUser.id, {
+          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin',
+          pushOnly: true,
+          changedItems: changedOutlet ? [changedOutlet] : [],
+        });
+      }
+
+      console.log('updateOutlet: Saved locally and synced immediately');
     } catch (error) {
       console.error('Failed to update outlet:', error);
       throw error;
     }
-  }, [outlets, currentUser]);
+  }, [getLatestOutlets, currentUser]);
 
   const deleteOutlet = useCallback(async (outletId: string) => {
     try {
-      const updatedOutlets = outlets.map(o => o.id === outletId ? { ...o, deleted: true as const, updatedAt: Date.now() } : o);
+      const baseOutlets = await getLatestOutlets();
+      const updatedOutlets = baseOutlets.map(o => o.id === outletId ? { ...o, deleted: true as const, updatedAt: Date.now() } : o);
       await AsyncStorage.setItem(STORAGE_KEYS.OUTLETS, JSON.stringify(updatedOutlets));
       setOutlets(updatedOutlets.filter(o => !o.deleted));
 
-      console.log('deleteOutlet: Saved locally, will sync on next interval');
+      if (currentUser?.id) {
+        const changedOutlet = updatedOutlets.find(o => o.id === outletId);
+        await syncData('outlets', updatedOutlets, currentUser.id, {
+          isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin',
+          pushOnly: true,
+          changedItems: changedOutlet ? [changedOutlet] : [],
+        });
+      }
+
+      console.log('deleteOutlet: Saved locally and synced immediately');
     } catch (error) {
       console.error('Failed to delete outlet:', error);
       throw error;
     }
-  }, [outlets, currentUser]);
+  }, [getLatestOutlets, currentUser]);
 
   const clearAllData = useCallback(async () => {
     try {
@@ -2215,7 +2602,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     try {
       console.log('deleteAllStockChecks: Starting...');
       const allDeletedStockChecks = stockChecks.map(c => ({ ...c, deleted: true as const, updatedAt: Date.now() }));
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(allDeletedStockChecks));
+      await persistStockChecksWithQuotaGuard(allDeletedStockChecks, 'deleteAllStockChecks');
       setStockChecks([]);
       setCurrentStockCounts(new Map());
 
@@ -2257,11 +2644,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
   const deleteUserStockChecks = useCallback(async (userId: string) => {
     try {
       const updatedChecks = stockChecks.filter(check => check.completedBy !== userId);
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(updatedChecks));
-      setStockChecks(updatedChecks);
+      const persistedChecks = await persistStockChecksWithQuotaGuard(updatedChecks, 'deleteUserStockChecks');
+      const activeChecks = persistedChecks.filter(c => !c.deleted);
+      setStockChecks(activeChecks);
       
-      if (updatedChecks.length > 0) {
-        const sortedChecks = [...updatedChecks].sort((a: StockCheck, b: StockCheck) => b.timestamp - a.timestamp);
+      if (activeChecks.length > 0) {
+        const sortedChecks = [...activeChecks].sort((a: StockCheck, b: StockCheck) => b.timestamp - a.timestamp);
         const latestCheck = sortedChecks[0];
         
         const stockMap = new Map<string, number>();
@@ -2299,7 +2687,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     }
   }, []);
 
-  const saveProductConversions = useCallback(async (conversions: ProductConversion[]) => {
+  const saveProductConversions = useCallback(async (conversions: ProductConversion[], changedConversions: ProductConversion[] = []) => {
     try {
       const conversionsWithTimestamp = conversions.map(c => ({
         ...c,
@@ -2308,43 +2696,75 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(conversionsWithTimestamp));
       setProductConversions(conversionsWithTimestamp.filter(c => !c.deleted));
 
-      console.log('saveProductConversions: Saved locally, will sync on next interval');
+      if (currentUser?.id) {
+        const changedIds = new Set(changedConversions.map(item => item.id));
+        const changedWithTimestamp = conversionsWithTimestamp.filter(item => changedIds.has(item.id));
+        await syncData('productConversions', conversionsWithTimestamp, currentUser.id, {
+          pushOnly: true,
+          changedItems: changedWithTimestamp,
+        });
+      }
+
+      console.log('saveProductConversions: Saved locally and synced immediately');
     } catch (error) {
       console.error('Failed to save product conversions:', error);
       throw error;
     }
   }, [currentUser]);
 
+  const hydrateConversionMetadata = useCallback((conversion: ProductConversion): ProductConversion => {
+    const fromProduct = products.find(p => p.id === conversion.fromProductId);
+    const toProduct = products.find(p => p.id === conversion.toProductId);
+
+    return {
+      ...conversion,
+      fromProductName: fromProduct?.name ?? conversion.fromProductName,
+      fromProductUnit: fromProduct?.unit ?? conversion.fromProductUnit,
+      toProductName: toProduct?.name ?? conversion.toProductName,
+      toProductUnit: toProduct?.unit ?? conversion.toProductUnit,
+    };
+  }, [products]);
+
   const addProductConversion = useCallback(async (conversion: ProductConversion) => {
-    const updatedConversions = [...productConversions, conversion];
-    await saveProductConversions(updatedConversions);
-  }, [productConversions, saveProductConversions]);
+    const baseConversions = await getLatestProductConversions();
+    const conversionWithTimestamp = hydrateConversionMetadata({ ...conversion, updatedAt: conversion.updatedAt || Date.now() });
+    const updatedConversions = [...baseConversions, conversionWithTimestamp];
+    await saveProductConversions(updatedConversions, [conversionWithTimestamp]);
+  }, [getLatestProductConversions, saveProductConversions, hydrateConversionMetadata]);
 
   const addProductConversionsBulk = useCallback(async (conversions: ProductConversion[]) => {
-    const updatedConversions = [...productConversions, ...conversions];
-    await saveProductConversions(updatedConversions);
-  }, [productConversions, saveProductConversions]);
+    const baseConversions = await getLatestProductConversions();
+    const conversionsWithTimestamp = conversions.map(c => hydrateConversionMetadata({ ...c, updatedAt: c.updatedAt || Date.now() }));
+    const updatedConversions = [...baseConversions, ...conversionsWithTimestamp];
+    await saveProductConversions(updatedConversions, conversionsWithTimestamp);
+  }, [getLatestProductConversions, saveProductConversions, hydrateConversionMetadata]);
 
   const updateProductConversion = useCallback(async (conversionId: string, updates: Partial<ProductConversion>) => {
-    const updatedConversions = productConversions.map(c =>
-      c.id === conversionId ? { ...c, ...updates, updatedAt: Date.now() } : c
+    const baseConversions = await getLatestProductConversions();
+    const updatedConversions = baseConversions.map(c =>
+      c.id === conversionId ? hydrateConversionMetadata({ ...c, ...updates, updatedAt: Date.now() }) : c
     );
-    await saveProductConversions(updatedConversions);
-  }, [productConversions, saveProductConversions]);
+    const changedConversion = updatedConversions.find(c => c.id === conversionId);
+    await saveProductConversions(updatedConversions, changedConversion ? [changedConversion] : []);
+  }, [getLatestProductConversions, saveProductConversions, hydrateConversionMetadata]);
 
   const deleteProductConversion = useCallback(async (conversionId: string) => {
-    const updatedConversions = productConversions.map(c =>
+    const baseConversions = await getLatestProductConversions();
+    const updatedConversions = baseConversions.map(c =>
       c.id === conversionId ? { ...c, deleted: true as const, updatedAt: Date.now() } : c
     );
-    await saveProductConversions(updatedConversions as any);
-  }, [productConversions, saveProductConversions]);
+    const changedConversion = updatedConversions.find(c => c.id === conversionId);
+    await saveProductConversions(updatedConversions as any, changedConversion ? [changedConversion as ProductConversion] : []);
+  }, [getLatestProductConversions, saveProductConversions]);
 
   const updateInventoryStock = useCallback(async (productId: string, updates: Partial<InventoryStock>) => {
-    const updated = inventoryStocks.map(s => 
+    const baseStocks = await getLatestInventoryStocks();
+    const updated = baseStocks.map(s => 
       s.productId === productId ? { ...s, ...updates, updatedAt: Date.now() } : s
     );
-    await saveInventoryStocks(updated);
-  }, [inventoryStocks, saveInventoryStocks]);
+    const changedStock = updated.find(s => s.productId === productId);
+    await saveInventoryStocks(updated, true, changedStock ? [changedStock] : []);
+  }, [getLatestInventoryStocks, saveInventoryStocks]);
 
   const deductLinkedKitchenProductsForMenuRequest = useCallback(async (
     request: ProductRequest,
@@ -2517,7 +2937,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         };
       }
 
-      await saveInventoryStocks(latestInventory);
+      const changedInventoryProductIds = new Set<string>([
+        ...Array.from(pairDeductions.keys()),
+        ...nonPairRequirements.map(item => item.productId),
+      ]);
+      const changedInventoryEntries = latestInventory.filter(item => changedInventoryProductIds.has(item.productId));
+      await saveInventoryStocks(latestInventory, true, changedInventoryEntries);
 
       if (createSnapshotRef.current) {
         try {
@@ -2728,7 +3153,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
               ...inventoryStocks.slice(invStockIndex + 1)
             ];
             
-            await saveInventoryStocks(updatedInventoryStocks);
+            await saveInventoryStocks(updatedInventoryStocks, true, [updatedInvStock]);
             console.log('deductInventoryFromApproval: ✓ Deducted from Kitchen/Production inventory');
           } else {
             console.log('deductInventoryFromApproval: WARNING - No inventory entry found for product', request.productId);
@@ -2736,7 +3161,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           
           console.log('=== DEDUCTION FROM KITCHEN/PRODUCTION INVENTORY COMPLETE ===\n');
         }
-        
+
         console.log('\n=== APPROVAL COMPLETE (NO STOCK CHECK CREATION) ===');
         console.log('deductInventoryFromApproval: Successfully transferred', request.quantity, product.unit);
         console.log('  FROM:', request.fromOutlet, '(deducted from Kitchen/Production inventory)');
@@ -2964,7 +3389,6 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           console.error('deductInventoryFromApproval: Failed to create snapshot:', snapshotError);
         }
       }
-      
       return { success: true };
     } catch (error) {
       console.error('Deduct inventory error:', error);
@@ -3080,7 +3504,11 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
           if (currentUser?.id) {
             console.log('deductInventoryFromSales: Syncing OUT updated deduction to server...');
             try {
-              await syncData('salesDeductions', deductionsWithTimestamp, currentUser.id);
+              const changedDeduction = deductionsWithTimestamp.find((d: SalesDeduction) => d.id === existingDeduction.id);
+              await syncData('salesDeductions', deductionsWithTimestamp, currentUser.id, {
+                pushOnly: true,
+                changedItems: changedDeduction ? [changedDeduction] : [],
+              });
               console.log('deductInventoryFromSales: ✓ Synced OUT to server successfully');
             } catch (syncError) {
               console.error('deductInventoryFromSales: Sync OUT failed:', syncError);
@@ -3162,7 +3590,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       if (currentUser?.id) {
         console.log('deductInventoryFromSales: Syncing OUT to server to preserve sold data...');
         try {
-          await syncData('salesDeductions', deductionsWithTimestamp, currentUser.id);
+          await syncData('salesDeductions', deductionsWithTimestamp, currentUser.id, {
+            pushOnly: true,
+            changedItems: [deduction],
+          });
           console.log('deductInventoryFromSales: ✓ Synced OUT to server successfully');
         } catch (syncError) {
           console.error('deductInventoryFromSales: Sync OUT failed:', syncError);
@@ -3181,6 +3612,135 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       syncInProgressRef.current = false;
     }
   }, [inventoryStocks, getConversionFactor, getProductPairForInventory, updateInventoryStock, currentUser]);
+
+  const reverseInventoryFromSales = useCallback(async (
+    outletName: string,
+    productId: string,
+    salesDate: string,
+    wholeRestored: number,
+    slicesRestored: number
+  ) => {
+    try {
+      console.log('=== reverseInventoryFromSales START ===');
+      console.log('Outlet:', outletName, 'Product:', productId, 'Date:', salesDate);
+      console.log('Restore amounts - Whole:', wholeRestored, 'Slices:', slicesRestored);
+
+      const wasSyncing = syncInProgressRef.current;
+      syncInProgressRef.current = true;
+
+      const storedDeductions = await AsyncStorage.getItem(STORAGE_KEYS.SALES_DEDUCTIONS);
+      const currentSalesDeductions: SalesDeduction[] = storedDeductions
+        ? JSON.parse(storedDeductions).filter((d: SalesDeduction) => !d.deleted)
+        : [];
+      const existingDeduction = currentSalesDeductions.find(
+        (d) => d.outletName === outletName && d.productId === productId && d.salesDate === salesDate && !d.deleted
+      );
+
+      if (!existingDeduction) {
+        console.log('reverseInventoryFromSales: No existing sales deduction found, nothing to reverse');
+        syncInProgressRef.current = wasSyncing;
+        return;
+      }
+
+      const freshInventoryStocks = await getLatestInventoryStocks();
+      const inventoryEntry = freshInventoryStocks.find((stock) => stock.productId === productId && !stock.deleted);
+      const productPair = getProductPairForInventory(productId);
+
+      if (inventoryEntry) {
+        const outletStocks = [...inventoryEntry.outletStocks];
+        const outletIndex = outletStocks.findIndex((stock) => stock.outletName === outletName);
+
+        if (productPair) {
+          const conversionFactor = getConversionFactor(productPair.wholeProductId, productPair.slicesProductId) || 10;
+          const restoredSlices = wholeRestored * conversionFactor + slicesRestored;
+
+          if (outletIndex >= 0) {
+            const currentOutlet = outletStocks[outletIndex];
+            const totalSlices = (currentOutlet.whole || 0) * conversionFactor + (currentOutlet.slices || 0) + restoredSlices;
+            outletStocks[outletIndex] = {
+              ...currentOutlet,
+              whole: Math.floor(totalSlices / conversionFactor),
+              slices: Math.round(totalSlices % conversionFactor),
+            };
+          } else {
+            outletStocks.push({
+              outletName,
+              whole: wholeRestored,
+              slices: slicesRestored,
+            });
+          }
+
+          await updateInventoryStock(productId, {
+            ...inventoryEntry,
+            outletStocks,
+            updatedAt: Date.now(),
+          });
+        }
+      }
+
+      let nextWholeDeducted = existingDeduction.wholeDeducted;
+      let nextSlicesDeducted = existingDeduction.slicesDeducted;
+
+      if (productPair) {
+        const conversionFactor = getConversionFactor(productPair.wholeProductId, productPair.slicesProductId) || 10;
+        const currentTotalSlices = existingDeduction.wholeDeducted * conversionFactor + existingDeduction.slicesDeducted;
+        const restoredTotalSlices = wholeRestored * conversionFactor + slicesRestored;
+        const nextTotalSlices = Math.max(0, currentTotalSlices - restoredTotalSlices);
+
+        nextWholeDeducted = Math.floor(nextTotalSlices / conversionFactor);
+        nextSlicesDeducted = Math.round(nextTotalSlices % conversionFactor);
+      } else {
+        nextWholeDeducted = Math.max(0, existingDeduction.wholeDeducted - wholeRestored);
+        nextSlicesDeducted = Math.max(0, existingDeduction.slicesDeducted - slicesRestored);
+      }
+
+      const shouldDeleteDeduction = nextWholeDeducted === 0 && nextSlicesDeducted === 0;
+      const changedDeduction: SalesDeduction = shouldDeleteDeduction
+        ? {
+            ...existingDeduction,
+            wholeDeducted: 0,
+            slicesDeducted: 0,
+            deleted: true,
+            updatedAt: Date.now(),
+          }
+        : {
+            ...existingDeduction,
+            wholeDeducted: nextWholeDeducted,
+            slicesDeducted: nextSlicesDeducted,
+            updatedAt: Date.now(),
+          };
+
+      const updatedDeductions = currentSalesDeductions.map((deduction) => (
+        deduction.id === existingDeduction.id ? changedDeduction : deduction
+      ));
+      const deductionsWithTimestamp = updatedDeductions.map((deduction) => ({
+        ...deduction,
+        updatedAt: deduction.updatedAt || Date.now(),
+      }));
+
+      await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(deductionsWithTimestamp));
+      setSalesDeductions(deductionsWithTimestamp.filter((deduction) => !deduction.deleted));
+
+      if (currentUser?.id) {
+        try {
+          await syncData('salesDeductions', deductionsWithTimestamp, currentUser.id, {
+            pushOnly: true,
+            changedItems: [changedDeduction],
+          });
+        } catch (syncError) {
+          console.error('reverseInventoryFromSales: Sync OUT failed:', syncError);
+        }
+      }
+
+      syncInProgressRef.current = wasSyncing;
+      console.log('reverseInventoryFromSales: ✓ Reversed sales deduction and restored inventory');
+      console.log('=== reverseInventoryFromSales END ===');
+    } catch (error) {
+      console.error('reverseInventoryFromSales: Error:', error);
+      syncInProgressRef.current = false;
+      throw error;
+    }
+  }, [currentUser, getConversionFactor, getLatestInventoryStocks, getProductPairForInventory, updateInventoryStock]);
 
   const saveReconcileHistory = useCallback(async (history: SalesReconciliationHistory[]) => {
     try {
@@ -3211,13 +3771,14 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     syncInProgressRef.current = true;
     
     try {
+      const baseHistory = await getLatestReconcileHistory();
       const historyWithTimestamp = {
         ...history,
         updatedAt: Date.now(),
         timestamp: history.timestamp || Date.now()
       };
       
-      const updated = [...reconcileHistory, historyWithTimestamp];
+      const updated = [...baseHistory, historyWithTimestamp];
       await saveReconcileHistory(updated);
     
     // Create live inventory snapshot after sales reconciliation
@@ -3235,21 +3796,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('[addReconcileHistory] Triggering immediate sync to server...');
       if (currentUser?.id) {
         try {
-          // CRITICAL FIX: Sync inventory stocks AND stock checks FIRST
-          // This ensures Prod.req (receivedStock) updates are on server BEFORE syncAll() pulls data
-          console.log('[addReconcileHistory] Step 1: Syncing inventory stocks to server (including Prod.req updates)...');
-          await syncData('inventoryStocks', inventoryStocks, currentUser.id);
-          console.log('[addReconcileHistory] ✓ Inventory stocks synced');
-          
-          console.log('[addReconcileHistory] Step 2: Syncing stock checks to server (including receivedStock/Prod.req)...');
-          await syncData('stockChecks', stockChecks, currentUser.id);
-          console.log('[addReconcileHistory] ✓ Stock checks synced');
-          
-          console.log('[addReconcileHistory] Step 3: Syncing reconciliation history to server...');
-          await syncData('reconcileHistory', updated, currentUser.id);
+          console.log('[addReconcileHistory] Syncing reconciliation history delta...');
+          await syncData('reconcileHistory', updated, currentUser.id, {
+            pushOnly: true,
+            changedItems: [historyWithTimestamp],
+          });
           console.log('[addReconcileHistory] ✓ Reconciliation synced to server successfully');
-          
-          console.log('[addReconcileHistory] ✓ ALL data synced - Prod.req updates are now on server');
         } catch (syncError) {
           console.error('[addReconcileHistory] ❌ Failed to sync to server:', syncError);
         }
@@ -3261,21 +3813,30 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.log('[addReconcileHistory] UNBLOCKING background sync');
       syncInProgressRef.current = wasBlocked;
     }
-  }, [reconcileHistory, saveReconcileHistory, currentUser, inventoryStocks, stockChecks]);
+  }, [getLatestReconcileHistory, saveReconcileHistory, currentUser]);
 
   const deleteReconcileHistory = useCallback(async (historyId: string) => {
-    const updated = reconcileHistory.map(h => 
+    const baseHistory = await getLatestReconcileHistory();
+    const updated = baseHistory.map(h => 
       h.id === historyId ? { ...h, deleted: true as const, updatedAt: Date.now() } : h
     );
     await saveReconcileHistory(updated as any);
-  }, [reconcileHistory, saveReconcileHistory]);
+    if (currentUser?.id) {
+      const changedHistory = updated.find(h => h.id === historyId);
+      await syncData('reconcileHistory', updated as any, currentUser.id, {
+        pushOnly: true,
+        changedItems: changedHistory ? [changedHistory as SalesReconciliationHistory] : [],
+      });
+    }
+  }, [getLatestReconcileHistory, saveReconcileHistory, currentUser]);
 
   const clearAllReconcileHistory = useCallback(async () => {
     try {
+      const baseHistory = await getLatestReconcileHistory();
       console.log('clearAllReconcileHistory: Starting...');
-      console.log('clearAllReconcileHistory: Current reconcile history count:', reconcileHistory.length);
+      console.log('clearAllReconcileHistory: Current reconcile history count:', baseHistory.length);
       
-      const deletedHistory = reconcileHistory.map(h => ({
+      const deletedHistory = baseHistory.map(h => ({
         ...h,
         deleted: true as const,
         updatedAt: Date.now(),
@@ -3297,7 +3858,10 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       if (currentUser?.id) {
         console.log('clearAllReconcileHistory: Syncing deleted items to server...');
         try {
-          await syncData('reconcileHistory', deletedHistory, currentUser.id);
+          await syncData('reconcileHistory', deletedHistory, currentUser.id, {
+            pushOnly: true,
+            changedItems: deletedHistory,
+          });
           console.log('clearAllReconcileHistory: ✓ Synced deletion to server successfully');
         } catch (syncError) {
           console.error('clearAllReconcileHistory: Sync failed:', syncError);
@@ -3315,7 +3879,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       console.error('Failed to clear reconcile history:', error);
       throw error;
     }
-  }, [reconcileHistory, currentUser]);
+  }, [getLatestReconcileHistory, currentUser]);
 
   const clearAllInventory = useCallback(async () => {
     try {
@@ -3353,7 +3917,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       await AsyncStorage.setItem(STORAGE_KEYS.INVENTORY_STOCKS, JSON.stringify(deletedInventoryStocks));
       await AsyncStorage.setItem(STORAGE_KEYS.SALES_DEDUCTIONS, JSON.stringify(deletedSalesDeductions));
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(allStockChecks));
+      await persistStockChecksWithQuotaGuard(allStockChecks, 'clearAllInventory(mark deleted)');
       
       setInventoryStocks([]);
       setSalesDeductions([]);
@@ -3388,7 +3952,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       await AsyncStorage.removeItem(STORAGE_KEYS.INVENTORY_STOCKS);
       await AsyncStorage.removeItem(STORAGE_KEYS.SALES_DEDUCTIONS);
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(otherStockChecks));
+      await persistStockChecksWithQuotaGuard(otherStockChecks, 'clearAllInventory(final active)');
       console.log('Local storage cleared successfully');
       
       console.log('clearAllInventory: Complete - inventory stocks count:', 0);
@@ -3412,8 +3976,18 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     }
 
     if (syncInProgressRef.current) {
-      console.log('StockContext syncAll: Sync already in progress, skipping');
-      return;
+      if (silent && !forceFullSync) {
+        console.log('StockContext syncAll: Sync already in progress, skipping background sync');
+        return;
+      }
+      console.log('StockContext syncAll: Waiting for in-progress sync to finish before manual sync...');
+      const waitStart = Date.now();
+      while (syncInProgressRef.current && Date.now() - waitStart < 20000) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+      if (syncInProgressRef.current) {
+        throw new Error('Stock sync is still running. Please retry manual sync.');
+      }
     }
     
     // CRITICAL: For MANUAL sync (not silent), also restore deleted data from last 45 days
@@ -3492,7 +4066,9 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // MANUAL SYNC: Also include deleted items from last 45 days to restore data deleted locally
       const fetchOnly = forceFullSync;
       const includeDeleted = forceFullSync || shouldRestoreDeletedData; // Fetch deleted items for cache clear OR manual sync
-      const minDaysForRestore = shouldRestoreDeletedData ? 45 : undefined; // Restore last 45 days on manual sync
+      const masterDataMinDaysForRestore = shouldRestoreDeletedData ? 3650 : undefined; // Restore full master/current data
+      const transactionalMinDaysForRestore = shouldRestoreDeletedData ? 45 : undefined; // Restore only recent heavy history
+      const skipRemoteFetchIfRecent = silent && !forceFullSync;
       
       if (fetchOnly) {
         console.log('StockContext syncAll: ⚠️ FETCH-ONLY MODE - Cache was cleared, will only pull from server');
@@ -3505,15 +4081,15 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       }
       
       const syncResults = await Promise.allSettled([
-        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: minDaysForRestore, fetchOnly, includeDeleted }),
-        syncData('requests', requestsToSync, currentUser.id, { minDays: minDaysForRestore, fetchOnly, includeDeleted }),
-        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
-        syncData('liveInventorySnapshots', snapshotsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: minDaysForRestore }),
+        syncData('products', productsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: masterDataMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('stockChecks', stockChecksToSync, currentUser.id, { minDays: transactionalMinDaysForRestore, fetchOnly, includeDeleted, skipRemoteFetchIfRecent }),
+        syncData('requests', requestsToSync, currentUser.id, { minDays: transactionalMinDaysForRestore, fetchOnly, includeDeleted, skipRemoteFetchIfRecent }),
+        syncData('outlets', outletsToSync, currentUser.id, { isDefaultAdminDevice: currentUser.username === 'admin' && currentUser.role === 'superadmin', fetchOnly, includeDeleted, minDays: masterDataMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('productConversions', conversionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: masterDataMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('inventoryStocks', inventoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: masterDataMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('salesDeductions', salesDeductionsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: transactionalMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('reconcileHistory', reconcileHistoryToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: transactionalMinDaysForRestore, skipRemoteFetchIfRecent }),
+        syncData('liveInventorySnapshots', snapshotsToSync, currentUser.id, { fetchOnly, includeDeleted, minDays: transactionalMinDaysForRestore, skipRemoteFetchIfRecent }),
       ]);
       
       const syncedProducts = syncResults[0].status === 'fulfilled' ? syncResults[0].value : productsToSync;
@@ -3577,7 +4153,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
 
       console.log('StockContext syncAll: Saving to storage (silent)...');
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(syncedProducts));
-      await AsyncStorage.setItem(STORAGE_KEYS.STOCK_CHECKS, JSON.stringify(mergedStockChecks));
+      await persistStockChecksWithQuotaGuard(mergedStockChecks as StockCheck[], 'syncAll');
       await AsyncStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(syncedRequests));
       await AsyncStorage.setItem(STORAGE_KEYS.OUTLETS, JSON.stringify(syncedOutlets));
       await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(syncedConversions));
@@ -3601,7 +4177,16 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(syncedReconcileHistory));
       } catch (quotaError: any) {
         if (quotaError?.message?.includes('QuotaExceeded') || quotaError?.message?.includes('quota')) {
-          throw new Error('Unable to save full reconciliation history due to device storage quota. Please use manual cleanup in Settings, then sync again.');
+          console.warn('StockContext syncAll: Reconcile history exceeded quota, trimming local cache for this device');
+          const trimmedReconcileHistory = [...(Array.isArray(syncedReconcileHistory) ? syncedReconcileHistory : [])]
+            .sort((a: any, b: any) => {
+              const aTs = a?.timestamp || a?.updatedAt || 0;
+              const bTs = b?.timestamp || b?.updatedAt || 0;
+              return bTs - aTs;
+            })
+            .slice(0, 500);
+          await AsyncStorage.setItem(STORAGE_KEYS.RECONCILE_HISTORY, JSON.stringify(trimmedReconcileHistory));
+          syncedReconcileHistory = trimmedReconcileHistory as any;
         } else {
           throw quotaError;
         }
@@ -3817,11 +4402,15 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       } else {
         console.warn('  WARNING: No sales deductions after merge! This will cause sold column to be empty!');
       }
-      const finalStockChecks = mergeByTimestamp(stockChecks, mergedStockChecks, 'stockChecks');
+      const finalStockChecks = collapseStockChecksByLogicalKey(forceFullSync
+        ? (mergedStockChecks as any[])
+        : mergeByTimestamp(stockChecks, mergedStockChecks, 'stockChecks'));
       console.log('StockContext syncAll: ===== MERGING REQUESTS =====');
       console.log('StockContext syncAll: Current requests in state:', requests.length);
       console.log('StockContext syncAll: Synced requests to merge:', Array.isArray(syncedRequests) ? syncedRequests.length : 'not array');
-      const finalRequests = mergeByTimestamp(requests, syncedRequests as any[], 'requests');
+      const finalRequests = forceFullSync
+        ? (syncedRequests as any[])
+        : mergeByTimestamp(requests, syncedRequests as any[], 'requests');
       console.log('StockContext syncAll: Final requests after merge:', Array.isArray(finalRequests) ? finalRequests.length : 'not array');
       console.log('StockContext syncAll: Sample final requests:', Array.isArray(finalRequests) ? (finalRequests as any[]).slice(0, 2).map(r => ({
         id: r.id,
@@ -3831,9 +4420,117 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
         status: r.status,
         updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : 'no timestamp'
       })) : 'none');
-      const finalConversions = mergeByTimestamp(productConversions, syncedConversions, 'productConversions');
-      const finalOutlets = mergeByTimestamp(outlets, syncedOutlets, 'outlets');
-      const finalProducts = mergeByTimestamp(products, syncedProducts, 'products');
+      const finalConversions = forceFullSync
+        ? (syncedConversions as any[])
+        : mergeByTimestamp(productConversions, syncedConversions, 'productConversions');
+      const finalOutlets = forceFullSync
+        ? (syncedOutlets as any[])
+        : mergeByTimestamp(outlets, syncedOutlets, 'outlets');
+      const finalProducts = forceFullSync
+        ? (syncedProducts as any[])
+        : mergeByTimestamp(products, syncedProducts, 'products');
+
+      const normalizeName = (value?: string) => (value || '').trim().toLowerCase();
+      const normalizeUnit = (value?: string) => (value || '').trim().toLowerCase();
+      const activeProductsById = new Map<string, Product>();
+      const productIdByNameUnit = new Map<string, string>();
+      (finalProducts as Product[]).forEach((product) => {
+        if (product.deleted) return;
+        activeProductsById.set(product.id, product);
+        const key = `${normalizeName(product.name)}__${normalizeUnit(product.unit)}`;
+        if (key !== '__' && !productIdByNameUnit.has(key)) {
+          productIdByNameUnit.set(key, product.id);
+        }
+      });
+
+      const healedConversionsRaw = (finalConversions as ProductConversion[]).map((conversion) => {
+        let nextFromId = conversion.fromProductId;
+        let nextToId = conversion.toProductId;
+        const existingFrom = activeProductsById.get(conversion.fromProductId);
+        const existingTo = activeProductsById.get(conversion.toProductId);
+
+        if (!existingFrom) {
+          const key = `${normalizeName(conversion.fromProductName)}__${normalizeUnit(conversion.fromProductUnit)}`;
+          if (productIdByNameUnit.has(key)) {
+            nextFromId = productIdByNameUnit.get(key)!;
+          } else if (existingTo) {
+            const fallback = (finalProducts as Product[]).find((product) => {
+              if (product.deleted || product.id === existingTo.id) return false;
+              return normalizeName(product.name) === normalizeName(existingTo.name);
+            });
+            if (fallback) {
+              nextFromId = fallback.id;
+            }
+          }
+        }
+
+        if (!existingTo) {
+          const key = `${normalizeName(conversion.toProductName)}__${normalizeUnit(conversion.toProductUnit)}`;
+          if (productIdByNameUnit.has(key)) {
+            nextToId = productIdByNameUnit.get(key)!;
+          } else {
+            const resolvedFrom = activeProductsById.get(nextFromId);
+            if (resolvedFrom) {
+              const fallback = (finalProducts as Product[]).find((product) => {
+                if (product.deleted || product.id === resolvedFrom.id) return false;
+                return normalizeName(product.name) === normalizeName(resolvedFrom.name);
+              });
+              if (fallback) {
+                nextToId = fallback.id;
+              }
+            }
+          }
+        }
+
+        const fromProduct = activeProductsById.get(nextFromId);
+        const toProduct = activeProductsById.get(nextToId);
+        const metadataUpdated =
+          (fromProduct && (conversion.fromProductName !== fromProduct.name || conversion.fromProductUnit !== fromProduct.unit)) ||
+          (toProduct && (conversion.toProductName !== toProduct.name || conversion.toProductUnit !== toProduct.unit));
+        const idsUpdated = nextFromId !== conversion.fromProductId || nextToId !== conversion.toProductId;
+
+        if (!idsUpdated && !metadataUpdated) {
+          return conversion;
+        }
+
+        return {
+          ...conversion,
+          fromProductId: nextFromId,
+          toProductId: nextToId,
+          fromProductName: fromProduct?.name ?? conversion.fromProductName,
+          fromProductUnit: fromProduct?.unit ?? conversion.fromProductUnit,
+          toProductName: toProduct?.name ?? conversion.toProductName,
+          toProductUnit: toProduct?.unit ?? conversion.toProductUnit,
+          updatedAt: Date.now(),
+        };
+      });
+
+      const healedChangedConversions = healedConversionsRaw.filter((item, index) => {
+        const original = (finalConversions as ProductConversion[])[index];
+        return (
+          item.fromProductId !== original.fromProductId ||
+          item.toProductId !== original.toProductId ||
+          item.fromProductName !== original.fromProductName ||
+          item.fromProductUnit !== original.fromProductUnit ||
+          item.toProductName !== original.toProductName ||
+          item.toProductUnit !== original.toProductUnit
+        );
+      });
+
+      if (healedChangedConversions.length > 0) {
+        console.log('StockContext syncAll: Healed', healedChangedConversions.length, 'product conversion references');
+        try {
+          await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(healedConversionsRaw));
+          if (currentUser?.id) {
+            await syncData('productConversions', healedConversionsRaw, currentUser.id, {
+              pushOnly: true,
+              changedItems: healedChangedConversions,
+            });
+          }
+        } catch (healError) {
+          console.error('StockContext syncAll: Failed to persist/sync healed product conversions:', healError);
+        }
+      }
       
       // CRITICAL: Merge reconcile history using SPECIALIZED logic that compares by ACTUAL reconciliation timestamp
       // NOT by updatedAt (sync time), to ensure the most recent ACTUAL reconciliation wins
@@ -3888,7 +4585,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       const activeStockChecks = (finalStockChecks as any[]).filter((c: any) => !c?.deleted);
       const activeRequests = (finalRequests as any[]).filter(r => !r?.deleted);
       const activeOutlets = (finalOutlets as any[]).filter(o => !o?.deleted);
-      const activeConversions = (finalConversions as any[]).filter(c => !c?.deleted);
+      const activeConversions = (healedConversionsRaw as any[]).filter(c => !c?.deleted);
       const activeInventory = (finalInventory as any[]).filter(i => !i?.deleted);
       const activeSalesDeductions = (finalSalesDeductions as any[]).filter(d => !d?.deleted);
       const activeReconcileHistory = (finalReconcileHistory as any[]).filter(h => !h?.deleted);
@@ -3999,7 +4696,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     
     if (currentUser && !isSyncPaused) {
       console.log('StockContext: Setting up smart sync system');
-      console.log('StockContext: - Full sync every 60 seconds');
+      console.log('StockContext: - Full sync every 300 seconds');
       
       const dataTypes = [
         'products',
@@ -4017,12 +4714,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       
       syncInterval = setInterval(() => {
         if (!syncInProgressRef.current) {
-          console.log('[AUTO-SYNC] Running 60-second full sync cycle...');
+          console.log('[AUTO-SYNC] Running 300-second background sync cycle...');
           syncAll(true).catch((e) => console.log('[AUTO-SYNC] Stock auto-sync error', e));
         } else {
           console.log('[AUTO-SYNC] Skipping sync - another sync in progress');
         }
-      }, 60000);
+      }, 300000);
     } else {
       if (syncInterval) {
         console.log('StockContext: Clearing sync interval', isSyncPaused ? '(paused)' : '(logged out)');
@@ -4096,6 +4793,39 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     return snapshot;
   }, [inventoryStocks, liveInventorySnapshots]);
 
+  const refreshHistoryLocal = useCallback(async () => {
+    try {
+      const [stockChecksData, requestsData] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
+        AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
+      ]);
+
+      const parsedChecks: StockCheck[] = stockChecksData ? JSON.parse(stockChecksData) : [];
+      const parsedRequests: ProductRequest[] = requestsData ? JSON.parse(requestsData) : [];
+
+      const activeChecks = Array.isArray(parsedChecks) ? parsedChecks.filter((check) => !check?.deleted) : [];
+      const activeRequests = Array.isArray(parsedRequests) ? parsedRequests.filter((request) => !request?.deleted) : [];
+
+      setStockChecks(activeChecks);
+      setRequests(activeRequests);
+
+      const stockMap = new Map<string, number>();
+      if (activeChecks.length > 0) {
+        const sortedChecks = [...activeChecks].sort((a: StockCheck, b: StockCheck) => b.timestamp - a.timestamp);
+        const latestCheck = sortedChecks[0];
+        if (Array.isArray(latestCheck?.counts)) {
+          latestCheck.counts.forEach((count: StockCount) => {
+            stockMap.set(count.productId, count.quantity);
+          });
+        }
+      }
+      setCurrentStockCounts(stockMap);
+    } catch (error) {
+      console.error('refreshHistoryLocal failed:', error);
+      throw error;
+    }
+  }, []);
+
   const getSnapshotForDate = useCallback((date: string): LiveInventorySnapshot | undefined => {
     return liveInventorySnapshots.find(s => s.date === date);
   }, [liveInventorySnapshots]);
@@ -4151,6 +4881,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     addInventoryStock,
     deductInventoryFromApproval,
     deductInventoryFromSales,
+    reverseInventoryFromSales,
     addReconcileHistory,
     deleteReconcileHistory,
     clearAllReconcileHistory,
@@ -4167,6 +4898,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     toggleShowProductList,
     setViewMode,
     syncAll,
+    refreshHistoryLocal,
     isSyncPaused,
     toggleSyncPause,
     getDeletedRequests,
@@ -4214,6 +4946,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     addInventoryStock,
     deductInventoryFromApproval,
     deductInventoryFromSales,
+    reverseInventoryFromSales,
     addReconcileHistory,
     deleteReconcileHistory,
     clearAllReconcileHistory,
@@ -4229,6 +4962,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     deleteAllRequests,
     toggleShowProductList,
     setViewMode,
+    refreshHistoryLocal,
     isSyncPaused,
     toggleSyncPause,
     syncAll,

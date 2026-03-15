@@ -111,11 +111,10 @@ export async function syncData<T extends { id: string; updatedAt?: number; delet
       }
     }
     
-    // CRITICAL: When fetchOnly is true (cache cleared), fetch ALL data including deleted items
-    // Use minDays: 90 to ensure we get full 90-day history from server
-    // Set includeDeleted: true to restore deleted items that may have been lost
+    // When fetchOnly is true (cache cleared), still respect the dataset-specific minDays
+    // so heavy datasets can recover without pulling unnecessary history.
     const shouldIncludeDeleted = options?.fetchOnly || options?.includeDeleted;
-    const effectiveMinDays = options?.fetchOnly ? Math.max(options?.minDays || 90, 90) : options?.minDays;
+    const effectiveMinDays = options?.minDays;
 
     if (
       options?.skipRemoteFetchIfRecent &&
