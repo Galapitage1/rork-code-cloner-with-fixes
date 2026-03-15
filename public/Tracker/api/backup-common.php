@@ -8,6 +8,31 @@ const GD_BACKUP_DEFAULT_ROOT_FOLDER = 'Tracker Backups';
 const GD_BACKUP_FULL_SUBFOLDER = 'full';
 const GD_BACKUP_SCOPE = 'https://www.googleapis.com/auth/drive';
 
+function gd_backup_encrypt_secret($value) {
+    $raw = (string)$value;
+    if ($raw === '') {
+        return '';
+    }
+    if (function_exists('dialog_esms_encrypt_secret')) {
+        return dialog_esms_encrypt_secret($raw);
+    }
+    return $raw;
+}
+
+function gd_backup_resolve_secret($value) {
+    $raw = (string)$value;
+    if ($raw === '') {
+        return '';
+    }
+    if (function_exists('dialog_esms_resolve_secret')) {
+        return dialog_esms_resolve_secret($raw);
+    }
+    if (function_exists('dialog_esms_decrypt_secret') && strpos($raw, 'enc:v1:') === 0) {
+        return dialog_esms_decrypt_secret($raw);
+    }
+    return $raw;
+}
+
 function gd_backup_respond($data, $status = 200) {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
@@ -85,8 +110,8 @@ function gd_backup_settings_raw() {
 
 function gd_backup_load_settings() {
     $settings = gd_backup_settings_raw();
-    $settings['client_secret'] = dialog_esms_resolve_secret(isset($settings['client_secret_encrypted']) ? $settings['client_secret_encrypted'] : ($settings['client_secret'] ?? ''));
-    $settings['refresh_token'] = dialog_esms_resolve_secret(isset($settings['refresh_token_encrypted']) ? $settings['refresh_token_encrypted'] : ($settings['refresh_token'] ?? ''));
+    $settings['client_secret'] = gd_backup_resolve_secret(isset($settings['client_secret_encrypted']) ? $settings['client_secret_encrypted'] : ($settings['client_secret'] ?? ''));
+    $settings['refresh_token'] = gd_backup_resolve_secret(isset($settings['refresh_token_encrypted']) ? $settings['refresh_token_encrypted'] : ($settings['refresh_token'] ?? ''));
     return $settings;
 }
 
@@ -131,7 +156,7 @@ function gd_backup_update_settings($incoming) {
     $updated['updated_at'] = intval(microtime(true) * 1000);
 
     if ($clientSecret !== '') {
-        $updated['client_secret_encrypted'] = dialog_esms_encrypt_secret($clientSecret);
+        $updated['client_secret_encrypted'] = gd_backup_encrypt_secret($clientSecret);
     }
 
     gd_backup_write_json_file(gd_backup_settings_path(), $updated);
@@ -140,7 +165,7 @@ function gd_backup_update_settings($incoming) {
 
 function gd_backup_store_refresh_token($refreshToken, $connectedEmail = '') {
     $existing = gd_backup_settings_raw();
-    $existing['refresh_token_encrypted'] = dialog_esms_encrypt_secret($refreshToken);
+    $existing['refresh_token_encrypted'] = gd_backup_encrypt_secret($refreshToken);
     $existing['connected_at'] = intval(microtime(true) * 1000);
     if ($connectedEmail !== '') {
         $existing['connected_email'] = $connectedEmail;
