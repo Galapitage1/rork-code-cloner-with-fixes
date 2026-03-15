@@ -37,6 +37,12 @@ const homeSections: NavSection[] = [
         color: '#3B82F6',
       },
       {
+        title: 'POS',
+        icon: BadgeDollarSign,
+        route: '/pos',
+        color: '#B45309',
+      },
+      {
         title: 'Requests',
         icon: ShoppingCart,
         route: '/(tabs)/requests',
@@ -138,6 +144,13 @@ const homeSections: NavSection[] = [
   {
     title: 'Inventory',
     cards: [
+      {
+        title: 'Products',
+        icon: Package,
+        route: '/products',
+        color: '#2563EB',
+        requiresRole: 'adminOrSuper',
+      },
       {
         title: 'Stores',
         icon: Warehouse,
