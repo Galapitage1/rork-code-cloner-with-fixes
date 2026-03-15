@@ -4594,6 +4594,12 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
       // Merge snapshots using timestamp-based logic
       const finalSnapshots = mergeByTimestamp(liveInventorySnapshots, syncedSnapshots, 'snapshots');
       const activeSnapshots = (finalSnapshots as any[]).filter(s => !s?.deleted);
+
+      try {
+        await AsyncStorage.setItem(STORAGE_KEYS.PRODUCT_CONVERSIONS, JSON.stringify(healedConversionsRaw));
+      } catch (conversionPersistError) {
+        console.error('StockContext syncAll: Failed to persist final merged product conversions:', conversionPersistError);
+      }
       
       console.log('StockContext syncAll: Active counts - products:', activeProducts.length, 'checks:', activeStockChecks.length, 'requests:', activeRequests.length, 'outlets:', activeOutlets.length, 'conversions:', activeConversions.length, 'inventory:', activeInventory.length, 'sales:', activeSalesDeductions.length, 'reconcile:', activeReconcileHistory.length, 'snapshots:', activeSnapshots.length);
       if (activeSalesDeductions.length === 0 && salesDeductions.length > 0) {

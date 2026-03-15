@@ -11,6 +11,69 @@ import * as XLSX from 'xlsx';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
+type ConversionImportRow = {
+  fromProductName: string;
+  fromProductUnit: string;
+  toProductName: string;
+  toProductUnit: string;
+  conversionFactor: number;
+};
+
+function normalizeHeader(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9 ]/g, '');
+}
+
+function getRowValue(row: Record<string, unknown>, candidates: string[]): string {
+  const keys = Object.keys(row);
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeHeader(candidate);
+    const key = keys.find((entry) => normalizeHeader(entry) === normalizedCandidate);
+    if (!key) continue;
+    const value = row[key];
+    if (value === null || value === undefined) continue;
+    return String(value).trim();
+  }
+  return '';
+}
+
+function parseConversionRows(rawRows: Record<string, unknown>[]): { rows: ConversionImportRow[]; skipped: number } {
+  const parsedRows: ConversionImportRow[] = [];
+  let skipped = 0;
+
+  rawRows.forEach((row) => {
+    const fromProductName = getRowValue(row, ['From Product Name', 'From Product']);
+    const fromProductUnit = getRowValue(row, ['From Product Unit', 'From Unit']);
+    const toProductName = getRowValue(row, ['To Product Name', 'To Product']);
+    const toProductUnit = getRowValue(row, ['To Product Unit', 'To Unit']);
+    const conversionFactorRaw = getRowValue(row, ['Conversion Factor', 'Factor']);
+    const conversionFactor = Number.parseFloat(conversionFactorRaw);
+
+    const isEmptyRow = !fromProductName && !fromProductUnit && !toProductName && !toProductUnit && !conversionFactorRaw;
+    if (isEmptyRow) {
+      return;
+    }
+
+    if (!fromProductName || !fromProductUnit || !toProductName || !toProductUnit || !Number.isFinite(conversionFactor) || conversionFactor <= 0) {
+      skipped += 1;
+      return;
+    }
+
+    parsedRows.push({
+      fromProductName,
+      fromProductUnit,
+      toProductName,
+      toProductUnit,
+      conversionFactor,
+    });
+  });
+
+  return { rows: parsedRows, skipped };
+}
+
 export default function ProductConversionsScreen() {
   const router = useRouter();
   const { isAdmin, isSuperAdmin } = useAuth();
@@ -92,6 +155,14 @@ export default function ProductConversionsScreen() {
     return productConversions.some(c => 
       c.fromProductId === productId || c.toProductId === productId
     );
+  };
+
+  const resolveProductInfo = (productId: string, fallbackName?: string, fallbackUnit?: string) => {
+    const product = products.find(p => p.id === productId);
+    return {
+      name: product?.name || fallbackName || 'Unknown',
+      unit: product?.unit || fallbackUnit || 'unit',
+    };
   };
 
   const handleSaveConversion = async () => {
@@ -224,10 +295,10 @@ export default function ProductConversionsScreen() {
         toProductId: conversion.toProductId,
         conversionFactor: conversion.conversionFactor,
         createdAt: conversion.createdAt,
-        fromProductName: products.find(p => p.id === conversion.fromProductId)?.name || 'Unknown',
-        fromProductUnit: products.find(p => p.id === conversion.fromProductId)?.unit || 'Unknown',
-        toProductName: products.find(p => p.id === conversion.toProductId)?.name || 'Unknown',
-        toProductUnit: products.find(p => p.id === conversion.toProductId)?.unit || 'Unknown',
+        fromProductName: resolveProductInfo(conversion.fromProductId, conversion.fromProductName, conversion.fromProductUnit).name,
+        fromProductUnit: resolveProductInfo(conversion.fromProductId, conversion.fromProductName, conversion.fromProductUnit).unit,
+        toProductName: resolveProductInfo(conversion.toProductId, conversion.toProductName, conversion.toProductUnit).name,
+        toProductUnit: resolveProductInfo(conversion.toProductId, conversion.toProductName, conversion.toProductUnit).unit,
       })),
     };
 
@@ -256,11 +327,11 @@ export default function ProductConversionsScreen() {
 
     try {
       const exportData = productConversions.map(conversion => ({
-        'From Product Name': products.find(p => p.id === conversion.fromProductId)?.name || 'Unknown',
-        'From Product Unit': products.find(p => p.id === conversion.fromProductId)?.unit || 'Unknown',
+        'From Product Name': resolveProductInfo(conversion.fromProductId, conversion.fromProductName, conversion.fromProductUnit).name,
+        'From Product Unit': resolveProductInfo(conversion.fromProductId, conversion.fromProductName, conversion.fromProductUnit).unit,
         'Conversion Factor': conversion.conversionFactor,
-        'To Product Name': products.find(p => p.id === conversion.toProductId)?.name || 'Unknown',
-        'To Product Unit': products.find(p => p.id === conversion.toProductId)?.unit || 'Unknown',
+        'To Product Name': resolveProductInfo(conversion.toProductId, conversion.toProductName, conversion.toProductUnit).name,
+        'To Product Unit': resolveProductInfo(conversion.toProductId, conversion.toProductName, conversion.toProductUnit).unit,
       }));
 
       const wb = XLSX.utils.book_new();
@@ -444,10 +515,10 @@ export default function ProductConversionsScreen() {
               return;
             }
 
-            const workbook = XLSX.read(data, { type: 'binary' });
+            const workbook = XLSX.read(data, { type: 'array' });
             const sheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
-            const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, unknown>[];
 
             if (jsonData.length === 0) {
               Alert.alert('Error', 'No data found in the Excel file.');
@@ -455,34 +526,29 @@ export default function ProductConversionsScreen() {
               return;
             }
 
-            console.log(`Starting bulk import from Excel with ${jsonData.length} rows...`);
+            const { rows: parsedRows, skipped: parseSkipped } = parseConversionRows(jsonData);
+            if (parsedRows.length === 0) {
+              Alert.alert('Error', 'No valid product conversion rows were found in the Excel file.');
+              document.body.removeChild(input);
+              return;
+            }
+
+            console.log(`Starting bulk import from Excel with ${parsedRows.length} valid rows...`);
             let imported = 0;
-            let skipped = 0;
+            let skipped = parseSkipped;
             let errors = 0;
 
             const conversionsToAdd: ProductConversion[] = [];
 
-            for (const row of jsonData) {
+            for (const row of parsedRows) {
               try {
-                const fromProductName = row['From Product Name'];
-                const fromProductUnit = row['From Product Unit'];
-                const toProductName = row['To Product Name'];
-                const toProductUnit = row['To Product Unit'];
-                const conversionFactor = row['Conversion Factor'];
-
-                if (!fromProductName || !fromProductUnit || !toProductName || !toProductUnit || !conversionFactor) {
-                  skipped++;
-                  console.log('Skipped row - missing required fields:', row);
-                  continue;
-                }
-
                 const fromProduct = products.find(p => 
-                  p.name.toLowerCase().trim() === fromProductName.toLowerCase().trim() && 
-                  p.unit.toLowerCase().trim() === fromProductUnit.toLowerCase().trim()
+                  p.name.toLowerCase().trim() === row.fromProductName.toLowerCase().trim() && 
+                  p.unit.toLowerCase().trim() === row.fromProductUnit.toLowerCase().trim()
                 );
                 const toProduct = products.find(p => 
-                  p.name.toLowerCase().trim() === toProductName.toLowerCase().trim() && 
-                  p.unit.toLowerCase().trim() === toProductUnit.toLowerCase().trim()
+                  p.name.toLowerCase().trim() === row.toProductName.toLowerCase().trim() && 
+                  p.unit.toLowerCase().trim() === row.toProductUnit.toLowerCase().trim()
                 );
 
                 if (!fromProduct || !toProduct) {
@@ -505,7 +571,7 @@ export default function ProductConversionsScreen() {
                   id: `${Date.now()}-${conversionsToAdd.length}-${Math.random().toString(36).substr(2, 9)}`,
                   fromProductId: fromProduct.id,
                   toProductId: toProduct.id,
-                  conversionFactor: parseFloat(conversionFactor),
+                  conversionFactor: row.conversionFactor,
                   createdAt: Date.now(),
                 };
 
@@ -532,12 +598,13 @@ export default function ProductConversionsScreen() {
             Alert.alert('Import Complete', message);
           } catch (error) {
             console.error('Error parsing Excel:', error);
-            Alert.alert('Error', 'Failed to parse Excel file. Please check the file format.');
+            const message = error instanceof Error ? error.message : 'Unknown error';
+            Alert.alert('Error', `Failed to parse Excel file. Please check the file format.\n\n${message}`);
           } finally {
             document.body.removeChild(input);
           }
         };
-        reader.readAsBinaryString(file);
+        reader.readAsArrayBuffer(file);
       } catch (error) {
         console.error('Error importing conversions:', error);
         Alert.alert('Error', 'Failed to import product conversions. Please try again.');
@@ -669,15 +736,19 @@ export default function ProductConversionsScreen() {
               {productConversions.map((conversion) => {
                 const fromProduct = products.find(p => p.id === conversion.fromProductId);
                 const toProduct = products.find(p => p.id === conversion.toProductId);
+                const fromName = fromProduct?.name || conversion.fromProductName || 'Unknown Product';
+                const fromUnit = fromProduct?.unit || conversion.fromProductUnit || 'unit';
+                const toName = toProduct?.name || conversion.toProductName || 'Unknown Product';
+                const toUnit = toProduct?.unit || conversion.toProductUnit || 'unit';
                 
                 return (
                   <View key={conversion.id} style={styles.conversionCard}>
                     <View style={styles.conversionInfo}>
                       <Text style={styles.conversionTitle}>
-                        {fromProduct ? fromProduct.name : 'Unknown Product'}
+                        {fromName}
                       </Text>
                       <Text style={styles.conversionDetails}>
-                        1 {fromProduct?.unit || 'unit'} = {conversion.conversionFactor}x {toProduct?.unit || 'unit'}
+                        1 {fromUnit} = {conversion.conversionFactor}x {toUnit} ({toName})
                       </Text>
                       {!fromProduct || !toProduct ? (
                         <Text style={styles.conversionWarning}>

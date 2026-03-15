@@ -697,18 +697,20 @@ export default function SettingsScreen() {
       });
       await AsyncStorage.setItem('@stock_app_product_conversions', JSON.stringify(syncedConversions));
 
-      await Promise.all([
+      const restoreResults = await Promise.allSettled([
         refreshStockLocal(),
-        syncCustomers(true, true).catch(() => {}),
-        syncRecipes(true, true).catch(() => {}),
-        syncOrders(true, true).catch(() => {}),
-        syncStores(true, true).catch(() => {}),
-        syncProduction(true, true).catch(() => {}),
+        syncCustomers(true, true),
+        syncRecipes(true, true),
+        syncOrders(true, true),
+        syncStores(true, true),
+        syncProduction(true, true),
       ]);
+
+      const failedRestores = restoreResults.filter((result) => result.status === 'rejected').length;
 
       Alert.alert(
         'Restore Complete',
-        `Missing data has been restored from the server where available.\n\nProduct Unit Conversions reloaded: ${Array.isArray(syncedConversions) ? syncedConversions.filter((item: any) => item?.deleted !== true).length : 0}`
+        `Missing data has been restored from the server where available.\n\nProduct Unit Conversions reloaded: ${Array.isArray(syncedConversions) ? syncedConversions.filter((item: any) => item?.deleted !== true).length : 0}${failedRestores > 0 ? `\nBackground refreshes failed: ${failedRestores}` : ''}`
       );
       await loadSyncDiagnostics(true);
     } catch (error) {
