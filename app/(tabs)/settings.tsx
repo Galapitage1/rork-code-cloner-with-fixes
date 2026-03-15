@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Platform, TextInput, Modal, Switch, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -29,6 +29,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { exportCriticalDataBackup, saveAutomaticCriticalDataBackup } from '@/utils/criticalDataBackup';
 
 const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
+const GD_BACKUP_DEFAULT_ROOT_FOLDER_FALLBACK = 'Tracker Backups';
 
 function normalizeProductCategories(rawCategories: any): string[] {
   if (!Array.isArray(rawCategories)) {
@@ -121,6 +122,25 @@ export default function SettingsScreen() {
   const [isLoadingSyncDiagnostics, setIsLoadingSyncDiagnostics] = useState<boolean>(false);
   const [isResettingSyncDiagnostics, setIsResettingSyncDiagnostics] = useState<boolean>(false);
   const [isRestoringMissingData, setIsRestoringMissingData] = useState<boolean>(false);
+  const [googleDriveClientId, setGoogleDriveClientId] = useState<string>('');
+  const [googleDriveClientSecret, setGoogleDriveClientSecret] = useState<string>('');
+  const [googleDriveClientSecretMasked, setGoogleDriveClientSecretMasked] = useState<string>('');
+  const [googleDriveFolderName, setGoogleDriveFolderName] = useState<string>('Tracker Backups');
+  const [googleDriveFolderId, setGoogleDriveFolderId] = useState<string>('');
+  const [googleDriveSharedDriveId, setGoogleDriveSharedDriveId] = useState<string>('');
+  const [googleDriveConnected, setGoogleDriveConnected] = useState<boolean>(false);
+  const [googleDriveConnectedEmail, setGoogleDriveConnectedEmail] = useState<string>('');
+  const [googleDriveLastConnectedAt, setGoogleDriveLastConnectedAt] = useState<number>(0);
+  const [googleDriveLastFullBackupAt, setGoogleDriveLastFullBackupAt] = useState<number>(0);
+  const [googleDriveLastFullBackupName, setGoogleDriveLastFullBackupName] = useState<string>('');
+  const [googleDriveLastFullBackupFileId, setGoogleDriveLastFullBackupFileId] = useState<string>('');
+  const [googleDriveLastFullBackupLink, setGoogleDriveLastFullBackupLink] = useState<string>('');
+  const [googleDriveBackups, setGoogleDriveBackups] = useState<Array<{ id: string; name: string; size?: string; createdTime?: string; webViewLink?: string }>>([]);
+  const [googleDriveStatus, setGoogleDriveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isLoadingGoogleDriveSettings, setIsLoadingGoogleDriveSettings] = useState<boolean>(false);
+  const [isSavingGoogleDriveSettings, setIsSavingGoogleDriveSettings] = useState<boolean>(false);
+  const [isLoadingGoogleDriveBackups, setIsLoadingGoogleDriveBackups] = useState<boolean>(false);
+  const [isRunningGoogleDriveBackup, setIsRunningGoogleDriveBackup] = useState<boolean>(false);
   
   const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
   const { leaveTypes, addLeaveType, updateLeaveType, deleteLeaveType } = useLeave();
@@ -176,6 +196,198 @@ export default function SettingsScreen() {
       });
     return next;
   }, [outlets]);
+
+  const getTrackerApiUrl = useCallback((scriptName: string) => {
+    return `${(backendStatus.baseUrl || '').replace(/\/$/, '')}/Tracker/api/${scriptName}`;
+  }, [backendStatus.baseUrl]);
+
+  const applyGoogleDriveSettings = useCallback((settings: any, manifest?: any) => {
+    const nextSettings = settings && typeof settings === 'object' ? settings : {};
+    const nextManifest = manifest && typeof manifest === 'object' ? manifest : {};
+    setGoogleDriveClientId(String(nextSettings.clientId || ''));
+    setGoogleDriveClientSecret('');
+    setGoogleDriveClientSecretMasked(String(nextSettings.clientSecretMasked || ''));
+    setGoogleDriveFolderName(String(nextSettings.folderName || GD_BACKUP_DEFAULT_ROOT_FOLDER_FALLBACK));
+    setGoogleDriveFolderId(String(nextSettings.folderId || ''));
+    setGoogleDriveSharedDriveId(String(nextSettings.sharedDriveId || ''));
+    setGoogleDriveConnected(Boolean(nextSettings.connected));
+    setGoogleDriveConnectedEmail(String(nextSettings.connectedEmail || ''));
+    setGoogleDriveLastConnectedAt(Number(nextSettings.lastConnectedAt || 0));
+    setGoogleDriveLastFullBackupAt(Number(nextSettings.lastFullBackupAt || nextManifest.lastFullBackupAt || 0));
+    setGoogleDriveLastFullBackupName(String(nextSettings.lastFullBackupName || nextManifest.lastFullBackupName || ''));
+    setGoogleDriveLastFullBackupFileId(String(nextSettings.lastFullBackupFileId || nextManifest.lastFullBackupFileId || ''));
+    setGoogleDriveLastFullBackupLink(String(nextManifest.lastFullBackupWebViewLink || ''));
+  }, []);
+
+  const loadGoogleDriveSettings = useCallback(async (silent: boolean = false) => {
+    if (!backendStatus.baseUrl) {
+      return;
+    }
+
+    try {
+      if (!silent) {
+        setIsLoadingGoogleDriveSettings(true);
+      }
+      const response = await fetch(getTrackerApiUrl('google-drive-settings.php'), {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Failed to load Google Drive backup settings');
+      }
+      applyGoogleDriveSettings(result.settings, result.manifest);
+    } catch (error: any) {
+      console.error('[SETTINGS] Failed to load Google Drive settings:', error);
+      if (!silent) {
+        setGoogleDriveStatus({ type: 'error', message: error?.message || 'Failed to load Google Drive settings.' });
+      }
+    } finally {
+      if (!silent) {
+        setIsLoadingGoogleDriveSettings(false);
+      }
+    }
+  }, [applyGoogleDriveSettings, backendStatus.baseUrl, getTrackerApiUrl]);
+
+  const loadGoogleDriveBackups = useCallback(async (silent: boolean = false) => {
+    if (!backendStatus.baseUrl) {
+      return;
+    }
+
+    try {
+      if (!silent) {
+        setIsLoadingGoogleDriveBackups(true);
+      }
+      const response = await fetch(getTrackerApiUrl('backup-list.php'), {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Failed to load Google Drive backups');
+      }
+      setGoogleDriveBackups(Array.isArray(result.backups) ? result.backups : []);
+      if (result.manifest && typeof result.manifest === 'object') {
+        setGoogleDriveLastFullBackupAt(Number(result.manifest.lastFullBackupAt || 0));
+        setGoogleDriveLastFullBackupName(String(result.manifest.lastFullBackupName || ''));
+        setGoogleDriveLastFullBackupFileId(String(result.manifest.lastFullBackupFileId || ''));
+        setGoogleDriveLastFullBackupLink(String(result.manifest.lastFullBackupWebViewLink || ''));
+      }
+    } catch (error: any) {
+      console.error('[SETTINGS] Failed to load Google Drive backups:', error);
+      if (!silent) {
+        setGoogleDriveStatus({ type: 'error', message: error?.message || 'Failed to load Google Drive backups.' });
+      }
+    } finally {
+      if (!silent) {
+        setIsLoadingGoogleDriveBackups(false);
+      }
+    }
+  }, [backendStatus.baseUrl, getTrackerApiUrl]);
+
+  const saveGoogleDriveSettings = useCallback(async () => {
+    try {
+      setIsSavingGoogleDriveSettings(true);
+      setGoogleDriveStatus(null);
+      const response = await fetch(getTrackerApiUrl('google-drive-settings.php'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: googleDriveClientId.trim(),
+          clientSecret: googleDriveClientSecret.trim(),
+          folderName: googleDriveFolderName.trim() || GD_BACKUP_DEFAULT_ROOT_FOLDER_FALLBACK,
+          folderId: googleDriveFolderId.trim(),
+          sharedDriveId: googleDriveSharedDriveId.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Failed to save Google Drive backup settings');
+      }
+      applyGoogleDriveSettings(result.settings);
+      setGoogleDriveStatus({ type: 'success', message: 'Google Drive backup settings saved on the server.' });
+    } catch (error: any) {
+      console.error('[SETTINGS] Failed to save Google Drive settings:', error);
+      setGoogleDriveStatus({ type: 'error', message: error?.message || 'Failed to save Google Drive backup settings.' });
+      throw error;
+    } finally {
+      setIsSavingGoogleDriveSettings(false);
+    }
+  }, [
+    applyGoogleDriveSettings,
+    getTrackerApiUrl,
+    googleDriveClientId,
+    googleDriveClientSecret,
+    googleDriveFolderId,
+    googleDriveFolderName,
+    googleDriveSharedDriveId,
+  ]);
+
+  const handleConnectGoogleDrive = useCallback(async () => {
+    try {
+      if (!googleDriveClientId.trim()) {
+        Alert.alert('Missing Client ID', 'Enter the Google Client ID first.');
+        return;
+      }
+      if (!googleDriveClientSecret.trim() && !googleDriveClientSecretMasked) {
+        Alert.alert('Missing Client Secret', 'Enter the Google Client Secret first.');
+        return;
+      }
+
+      await saveGoogleDriveSettings();
+
+      const returnTo = '/settings';
+      const url = `${getTrackerApiUrl('google-drive-auth-start.php')}?returnTo=${encodeURIComponent(returnTo)}`;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.assign(url);
+        return;
+      }
+
+      await Linking.openURL(url);
+      Alert.alert('Continue In Browser', 'Google Drive connection has been opened in your browser. Complete the Google sign-in there, then return to Settings.');
+    } catch (error: any) {
+      Alert.alert('Google Drive Connect Failed', error?.message || 'Failed to start the Google Drive connection.');
+    }
+  }, [getTrackerApiUrl, googleDriveClientId, googleDriveClientSecret, googleDriveClientSecretMasked, saveGoogleDriveSettings]);
+
+  const handleRunGoogleDriveBackup = useCallback(async () => {
+    try {
+      setIsRunningGoogleDriveBackup(true);
+      setGoogleDriveStatus(null);
+      const response = await fetch(getTrackerApiUrl('backup-run.php'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'full' }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Failed to run Google Drive backup');
+      }
+      setGoogleDriveStatus({ type: 'success', message: `Full backup uploaded to Google Drive as ${result?.file?.name || 'a new archive'}.` });
+      await Promise.all([
+        loadGoogleDriveSettings(true),
+        loadGoogleDriveBackups(true),
+      ]);
+    } catch (error: any) {
+      console.error('[SETTINGS] Failed to run Google Drive backup:', error);
+      setGoogleDriveStatus({ type: 'error', message: error?.message || 'Failed to run Google Drive backup.' });
+    } finally {
+      setIsRunningGoogleDriveBackup(false);
+    }
+  }, [getTrackerApiUrl, loadGoogleDriveBackups, loadGoogleDriveSettings]);
+
+  const openGoogleDriveBackup = useCallback(async (url: string) => {
+    const trimmed = String(url || '').trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      await Linking.openURL(trimmed);
+    } catch (error) {
+      console.error('[SETTINGS] Failed to open Google Drive backup URL:', error);
+      Alert.alert('Open Failed', 'Could not open the Google Drive backup link.');
+    }
+  }, []);
 
   const loadCampaignSettings = useCallback(async () => {
     try {
@@ -248,6 +460,41 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadCampaignSettings();
   }, [loadCampaignSettings]);
+
+  useEffect(() => {
+    loadGoogleDriveSettings();
+    loadGoogleDriveBackups(true).catch(() => {});
+  }, [loadGoogleDriveBackups, loadGoogleDriveSettings]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('backupConnected');
+    const error = params.get('backupError');
+    if (!connected && !error) {
+      return;
+    }
+
+    if (connected === '1') {
+      setGoogleDriveStatus({ type: 'success', message: 'Google Drive connected successfully.' });
+      loadGoogleDriveSettings(true).catch(() => {});
+      loadGoogleDriveBackups(true).catch(() => {});
+      Alert.alert('Google Drive Connected', 'Google Drive backup is now connected to Tracker.');
+    } else if (error) {
+      const decodedError = decodeURIComponent(error);
+      setGoogleDriveStatus({ type: 'error', message: decodedError });
+      Alert.alert('Google Drive Connect Failed', decodedError);
+    }
+
+    params.delete('backupConnected');
+    params.delete('backupError');
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`;
+    window.history.replaceState({}, document.title, nextUrl);
+  }, [loadGoogleDriveBackups, loadGoogleDriveSettings]);
 
   useEffect(() => {
     setUberEatsOutletConfigs((prev) => {
@@ -432,7 +679,7 @@ export default function SettingsScreen() {
   const isSyncing = isStockSyncing || isUserSyncing || isCustomerSyncing || isRecipeSyncing || isOrderSyncing || isStoresSyncing || isProductionSyncing;
   const lastSyncTime = Math.max(stockLastSync || 0, userLastSync || 0, customerLastSync || 0, recipeLastSync || 0, orderLastSync || 0, storesLastSync || 0, productionLastSync || 0);
 
-  const formatLastSync = (timestamp: number) => {
+const formatLastSync = (timestamp: number) => {
     if (!timestamp) return 'Never';
     const now = Date.now();
     const diff = now - timestamp;
@@ -456,6 +703,17 @@ export default function SettingsScreen() {
   const formatDiagnosticsTime = (timestamp: number | null | undefined) => {
     if (!timestamp) return 'No sync yet';
     return new Date(timestamp).toLocaleString();
+  };
+
+  const formatDateTime = (timestamp: number | string | null | undefined) => {
+    if (!timestamp) {
+      return 'Not yet';
+    }
+    const numericTimestamp = typeof timestamp === 'number' ? timestamp : Date.parse(String(timestamp));
+    if (!Number.isFinite(numericTimestamp)) {
+      return 'Not yet';
+    }
+    return new Date(numericTimestamp).toLocaleString();
   };
 
   const openConfirm = (cfg: { title: string; message: string; destructive?: boolean; onConfirm: () => Promise<void> | void; testID: string }) => {
@@ -1064,6 +1322,235 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
+
+        {isSuperAdmin && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Cloud size={24} color={Colors.light.tint} />
+              <Text style={styles.sectionTitle}>Google Drive Backup</Text>
+            </View>
+
+            <View style={styles.syncInfoCard}>
+              <Text style={styles.syncInfoText}>
+                Phase 1 connects Tracker to Google Drive, saves credentials on the server, lets you run a full backup now, and shows recent backup archives.
+              </Text>
+            </View>
+
+            <View style={styles.statsCard}>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>Connection</Text>
+                {isLoadingGoogleDriveSettings ? (
+                  <ActivityIndicator size="small" color={Colors.light.tint} />
+                ) : (
+                  <Text style={[styles.statValue, { color: googleDriveConnected ? '#10B981' : Colors.light.muted }]}>
+                    {googleDriveConnected ? 'Connected' : 'Not connected'}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>Folder</Text>
+                <Text style={styles.statValue}>{googleDriveFolderName || GD_BACKUP_DEFAULT_ROOT_FOLDER_FALLBACK}</Text>
+              </View>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>Last Connected</Text>
+                <Text style={styles.statValue}>{formatDateTime(googleDriveLastConnectedAt)}</Text>
+              </View>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>Last Full Backup</Text>
+                <Text style={styles.statValue}>{formatDateTime(googleDriveLastFullBackupAt)}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionSubtitle}>Server-Side Google Credentials</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Google Client ID</Text>
+              <TextInput
+                style={styles.input}
+                value={googleDriveClientId}
+                onChangeText={setGoogleDriveClientId}
+                placeholder="Enter Google OAuth Client ID"
+                placeholderTextColor={Colors.light.muted}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Google Client Secret</Text>
+              <TextInput
+                style={styles.input}
+                value={googleDriveClientSecret}
+                onChangeText={setGoogleDriveClientSecret}
+                placeholder={googleDriveClientSecretMasked ? `Saved on server (${googleDriveClientSecretMasked}) - leave blank to keep it` : 'Enter Google OAuth Client Secret'}
+                placeholderTextColor={Colors.light.muted}
+                autoCapitalize="none"
+                secureTextEntry
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Backup Folder Name</Text>
+              <TextInput
+                style={styles.input}
+                value={googleDriveFolderName}
+                onChangeText={setGoogleDriveFolderName}
+                placeholder={GD_BACKUP_DEFAULT_ROOT_FOLDER_FALLBACK}
+                placeholderTextColor={Colors.light.muted}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Backup Folder ID (Optional)</Text>
+              <TextInput
+                style={styles.input}
+                value={googleDriveFolderId}
+                onChangeText={setGoogleDriveFolderId}
+                placeholder="Use this if you already created a Drive folder"
+                placeholderTextColor={Colors.light.muted}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Shared Drive ID (Optional)</Text>
+              <TextInput
+                style={styles.input}
+                value={googleDriveSharedDriveId}
+                onChangeText={setGoogleDriveSharedDriveId}
+                placeholder="Only needed if backups should go into a Shared Drive"
+                placeholderTextColor={Colors.light.muted}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.syncInfoCard}>
+              <Text style={styles.syncInfoText}>
+                Redirect URI to add in Google Cloud: {`${(backendStatus.baseUrl || '').replace(/\/$/, '')}/Tracker/api/google-drive-auth-callback.php`}
+              </Text>
+            </View>
+
+            <View style={styles.inlineActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, styles.inlineButton]}
+                onPress={saveGoogleDriveSettings}
+                disabled={isSavingGoogleDriveSettings}
+              >
+                {isSavingGoogleDriveSettings ? (
+                  <ActivityIndicator size="small" color={Colors.light.card} />
+                ) : (
+                  <>
+                    <Save size={18} color={Colors.light.card} />
+                    <Text style={styles.buttonText}>Save</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, styles.inlineButton]}
+                onPress={handleConnectGoogleDrive}
+                disabled={isSavingGoogleDriveSettings || isLoadingGoogleDriveSettings}
+              >
+                <Cloud size={18} color={Colors.light.tint} />
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Connect</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inlineActions}>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, styles.inlineButton]}
+                onPress={handleRunGoogleDriveBackup}
+                disabled={isRunningGoogleDriveBackup || !googleDriveConnected}
+              >
+                {isRunningGoogleDriveBackup ? (
+                  <ActivityIndicator size="small" color={Colors.light.card} />
+                ) : (
+                  <>
+                    <Cloud size={18} color={Colors.light.card} />
+                    <Text style={styles.buttonText}>Backup Now</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, styles.inlineButton]}
+                onPress={() => {
+                  loadGoogleDriveSettings(true).catch(() => {});
+                  loadGoogleDriveBackups().catch(() => {});
+                }}
+                disabled={isLoadingGoogleDriveBackups || isLoadingGoogleDriveSettings}
+              >
+                {isLoadingGoogleDriveBackups ? (
+                  <ActivityIndicator size="small" color={Colors.light.tint} />
+                ) : (
+                  <>
+                    <RefreshCw size={18} color={Colors.light.tint} />
+                    <Text style={[styles.buttonText, styles.secondaryButtonText]}>Refresh</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {googleDriveStatus && (
+              <View
+                style={[
+                  styles.statusMessage,
+                  googleDriveStatus.type === 'success' ? styles.successMessage : styles.errorMessage,
+                ]}
+              >
+                {googleDriveStatus.type === 'success' ? (
+                  <Check size={16} color="#10B981" />
+                ) : (
+                  <X size={16} color="#EF4444" />
+                )}
+                <Text
+                  style={[
+                    styles.statusMessageText,
+                    googleDriveStatus.type === 'success' ? styles.successMessageText : styles.errorMessageText,
+                  ]}
+                >
+                  {googleDriveStatus.message}
+                </Text>
+              </View>
+            )}
+
+            <Text style={styles.sectionSubtitle}>Recent Full Backups</Text>
+
+            {!googleDriveConnected ? (
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>Connect Google Drive first to list and upload backup archives.</Text>
+              </View>
+            ) : googleDriveBackups.length === 0 ? (
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>No full backups found yet. Run your first backup to create the archive in Drive.</Text>
+              </View>
+            ) : (
+              googleDriveBackups.slice(0, 10).map((backup) => (
+                <View key={backup.id || backup.name} style={styles.listItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.listItemTitle}>{backup.name}</Text>
+                    <Text style={styles.listItemSubtitle}>
+                      {formatDateTime(backup.createdTime)} • {formatBytes(Number(backup.size || 0))}
+                    </Text>
+                    {backup.id ? (
+                      <Text style={styles.listItemSubtitle}>Drive File ID: {backup.id}</Text>
+                    ) : null}
+                  </View>
+                  {backup.webViewLink ? (
+                    <TouchableOpacity onPress={() => openGoogleDriveBackup(backup.webViewLink || '')}>
+                      <Text style={[styles.listItemSubtitle, { color: Colors.light.tint, marginTop: 0 }]}>Open</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ))
+            )}
+
+            {googleDriveConnectedEmail ? (
+              <View style={styles.syncInfoCard}>
+                <Text style={styles.syncInfoText}>Connected Google account: {googleDriveConnectedEmail}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
       </View>
       </View>
 
