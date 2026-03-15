@@ -15,6 +15,7 @@ import { syncData } from '@/utils/syncData';
 import { getSyncDiagnosticsSummary, resetSyncDiagnostics } from '@/utils/directSync';
 import type { SyncDiagnosticsSummary } from '@/utils/directSync';
 import { testServerConnection, testWriteToServer } from '@/utils/testSync';
+import { loadInitialDataIfNeeded } from '@/utils/initialDataLoader';
 import { useRecipes } from '@/contexts/RecipeContext';
 import { useProductUsage } from '@/contexts/ProductUsageContext';
 import { useSMSCampaign } from '@/contexts/SMSCampaignContext';
@@ -53,7 +54,7 @@ function normalizeProductCategories(rawCategories: any): string[] {
 }
 
 export default function SettingsScreen() {
-  const { outlets, addOutlet, updateOutlet, deleteOutlet, clearAllProducts, clearAllOutlets, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, isSyncPaused } = useStock();
+  const { outlets, addOutlet, updateOutlet, deleteOutlet, clearAllProducts, clearAllOutlets, isLoading, isSyncing: isStockSyncing, lastSyncTime: stockLastSync, syncAll, refreshStockLocal, isSyncPaused } = useStock();
 
   const { currentUser, users, logout, addUser, updateUser, deleteUser, isSyncing: isUserSyncing, lastSyncTime: userLastSync, syncUsers, clearAllUsers, isSuperAdmin, enableReceivedAutoLoad, toggleEnableReceivedAutoLoad } = useAuth();
   const { isSyncing: isCustomerSyncing, lastSyncTime: customerLastSync, syncCustomers } = useCustomers();
@@ -119,6 +120,7 @@ export default function SettingsScreen() {
   const [syncDiagnostics, setSyncDiagnostics] = useState<SyncDiagnosticsSummary | null>(null);
   const [isLoadingSyncDiagnostics, setIsLoadingSyncDiagnostics] = useState<boolean>(false);
   const [isResettingSyncDiagnostics, setIsResettingSyncDiagnostics] = useState<boolean>(false);
+  const [isRestoringMissingData, setIsRestoringMissingData] = useState<boolean>(false);
   
   const { settings: smsSettings, saveSettings: saveSMSSettings, testLogin: testSMSLogin, sendTestSMS, isSaving: isSavingSMS } = useSMSCampaign();
   const { leaveTypes, addLeaveType, updateLeaveType, deleteLeaveType } = useLeave();
@@ -674,6 +676,49 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleRestoreMissingData = async () => {
+    if (!currentUser) {
+      Alert.alert('Error', 'Please login to restore missing data.');
+      return;
+    }
+
+    try {
+      setIsRestoringMissingData(true);
+      console.log('[SETTINGS] Restore missing data - checking for missing local datasets...');
+
+      await loadInitialDataIfNeeded(currentUser.id, (status) => {
+        console.log('[SETTINGS] Restore missing data:', status);
+      });
+
+      const syncedConversions = await syncData('productConversions', [], currentUser.id, {
+        fetchOnly: true,
+        includeDeleted: true,
+        minDays: 3650,
+      });
+      await AsyncStorage.setItem('@stock_app_product_conversions', JSON.stringify(syncedConversions));
+
+      await Promise.all([
+        refreshStockLocal(),
+        syncCustomers(true, true).catch(() => {}),
+        syncRecipes(true, true).catch(() => {}),
+        syncOrders(true, true).catch(() => {}),
+        syncStores(true, true).catch(() => {}),
+        syncProduction(true, true).catch(() => {}),
+      ]);
+
+      Alert.alert(
+        'Restore Complete',
+        `Missing data has been restored from the server where available.\n\nProduct Unit Conversions reloaded: ${Array.isArray(syncedConversions) ? syncedConversions.filter((item: any) => item?.deleted !== true).length : 0}`
+      );
+      await loadSyncDiagnostics(true);
+    } catch (error) {
+      console.error('[SETTINGS] Restore missing data failed:', error);
+      Alert.alert('Restore Failed', 'Failed to restore missing data. Please try again.');
+    } finally {
+      setIsRestoringMissingData(false);
+    }
+  };
+
   const handleExportCriticalBackup = async () => {
     try {
       setIsExportingCriticalBackup(true);
@@ -903,6 +948,23 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
+
+        {isAdmin && (
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
+            onPress={handleRestoreMissingData}
+            disabled={isRestoringMissingData || isSyncing}
+          >
+            {isRestoringMissingData ? (
+              <ActivityIndicator color={Colors.light.tint} />
+            ) : (
+              <>
+                <Download size={20} color={Colors.light.tint} />
+                <Text style={[styles.buttonText, styles.secondaryButtonText]}>Restore Missing Data</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
 
         {/* Backend Status */}
         <View style={[styles.statsCard, { borderColor: backendStatus.isAvailable ? '#10B981' : '#EF4444' }]}>

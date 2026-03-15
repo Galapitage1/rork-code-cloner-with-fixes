@@ -281,6 +281,7 @@ type StockContextType = {
   setViewMode: (mode: 'search' | 'button') => Promise<void>;
   syncAll: (silent?: boolean, forceFullSync?: boolean) => Promise<void>;
   refreshHistoryLocal: () => Promise<void>;
+  refreshStockLocal: () => Promise<void>;
   getDeletedRequests: (startDate?: string, endDate?: string) => Promise<ProductRequest[]>;
   restoreRequests: (requestIds: string[]) => Promise<number>;
   // Live Inventory Snapshot functions
@@ -4826,6 +4827,77 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     }
   }, []);
 
+  const refreshStockLocal = useCallback(async () => {
+    try {
+      const [
+        productsData,
+        stockChecksData,
+        requestsData,
+        outletsData,
+        productConversionsData,
+        inventoryData,
+        salesDeductionsData,
+        reconcileHistoryData,
+        liveInventorySnapshotsData,
+      ] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.PRODUCTS),
+        AsyncStorage.getItem(STORAGE_KEYS.STOCK_CHECKS),
+        AsyncStorage.getItem(STORAGE_KEYS.REQUESTS),
+        AsyncStorage.getItem(STORAGE_KEYS.OUTLETS),
+        AsyncStorage.getItem(STORAGE_KEYS.PRODUCT_CONVERSIONS),
+        AsyncStorage.getItem(STORAGE_KEYS.INVENTORY_STOCKS),
+        AsyncStorage.getItem(STORAGE_KEYS.SALES_DEDUCTIONS),
+        AsyncStorage.getItem(STORAGE_KEYS.RECONCILE_HISTORY),
+        AsyncStorage.getItem(STORAGE_KEYS.LIVE_INVENTORY_SNAPSHOTS),
+      ]);
+
+      const parsedProducts: Product[] = productsData ? JSON.parse(productsData) : [];
+      const parsedChecks: StockCheck[] = stockChecksData ? JSON.parse(stockChecksData) : [];
+      const parsedRequests: ProductRequest[] = requestsData ? JSON.parse(requestsData) : [];
+      const parsedOutlets: Outlet[] = outletsData ? JSON.parse(outletsData) : [];
+      const parsedConversions: ProductConversion[] = productConversionsData ? JSON.parse(productConversionsData) : [];
+      const parsedInventory: InventoryStock[] = inventoryData ? JSON.parse(inventoryData) : [];
+      const parsedSalesDeductions: SalesDeduction[] = salesDeductionsData ? JSON.parse(salesDeductionsData) : [];
+      const parsedReconcileHistory: SalesReconciliationHistory[] = reconcileHistoryData ? JSON.parse(reconcileHistoryData) : [];
+      const parsedSnapshots: LiveInventorySnapshot[] = liveInventorySnapshotsData ? JSON.parse(liveInventorySnapshotsData) : [];
+
+      const activeProducts = Array.isArray(parsedProducts) ? parsedProducts.filter((item) => !item?.deleted) : [];
+      const activeChecks = Array.isArray(parsedChecks) ? parsedChecks.filter((item) => !item?.deleted) : [];
+      const activeRequests = Array.isArray(parsedRequests) ? parsedRequests.filter((item) => !item?.deleted) : [];
+      const activeOutlets = Array.isArray(parsedOutlets) ? parsedOutlets.filter((item) => !item?.deleted) : [];
+      const activeConversions = Array.isArray(parsedConversions) ? parsedConversions.filter((item) => !item?.deleted) : [];
+      const activeInventory = Array.isArray(parsedInventory) ? parsedInventory.filter((item) => !item?.deleted) : [];
+      const activeSalesDeductions = Array.isArray(parsedSalesDeductions) ? parsedSalesDeductions.filter((item) => !item?.deleted) : [];
+      const activeReconcileHistory = Array.isArray(parsedReconcileHistory) ? parsedReconcileHistory.filter((item) => !item?.deleted) : [];
+      const activeSnapshots = Array.isArray(parsedSnapshots) ? parsedSnapshots.filter((item) => !item?.deleted) : [];
+
+      setProducts(activeProducts);
+      setStockChecks(activeChecks);
+      setRequests(activeRequests);
+      setOutlets(activeOutlets);
+      setProductConversions(activeConversions);
+      setInventoryStocks(activeInventory);
+      setSalesDeductions(activeSalesDeductions);
+      setReconcileHistory(activeReconcileHistory);
+      setLiveInventorySnapshots(activeSnapshots);
+
+      const stockMap = new Map<string, number>();
+      if (activeChecks.length > 0) {
+        const sortedChecks = [...activeChecks].sort((a, b) => b.timestamp - a.timestamp);
+        const latestCheck = sortedChecks[0];
+        if (Array.isArray(latestCheck?.counts)) {
+          latestCheck.counts.forEach((count) => {
+            stockMap.set(count.productId, count.quantity);
+          });
+        }
+      }
+      setCurrentStockCounts(stockMap);
+    } catch (error) {
+      console.error('refreshStockLocal failed:', error);
+      throw error;
+    }
+  }, []);
+
   const getSnapshotForDate = useCallback((date: string): LiveInventorySnapshot | undefined => {
     return liveInventorySnapshots.find(s => s.date === date);
   }, [liveInventorySnapshots]);
@@ -4899,6 +4971,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     setViewMode,
     syncAll,
     refreshHistoryLocal,
+    refreshStockLocal,
     isSyncPaused,
     toggleSyncPause,
     getDeletedRequests,
@@ -4963,6 +5036,7 @@ export function StockProvider({ children, currentUser, enableReceivedAutoLoad = 
     toggleShowProductList,
     setViewMode,
     refreshHistoryLocal,
+    refreshStockLocal,
     isSyncPaused,
     toggleSyncPause,
     syncAll,
