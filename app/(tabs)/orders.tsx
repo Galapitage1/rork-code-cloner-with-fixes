@@ -22,6 +22,8 @@ const CAMPAIGN_SETTINGS_KEY = '@campaign_settings';
 const WEBSITE_PRODUCT_MAP_KEY = '@website_order_product_map_v1';
 const WEBSITE_SOURCE = 'website' as const;
 const WEBSITE_NOTE_PREFIX = 'Website TX:';
+const MAX_STORED_WEBSITE_ORDERS = 180;
+const MAX_STORED_WEBSITE_ORDERS_FALLBACK = 90;
 
 type OrdersViewMode = 'active' | 'fulfilled' | 'website' | 'uber';
 
@@ -350,6 +352,85 @@ function toWebsiteOrder(remote: RemoteWebsiteOrder, now: number, userId: string)
   };
 }
 
+function compactWebsiteOrderItems(items: WebsiteOrderItem[] | undefined): WebsiteOrderItem[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .slice(0, 60)
+    .map((item) => ({
+      itemId: item.itemId,
+      itemName: String(item.itemName || '').trim().slice(0, 220),
+      itemQuantity: Number.isFinite(Number(item.itemQuantity)) ? Number(item.itemQuantity) : 0,
+      variantName: item.variantName ? String(item.variantName).trim().slice(0, 160) : undefined,
+      addOnList: Array.isArray(item.addOnList)
+        ? item.addOnList.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12)
+        : undefined,
+      note: item.note ? String(item.note).trim().slice(0, 240) : undefined,
+      unitPrice: typeof item.unitPrice === 'number' ? item.unitPrice : undefined,
+      totalPrice: typeof item.totalPrice === 'number' ? item.totalPrice : undefined,
+    }));
+}
+
+function compactWebsiteOrderForStorage(order: WebsiteOrder): WebsiteOrder {
+  const detail = (order.detail && typeof order.detail === 'object')
+    ? (order.detail as Record<string, unknown>)
+    : {};
+  const additionalInfos = (order.additionalInfos && typeof order.additionalInfos === 'object')
+    ? (order.additionalInfos as Record<string, unknown>)
+    : {};
+
+  const compactDetail: Record<string, unknown> = {};
+  ['pickupMethodSubtype', 'pickupTime', 'pickupDateTime', 'pickupOutletName', 'pickupOutlet', 'deliveryZone'].forEach((key) => {
+    const value = detail[key] ?? additionalInfos[key];
+    if (typeof value === 'string' && value.trim()) {
+      compactDetail[key] = value.trim().slice(0, 160);
+    }
+  });
+
+  const compactAdditionalInfos: Record<string, unknown> = {};
+  ['pickupOutletName', 'pickupMethodSubtype', 'pickupOutlet'].forEach((key) => {
+    const value = additionalInfos[key];
+    if (typeof value === 'string' && value.trim()) {
+      compactAdditionalInfos[key] = value.trim().slice(0, 160);
+    }
+  });
+
+  return {
+    ...order,
+    customerName: String(order.customerName || '').trim().slice(0, 160),
+    customerPhone: order.customerPhone ? String(order.customerPhone).trim().slice(0, 40) : undefined,
+    customerEmail: order.customerEmail ? String(order.customerEmail).trim().slice(0, 160) : undefined,
+    customerAddress: order.customerAddress ? String(order.customerAddress).trim().slice(0, 320) : undefined,
+    additionalComments: order.additionalComments ? String(order.additionalComments).trim().slice(0, 500) : undefined,
+    items: compactWebsiteOrderItems(order.items),
+    rewardItems: compactWebsiteOrderItems(order.rewardItems),
+    dynamicEntries: Array.isArray(order.dynamicEntries)
+      ? order.dynamicEntries
+          .map((row) => ({
+            key: row.key ? String(row.key).trim().slice(0, 80) : undefined,
+            value: row.value ? String(row.value).trim().slice(0, 180) : undefined,
+          }))
+          .filter((row) => row.key || row.value)
+          .slice(0, 12)
+      : undefined,
+    taxSummary: undefined,
+    discounts: undefined,
+    flatFees: undefined,
+    additionalInfos: Object.keys(compactAdditionalInfos).length > 0 ? compactAdditionalInfos : undefined,
+    detail: Object.keys(compactDetail).length > 0 ? compactDetail : undefined,
+  };
+}
+
+function prepareWebsiteOrdersForStorage(rows: WebsiteOrder[], maxItems = MAX_STORED_WEBSITE_ORDERS): WebsiteOrder[] {
+  return [...rows]
+    .sort((a, b) => {
+      const aTs = a.updatedAt || a.createdAt || 0;
+      const bTs = b.updatedAt || b.createdAt || 0;
+      return bTs - aTs;
+    })
+    .slice(0, maxItems)
+    .map(compactWebsiteOrderForStorage);
+}
+
 export default function OrdersScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ from?: string }>();
@@ -496,16 +577,29 @@ export default function OrdersScreen() {
     return Array.from(byId.values());
   }, []);
 
+  const saveWebsiteOrdersToStorage = useCallback(async (rows: WebsiteOrder[]) => {
+    const prepared = prepareWebsiteOrdersForStorage(rows, MAX_STORED_WEBSITE_ORDERS);
+    try {
+      await AsyncStorage.setItem(WEBSITE_ORDERS_KEY, JSON.stringify(prepared));
+      return prepared;
+    } catch (error) {
+      console.warn('[Orders] Website order storage exceeded quota, retrying with smaller cache...', error);
+      const fallbackPrepared = prepareWebsiteOrdersForStorage(rows, MAX_STORED_WEBSITE_ORDERS_FALLBACK);
+      await AsyncStorage.setItem(WEBSITE_ORDERS_KEY, JSON.stringify(fallbackPrepared));
+      return fallbackPrepared;
+    }
+  }, []);
+
   const persistWebsiteOrders = useCallback(async (next: WebsiteOrder[], changedItems?: WebsiteOrder[]) => {
     const sorted = [...next].sort((a, b) => {
-      const aTs = (a.updatedAt || a.createdAt || 0);
-      const bTs = (b.updatedAt || b.createdAt || 0);
+      const aTs = a.updatedAt || a.createdAt || 0;
+      const bTs = b.updatedAt || b.createdAt || 0;
       return bTs - aTs;
     });
-    await AsyncStorage.setItem(WEBSITE_ORDERS_KEY, JSON.stringify(sorted));
+    const preparedLocal = await saveWebsiteOrdersToStorage(sorted);
 
     if (!currentUser) {
-      setWebsiteOrders(sorted.filter((o) => o.deleted !== true));
+      setWebsiteOrders(preparedLocal.filter((o) => o.deleted !== true));
       return;
     }
 
@@ -518,14 +612,14 @@ export default function OrdersScreen() {
       minDays: 365,
     };
     if (Array.isArray(changedItems) && changedItems.length > 0) {
-      syncOptions.changedItems = changedItems;
+      syncOptions.changedItems = changedItems.map(compactWebsiteOrderForStorage);
     }
 
-    const synced = await syncData<WebsiteOrder>('website_orders', sorted, currentUser.id, syncOptions);
-    await AsyncStorage.setItem(WEBSITE_ORDERS_KEY, JSON.stringify(synced));
-    const visible = synced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const synced = await syncData<WebsiteOrder>('website_orders', preparedLocal, currentUser.id, syncOptions);
+    const preparedSynced = await saveWebsiteOrdersToStorage(synced);
+    const visible = preparedSynced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     setWebsiteOrders(visible);
-  }, [currentUser]);
+  }, [currentUser, saveWebsiteOrdersToStorage]);
 
   const loadWebsiteOrders = useCallback(async () => {
     if (!currentUser) {
@@ -541,18 +635,19 @@ export default function OrdersScreen() {
       const safeLocalOrders = Array.isArray(localOrders) ? localOrders : [];
 
       const synced = await syncData<WebsiteOrder>('website_orders', safeLocalOrders, currentUser.id, {
+        fetchOnly: safeLocalOrders.length === 0,
         includeDeleted: true,
-        minDays: 365,
+        minDays: 120,
       });
-      await AsyncStorage.setItem(WEBSITE_ORDERS_KEY, JSON.stringify(synced));
-      const visible = synced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      const preparedSynced = await saveWebsiteOrdersToStorage(synced);
+      const visible = preparedSynced.filter((order) => order.deleted !== true).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       setWebsiteOrders(visible);
     } catch (error) {
       console.error('Failed to load website orders:', error);
     } finally {
       setWebsiteOrdersLoading(false);
     }
-  }, [currentUser]);
+  }, [currentUser, saveWebsiteOrdersToStorage]);
 
   useEffect(() => {
     loadWebsiteOrders().catch(() => {});
