@@ -690,12 +690,25 @@ export default function SettingsScreen() {
         console.log('[SETTINGS] Restore missing data:', status);
       });
 
-      const syncedConversions = await syncData('productConversions', [], currentUser.id, {
+      const existingConversionsRaw = await AsyncStorage.getItem('@stock_app_product_conversions');
+      const existingConversions = existingConversionsRaw ? JSON.parse(existingConversionsRaw) : [];
+      const syncedConversions = await syncData('productConversions', Array.isArray(existingConversions) ? existingConversions : [], currentUser.id, {
         fetchOnly: true,
         includeDeleted: true,
         minDays: 3650,
       });
-      await AsyncStorage.setItem('@stock_app_product_conversions', JSON.stringify(syncedConversions));
+      const existingActiveConversionCount = Array.isArray(existingConversions)
+        ? existingConversions.filter((item: any) => item?.deleted !== true).length
+        : 0;
+      const syncedActiveConversionCount = Array.isArray(syncedConversions)
+        ? syncedConversions.filter((item: any) => item?.deleted !== true).length
+        : 0;
+
+      if (syncedActiveConversionCount > 0 || existingActiveConversionCount === 0) {
+        await AsyncStorage.setItem('@stock_app_product_conversions', JSON.stringify(syncedConversions));
+      } else {
+        console.warn('[SETTINGS] Restore missing data: keeping existing product conversions because fetched result was empty');
+      }
 
       const restoreResults = await Promise.allSettled([
         refreshStockLocal(),
@@ -710,7 +723,7 @@ export default function SettingsScreen() {
 
       Alert.alert(
         'Restore Complete',
-        `Missing data has been restored from the server where available.\n\nProduct Unit Conversions reloaded: ${Array.isArray(syncedConversions) ? syncedConversions.filter((item: any) => item?.deleted !== true).length : 0}${failedRestores > 0 ? `\nBackground refreshes failed: ${failedRestores}` : ''}`
+        `Missing data has been restored from the server where available.\n\nProduct Unit Conversions on device: ${Math.max(existingActiveConversionCount, syncedActiveConversionCount)}${failedRestores > 0 ? `\nBackground refreshes failed: ${failedRestores}` : ''}`
       );
       await loadSyncDiagnostics(true);
     } catch (error) {
