@@ -46,6 +46,41 @@
     "shop": {
       "autoSyncMinutes": 5
     },
-    "websiteAdminUrl": "https://shop.tecclk.com/#/admin/dashboard"
+    "websiteAdminUrl": "https://shop.tecclk.com/#/admin/dashboard",
+    "specials": {
+      "hero": {
+        "eyebrow": "Specials & Offers",
+        "title": "Promotions, bundles, and seasonal highlights.",
+        "subtitle": "A flexible section for your current offers, cake packages, eggless options, and event-ready bundles.",
+        "image": ""
+      },
+      "intro": {
+        "heading": "Current Promotions",
+        "body": "Use this page to promote time-limited discounts, celebration bundles, or featured menu items. Every card is editable and image-ready from the admin panel."
+      },
+      "offers": [
+        {
+          "title": "Celebration Cake Bundle",
+          "description": "Cake + mini treats package for birthdays, office parties, and family gatherings.",
+          "price": "Starting from Rs. ...",
+          "badge": "Best Seller",
+          "image": ""
+        },
+        {
+          "title": "Seasonal Special Cakes",
+          "description": "Festival and holiday themed cakes with customizable flavors and designs.",
+          "price": "Limited period",
+          "badge": "Seasonal",
+          "image": ""
+        },
+        {
+          "title": "Eggless Cake Collection",
+          "description": "Dedicated eggless options available on request and for pre-orders.",
+          "price": "Pre-order",
+          "badge": "Eggless",
+          "image": ""
+        }
+      ]
+    }
   }
 ]

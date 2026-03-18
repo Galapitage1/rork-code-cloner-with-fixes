@@ -81,7 +81,7 @@
       <div class="hero-top">
         <div>
           <h1>Website</h1>
-          <p>Manage the website content that now lives in Tracker. Changes saved here are pulled into the public website for the Featured Items section, Highlights, Social section, and Online Shop sync interval.</p>
+          <p>Manage the website content that now lives in Tracker. Changes saved here are pulled into the public website for the Featured Items section, Highlights, Specials & Offers page, Social section, and Online Shop sync interval.</p>
         </div>
         <div class="hero-actions">
           <a class="ghost-btn" href="https://shop.tecclk.com/#/admin/dashboard" target="_blank" rel="noopener">Open Website Admin</a>
@@ -95,10 +95,11 @@
     <div class="grid">
       <aside class="sidebar">
         <h2>Sections</h2>
-        <p>Use this page as the Tracker-side source of truth for website home-page promos and social content.</p>
+        <p>Use this page as the Tracker-side source of truth for website home-page promos, specials, and social content.</p>
         <div class="section-nav" style="margin-top:14px;">
           <a href="#featured">Featured Items</a>
           <a href="#highlights">Highlights</a>
+          <a href="#specials">Specials & Offers</a>
           <a href="#social">Social</a>
           <a href="#shop-sync">Online Shop Sync</a>
         </div>
@@ -126,6 +127,39 @@
             <button id="addHighlightBtn" class="btn" type="button">+ Add Highlight</button>
           </div>
           <div id="highlightList" class="list"></div>
+        </section>
+
+        <section id="specials" class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Specials & Offers</h2>
+              <p>Manage the hero, intro copy, and offer cards shown on the Specials & Offers page.</p>
+            </div>
+            <button id="addSpecialOfferBtn" class="btn" type="button">+ Add Offer</button>
+          </div>
+          <div class="field-grid" style="margin-bottom:16px;">
+            <div class="field">
+              <label for="specialsEyebrow">Hero Eyebrow</label>
+              <input id="specialsEyebrow" data-bind="specials.hero.eyebrow" placeholder="Specials & Offers" />
+            </div>
+            <div class="field">
+              <label for="specialsHeroTitle">Hero Title</label>
+              <input id="specialsHeroTitle" data-bind="specials.hero.title" placeholder="Promotions, bundles, and seasonal highlights." />
+            </div>
+            <div class="field full">
+              <label for="specialsHeroSubtitle">Hero Subtitle</label>
+              <textarea id="specialsHeroSubtitle" data-bind="specials.hero.subtitle" placeholder="Describe your offers page here."></textarea>
+            </div>
+            <div class="field">
+              <label for="specialsIntroHeading">Intro Heading</label>
+              <input id="specialsIntroHeading" data-bind="specials.intro.heading" placeholder="Current Promotions" />
+            </div>
+            <div class="field full">
+              <label for="specialsIntroBody">Intro Body</label>
+              <textarea id="specialsIntroBody" data-bind="specials.intro.body" placeholder="Tell visitors what kind of offers they will find here."></textarea>
+            </div>
+          </div>
+          <div id="specialsOfferList" class="list"></div>
         </section>
 
         <section id="social" class="panel">
@@ -195,12 +229,25 @@
 
     const defaultFeature = () => ({ title: '', description: '', meta: '', image: '' });
     const defaultHighlight = () => ({ title: '', description: '' });
+    const defaultSpecialOffer = () => ({ title: '', description: '', price: '', badge: '', image: '' });
     const defaultSocialPost = () => ({ platform: 'Facebook', title: '', caption: '', image: '', embedCode: '' });
     const DEFAULT_STATE = {
       id: 'website_settings_main',
       updatedAt: 0,
       featuredItems: [defaultFeature()],
       highlights: [defaultHighlight()],
+      specials: {
+        hero: {
+          eyebrow: 'Specials & Offers',
+          title: 'Promotions, bundles, and seasonal highlights.',
+          subtitle: 'A flexible section for your current offers, cake packages, eggless options, and event-ready bundles.',
+        },
+        intro: {
+          heading: 'Current Promotions',
+          body: 'Use this page to promote time-limited discounts, celebration bundles, or featured menu items. Every card is editable and image-ready from the admin panel.',
+        },
+        offers: [defaultSpecialOffer()],
+      },
       social: {
         facebookUrl: '',
         instagramUrl: '',
@@ -219,6 +266,7 @@
     const featuredListEl = document.getElementById('featuredList');
     const highlightListEl = document.getElementById('highlightList');
     const socialListEl = document.getElementById('socialList');
+    const specialsOfferListEl = document.getElementById('specialsOfferList');
 
     function setStatus(message, tone = '') {
       statusEl.textContent = message;
@@ -228,6 +276,10 @@
     function ensureArrays() {
       if (!Array.isArray(state.featuredItems) || !state.featuredItems.length) state.featuredItems = [defaultFeature()];
       if (!Array.isArray(state.highlights) || !state.highlights.length) state.highlights = [defaultHighlight()];
+      if (!state.specials || typeof state.specials !== 'object') state.specials = structuredClone(DEFAULT_STATE.specials);
+      if (!state.specials.hero || typeof state.specials.hero !== 'object') state.specials.hero = structuredClone(DEFAULT_STATE.specials.hero);
+      if (!state.specials.intro || typeof state.specials.intro !== 'object') state.specials.intro = structuredClone(DEFAULT_STATE.specials.intro);
+      if (!Array.isArray(state.specials.offers) || !state.specials.offers.length) state.specials.offers = [defaultSpecialOffer()];
       if (!state.social || typeof state.social !== 'object') state.social = structuredClone(DEFAULT_STATE.social);
       if (!Array.isArray(state.social.posts) || !state.social.posts.length) state.social.posts = [defaultSocialPost()];
       if (!state.shop || typeof state.shop !== 'object') state.shop = { autoSyncMinutes: 5 };
@@ -294,6 +346,46 @@
       `).join('');
     }
 
+
+    function renderSpecialOffers() {
+      specialsOfferListEl.innerHTML = state.specials.offers.map((item, index) => `
+        <article class="item-card">
+          <div class="item-head">
+            <strong>Offer ${index + 1}</strong>
+            <div class="item-actions">
+              <button class="danger-btn" type="button" data-action="remove-special-offer" data-index="${index}">Remove</button>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Title</label>
+              <input data-action="set-special-offer" data-index="${index}" data-field="title" value="${escapeHtml(item.title)}" />
+            </div>
+            <div class="field">
+              <label>Badge</label>
+              <input data-action="set-special-offer" data-index="${index}" data-field="badge" value="${escapeHtml(item.badge)}" placeholder="Seasonal" />
+            </div>
+            <div class="field">
+              <label>Price / Label</label>
+              <input data-action="set-special-offer" data-index="${index}" data-field="price" value="${escapeHtml(item.price)}" placeholder="Starting from Rs. ..." />
+            </div>
+            <div class="field full">
+              <label>Description</label>
+              <textarea data-action="set-special-offer" data-index="${index}" data-field="description">${escapeHtml(item.description)}</textarea>
+            </div>
+            <div class="field full thumb-wrap">
+              <label>Offer Image</label>
+              ${item.image ? `<img class="thumb" src="${escapeAttr(item.image)}" alt="Offer image ${index + 1}" />` : '<div class="thumb"></div>'}
+              <div class="toolbar">
+                <label class="file-btn">Upload Image<input type="file" accept="image/*" data-action="upload-special-offer-image" data-index="${index}" /></label>
+                ${item.image ? `<button class="danger-btn" type="button" data-action="clear-special-offer-image" data-index="${index}">Remove Image</button>` : ''}
+              </div>
+            </div>
+          </div>
+        </article>
+      `).join('');
+    }
+
     function renderSocialPosts() {
       socialListEl.innerHTML = state.social.posts.map((item, index) => `
         <article class="item-card">
@@ -354,6 +446,7 @@
       renderScalarFields();
       renderFeaturedItems();
       renderHighlights();
+      renderSpecialOffers();
       renderSocialPosts();
     }
 
@@ -432,6 +525,13 @@
           state = {
             ...structuredClone(DEFAULT_STATE),
             ...record,
+            specials: {
+              ...structuredClone(DEFAULT_STATE.specials),
+              ...(record.specials || {}),
+              hero: { ...structuredClone(DEFAULT_STATE.specials.hero), ...((record.specials || {}).hero || {}) },
+              intro: { ...structuredClone(DEFAULT_STATE.specials.intro), ...((record.specials || {}).intro || {}) },
+              offers: Array.isArray((record.specials || {}).offers) ? (record.specials || {}).offers : structuredClone(DEFAULT_STATE.specials.offers),
+            },
             social: { ...structuredClone(DEFAULT_STATE.social), ...(record.social || {}) },
             shop: { ...structuredClone(DEFAULT_STATE.shop), ...(record.shop || {}) },
           };
@@ -462,6 +562,10 @@
         const index = Number(target.dataset.index || 0);
         state.highlights[index][target.dataset.field] = target.value;
       }
+      if (target.matches('[data-action="set-special-offer"]')) {
+        const index = Number(target.dataset.index || 0);
+        state.specials.offers[index][target.dataset.field] = target.value;
+      }
       if (target.matches('[data-action="set-social-post"]')) {
         const index = Number(target.dataset.index || 0);
         state.social.posts[index][target.dataset.field] = target.value;
@@ -483,6 +587,19 @@
           setStatus('Upload failed: ' + error.message, 'error');
         }
       }
+      if (target.matches('[data-action="upload-special-offer-image"]')) {
+        const file = target.files && target.files[0];
+        if (!file) return;
+        const index = Number(target.dataset.index || 0);
+        setStatus('Uploading offer image...', 'warn');
+        try {
+          state.specials.offers[index].image = await uploadFile(file);
+          render();
+          setStatus('Offer image uploaded. Save to publish it.', 'ok');
+        } catch (error) {
+          setStatus('Upload failed: ' + error.message, 'error');
+        }
+      }
       if (target.matches('[data-action="upload-social-image"]')) {
         const file = target.files && target.files[0];
         if (!file) return;
@@ -499,7 +616,7 @@
     });
 
     document.addEventListener('click', (event) => {
-      const target = event.target.closest('[data-action], #saveTopBtn, #saveBottomBtn, #addFeatureBtn, #addHighlightBtn, #addSocialPostBtn');
+      const target = event.target.closest('[data-action], #saveTopBtn, #saveBottomBtn, #addFeatureBtn, #addHighlightBtn, #addSpecialOfferBtn, #addSocialPostBtn');
       if (!target) return;
       if (target.id === 'saveTopBtn' || target.id === 'saveBottomBtn') return void save();
       if (target.id === 'addFeatureBtn') {
@@ -509,6 +626,11 @@
       }
       if (target.id === 'addHighlightBtn') {
         state.highlights.push(defaultHighlight());
+        render();
+        return;
+      }
+      if (target.id === 'addSpecialOfferBtn') {
+        state.specials.offers.push(defaultSpecialOffer());
         render();
         return;
       }
@@ -525,11 +647,17 @@
       } else if (action === 'remove-highlight') {
         state.highlights.splice(index, 1);
         render();
+      } else if (action === 'remove-special-offer') {
+        state.specials.offers.splice(index, 1);
+        render();
       } else if (action === 'remove-social-post') {
         state.social.posts.splice(index, 1);
         render();
       } else if (action === 'clear-feature-image') {
         state.featuredItems[index].image = '';
+        render();
+      } else if (action === 'clear-special-offer-image') {
+        state.specials.offers[index].image = '';
         render();
       } else if (action === 'clear-social-image') {
         state.social.posts[index].image = '';
