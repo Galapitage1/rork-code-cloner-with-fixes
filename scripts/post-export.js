@@ -8,6 +8,12 @@ const appPath = path.join(rootPath, 'app');
 const htaccessSource = path.join(rootPath, '.htaccess');
 const htaccessDest = path.join(distPath, '.htaccess');
 const distIndex = path.join(distPath, 'index.html');
+const websiteStaticSource = path.join(rootPath, 'public', 'website');
+const websiteStaticDest = path.join(distPath, 'website');
+const trackerWebsiteSource = path.join(rootPath, 'public', 'Tracker', 'website');
+const trackerWebsiteDest = path.join(distPath, 'Tracker', 'website');
+const trackerWebsiteSettingsSource = path.join(rootPath, 'public', 'Tracker', 'data', 'website_settings.json');
+const trackerWebsiteSettingsDest = path.join(distPath, 'Tracker', 'data', 'website_settings.json');
 const faviconVersion = '20260302';
 const webAssetVersion = String(Date.now());
 
@@ -52,6 +58,23 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function copyRecursive(source, destination) {
+  if (!fs.existsSync(source)) return false;
+  const stat = fs.statSync(source);
+  if (stat.isDirectory()) {
+    ensureDir(destination);
+    const entries = fs.readdirSync(source, { withFileTypes: true });
+    for (const entry of entries) {
+      copyRecursive(path.join(source, entry.name), path.join(destination, entry.name));
+    }
+    return true;
+  }
+
+  ensureDir(path.dirname(destination));
+  fs.copyFileSync(source, destination);
+  return true;
+}
+
 function applyFaviconLinks(html) {
   const faviconLinks = [
     `<link rel="icon" type="image/x-icon" href="/favicon.ico?v=${faviconVersion}" />`,
@@ -89,6 +112,24 @@ if (fs.existsSync(htaccessSource)) {
   console.log('✅ Copied .htaccess to dist/.htaccess');
 } else {
   console.log('⚠️  .htaccess file not found in project root');
+}
+
+if (copyRecursive(websiteStaticSource, websiteStaticDest)) {
+  console.log('✅ Copied public website manager to dist/website');
+} else {
+  console.log('⚠️  public/website not found - skipping website manager export');
+}
+
+if (copyRecursive(trackerWebsiteSource, trackerWebsiteDest)) {
+  console.log('✅ Copied Tracker website manager to dist/Tracker/website');
+} else {
+  console.log('⚠️  public/Tracker/website not found - skipping Tracker website manager export');
+}
+
+if (copyRecursive(trackerWebsiteSettingsSource, trackerWebsiteSettingsDest)) {
+  console.log('✅ Copied Tracker website settings seed to dist/Tracker/data/website_settings.json');
+} else {
+  console.log('⚠️  public/Tracker/data/website_settings.json not found - skipping seed export');
 }
 
 if (!fs.existsSync(appPath)) {

@@ -50,6 +50,7 @@ function RootLayoutNav() {
       <Stack.Screen name="production-requests" options={{ title: 'Production Requests' }} />
       <Stack.Screen name="logs" options={{ title: 'Activity Logs' }} />
       <Stack.Screen name="campaigns" options={{ title: 'Campaign Manager' }} />
+      <Stack.Screen name="website-hub" options={{ title: 'Website' }} />
       <Stack.Screen name="hr" options={{ headerShown: false }} />
       <Stack.Screen name="products" options={{ title: 'Products Management' }} />
       <Stack.Screen name="discounts-vouchers" options={{ title: 'Discounts & Vouchers' }} />

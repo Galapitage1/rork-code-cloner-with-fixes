@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, Animated, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays, BadgeDollarSign, Gift } from 'lucide-react-native';
+import { ClipboardCheck, ShoppingCart, History, Settings, Users, FileSpreadsheet, Utensils, LogOut, Package, BarChart3, ShoppingBag, TrendingUp, Warehouse, UserCheck, ClipboardList, Factory, FileText, Mail, CalendarDays, BadgeDollarSign, Gift, Globe } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { useStores } from '@/contexts/StoresContext';
@@ -207,6 +207,13 @@ const homeSections: NavSection[] = [
         icon: FileText,
         route: '/logs',
         color: '#7C3AED',
+        requiresRole: 'superAdmin',
+      },
+      {
+        title: 'Website',
+        icon: Globe,
+        route: '/website-hub',
+        color: '#0D4F78',
         requiresRole: 'superAdmin',
       },
       {

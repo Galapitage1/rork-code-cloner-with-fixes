@@ -1,0 +1,51 @@
+[
+  {
+    "id": "website_settings_main",
+    "updatedAt": 1773833545898,
+    "featuredItems": [
+      {
+        "title": "Custom Occasion Cakes",
+        "description": "Birthday, anniversary, and celebration cakes tailored to your theme and size requirements.",
+        "image": "",
+        "meta": "Made to order"
+      },
+      {
+        "title": "Mini Treats & Pastries",
+        "description": "Daily fresh snacks, sweet bites, and grab-and-go bakery favorites for individuals and events.",
+        "image": "",
+        "meta": "Daily fresh"
+      },
+      {
+        "title": "Dine-In Favorites",
+        "description": "Restaurant-style meals including Sri Lankan, Indian, and Chinese selections for families and groups.",
+        "image": "",
+        "meta": "Family dining"
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Celebrations Made Easy",
+        "description": "Cake orders, themed setups, and package options can be showcased and updated from the admin editor."
+      },
+      {
+        "title": "Offers That Convert",
+        "description": "Promote current bundles, holiday specials, and limited-time menus on a dedicated offers page."
+      },
+      {
+        "title": "Built-In QR Shortcuts",
+        "description": "Publish QR links for menu, WhatsApp, directions, reviews, and payments in one place."
+      }
+    ],
+    "social": {
+      "facebookUrl": "",
+      "instagramUrl": "",
+      "heading": "Latest From Social",
+      "body": "",
+      "posts": []
+    },
+    "shop": {
+      "autoSyncMinutes": 5
+    },
+    "websiteAdminUrl": "https://shop.tecclk.com/#/admin/dashboard"
+  }
+]

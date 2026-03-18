@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tracker Website Settings</title>
+  <style>
+    :root {
+      --bg: #f7fbfc;
+      --panel: #ffffff;
+      --line: #d5e2e6;
+      --text: #17313b;
+      --muted: #5b7782;
+      --accent: #c5962e;
+      --accent-dark: #916d1e;
+      --brand: #0d4f78;
+      --danger: #b64242;
+      --ok: #146c43;
+      --shadow: 0 18px 44px rgba(16, 43, 53, 0.10);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; font-family: "Avenir Next", "Segoe UI", sans-serif; background: linear-gradient(180deg, #eef6f8 0%, #f7fbfc 100%); color: var(--text); }
+    body { padding: 24px; }
+    .shell { max-width: 1320px; margin: 0 auto; display: grid; gap: 20px; }
+    .hero { background: linear-gradient(135deg, rgba(13,79,120,0.97), rgba(19,49,59,0.96)); color: #fff; padding: 28px; border-radius: 24px; box-shadow: var(--shadow); display: grid; gap: 16px; }
+    .hero-top { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
+    .hero h1 { margin: 0; font-size: clamp(1.8rem, 3vw, 2.6rem); }
+    .hero p { margin: 0; max-width: 860px; line-height: 1.6; color: rgba(255,255,255,0.88); }
+    .hero-actions, .toolbar, .item-actions, .section-nav { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .btn, .ghost-btn, .danger-btn, .file-btn {
+      border: 0; border-radius: 999px; padding: 11px 16px; font: inherit; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn { background: var(--accent); color: #1f1c12; font-weight: 700; }
+    .btn:hover { background: #d2a23a; }
+    .ghost-btn, .file-btn { background: rgba(255,255,255,0.10); color: #fff; border: 1px solid rgba(255,255,255,0.18); }
+    .danger-btn { background: #f6e4e4; color: var(--danger); }
+    .grid { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .sidebar, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .sidebar { position: sticky; top: 20px; padding: 18px; }
+    .sidebar h2, .panel h2, .panel h3 { margin: 0 0 10px; }
+    .sidebar p, .status, .panel p { margin: 0; color: var(--muted); line-height: 1.55; }
+    .section-nav a { color: var(--brand); font-weight: 700; text-decoration: none; background: #eef6fb; padding: 9px 12px; border-radius: 999px; }
+    .content { display: grid; gap: 20px; }
+    .panel { padding: 22px; }
+    .panel-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+    .status { min-height: 24px; }
+    .status.ok { color: var(--ok); }
+    .status.error { color: var(--danger); }
+    .status.warn { color: var(--accent-dark); }
+    .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .field { display: grid; gap: 7px; }
+    .field.full { grid-column: 1 / -1; }
+    label { font-size: 0.94rem; font-weight: 700; color: var(--text); }
+    input, textarea, select {
+      width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; font: inherit; color: var(--text); background: #fff;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .list { display: grid; gap: 14px; }
+    .item-card { border: 1px solid var(--line); background: #fbfdfe; border-radius: 18px; padding: 16px; display: grid; gap: 14px; }
+    .item-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .item-head strong { font-size: 1rem; }
+    .thumb { width: 100%; max-width: 220px; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: #e9f0f3; }
+    .thumb-wrap { display: grid; gap: 10px; }
+    .thumb-note { font-size: 0.84rem; color: var(--muted); }
+    .file-btn { color: var(--brand); background: #eef6fb; border-color: #d6e6f2; }
+    .file-btn input { display: none; }
+    .mini { font-size: 0.83rem; color: var(--muted); }
+    .pill { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; background: #eef6fb; color: var(--brand); font-size: 0.83rem; font-weight: 700; }
+    .footer-note { font-size: 0.9rem; color: var(--muted); }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .field-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Website</h1>
+          <p>Manage the website content that now lives in Tracker. Changes saved here are pulled into the public website for the Featured Items section, Highlights, Social section, and Online Shop sync interval.</p>
+        </div>
+        <div class="hero-actions">
+          <a class="ghost-btn" href="https://shop.tecclk.com/#/admin/dashboard" target="_blank" rel="noopener">Open Website Admin</a>
+          <a class="ghost-btn" href="https://shop.tecclk.com/#/admin/shop" target="_blank" rel="noopener">Open Shop Admin</a>
+          <button id="saveTopBtn" class="btn" type="button">Save Website Settings</button>
+        </div>
+      </div>
+      <div id="status" class="status">Loading website settings from Tracker...</div>
+    </section>
+
+    <div class="grid">
+      <aside class="sidebar">
+        <h2>Sections</h2>
+        <p>Use this page as the Tracker-side source of truth for website home-page promos and social content.</p>
+        <div class="section-nav" style="margin-top:14px;">
+          <a href="#featured">Featured Items</a>
+          <a href="#highlights">Highlights</a>
+          <a href="#social">Social</a>
+          <a href="#shop-sync">Online Shop Sync</a>
+        </div>
+        <p class="footer-note" style="margin-top:16px;">The website still has its own admin page for everything else. This page controls the sections you asked to centralize in Tracker.</p>
+      </aside>
+
+      <main class="content">
+        <section id="featured" class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Featured Items Section</h2>
+              <p>These cards appear on the website home page.</p>
+            </div>
+            <button id="addFeatureBtn" class="btn" type="button">+ Add Featured Item</button>
+          </div>
+          <div id="featuredList" class="list"></div>
+        </section>
+
+        <section id="highlights" class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Highlights</h2>
+              <p>Short highlight cards under the home-page feature section.</p>
+            </div>
+            <button id="addHighlightBtn" class="btn" type="button">+ Add Highlight</button>
+          </div>
+          <div id="highlightList" class="list"></div>
+        </section>
+
+        <section id="social" class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Social</h2>
+              <p>Profile links plus the embed cards shown on the home page.</p>
+            </div>
+            <button id="addSocialPostBtn" class="btn" type="button">+ Add Social Post</button>
+          </div>
+          <div class="field-grid" style="margin-bottom:16px;">
+            <div class="field">
+              <label for="facebookUrl">Facebook Page URL</label>
+              <input id="facebookUrl" data-bind="social.facebookUrl" placeholder="https://www.facebook.com/yourpage" />
+            </div>
+            <div class="field">
+              <label for="instagramUrl">Instagram Profile URL</label>
+              <input id="instagramUrl" data-bind="social.instagramUrl" placeholder="https://www.instagram.com/yourprofile" />
+            </div>
+            <div class="field">
+              <label for="socialHeading">Section Heading</label>
+              <input id="socialHeading" data-bind="social.heading" placeholder="Latest From Social" />
+            </div>
+            <div class="field full">
+              <label for="socialBody">Section Intro</label>
+              <textarea id="socialBody" data-bind="social.body" placeholder="Link Facebook and Instagram posts so visitors can open your latest updates."></textarea>
+            </div>
+          </div>
+          <div id="socialList" class="list"></div>
+        </section>
+
+        <section id="shop-sync" class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Online Shop Sync</h2>
+              <p>Control the website auto-sync timing from Tracker.</p>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="shopAutoSyncMinutes">Auto Sync Interval (minutes)</label>
+              <input id="shopAutoSyncMinutes" data-bind="shop.autoSyncMinutes" type="number" min="1" max="60" step="1" />
+            </div>
+            <div class="field">
+              <label for="websiteAdminUrl">Website Admin URL</label>
+              <input id="websiteAdminUrl" data-bind="websiteAdminUrl" placeholder="https://shop.tecclk.com/#/admin/dashboard" />
+            </div>
+          </div>
+          <p class="footer-note" style="margin-top:14px;">Tracker products, categories, and outlets still sync from the existing Tracker product data. This setting controls how often the website refreshes that synced data while shop pages are open.</p>
+        </section>
+
+        <section class="panel">
+          <div class="toolbar">
+            <button id="saveBottomBtn" class="btn" type="button">Save Website Settings</button>
+            <a class="ghost-btn" style="color: var(--brand); background: #eef6fb; border-color: #d6e6f2;" href="https://shop.tecclk.com/#/admin/dashboard" target="_blank" rel="noopener">Open Website Admin</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = '/Tracker/api';
+    const UPLOAD_URL = API_BASE + '/upload-media.php';
+    const GET_URL = API_BASE + '/get.php?endpoint=website_settings';
+    const SAVE_URL = API_BASE + '/sync.php?endpoint=website_settings&delta=true';
+
+    const defaultFeature = () => ({ title: '', description: '', meta: '', image: '' });
+    const defaultHighlight = () => ({ title: '', description: '' });
+    const defaultSocialPost = () => ({ platform: 'Facebook', title: '', caption: '', image: '', embedCode: '' });
+    const DEFAULT_STATE = {
+      id: 'website_settings_main',
+      updatedAt: 0,
+      featuredItems: [defaultFeature()],
+      highlights: [defaultHighlight()],
+      social: {
+        facebookUrl: '',
+        instagramUrl: '',
+        heading: 'Latest From Social',
+        body: 'Link Facebook and Instagram posts so visitors can open your latest updates.',
+        posts: [defaultSocialPost()],
+      },
+      shop: { autoSyncMinutes: 5 },
+      websiteAdminUrl: 'https://shop.tecclk.com/#/admin/dashboard',
+    };
+
+    let state = structuredClone(DEFAULT_STATE);
+    let saving = false;
+
+    const statusEl = document.getElementById('status');
+    const featuredListEl = document.getElementById('featuredList');
+    const highlightListEl = document.getElementById('highlightList');
+    const socialListEl = document.getElementById('socialList');
+
+    function setStatus(message, tone = '') {
+      statusEl.textContent = message;
+      statusEl.className = 'status' + (tone ? ' ' + tone : '');
+    }
+
+    function ensureArrays() {
+      if (!Array.isArray(state.featuredItems) || !state.featuredItems.length) state.featuredItems = [defaultFeature()];
+      if (!Array.isArray(state.highlights) || !state.highlights.length) state.highlights = [defaultHighlight()];
+      if (!state.social || typeof state.social !== 'object') state.social = structuredClone(DEFAULT_STATE.social);
+      if (!Array.isArray(state.social.posts) || !state.social.posts.length) state.social.posts = [defaultSocialPost()];
+      if (!state.shop || typeof state.shop !== 'object') state.shop = { autoSyncMinutes: 5 };
+      state.shop.autoSyncMinutes = Math.max(1, Math.min(60, Number(state.shop.autoSyncMinutes || 5)));
+      state.websiteAdminUrl = String(state.websiteAdminUrl || DEFAULT_STATE.websiteAdminUrl);
+    }
+
+    function renderFeaturedItems() {
+      featuredListEl.innerHTML = state.featuredItems.map((item, index) => `
+        <article class="item-card">
+          <div class="item-head">
+            <strong>Featured Item ${index + 1}</strong>
+            <div class="item-actions">
+              <button class="danger-btn" type="button" data-action="remove-feature" data-index="${index}">Remove</button>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Title</label>
+              <input data-action="set-feature" data-index="${index}" data-field="title" value="${escapeHtml(item.title)}" />
+            </div>
+            <div class="field">
+              <label>Meta</label>
+              <input data-action="set-feature" data-index="${index}" data-field="meta" value="${escapeHtml(item.meta)}" placeholder="Cake of the week" />
+            </div>
+            <div class="field full">
+              <label>Description</label>
+              <textarea data-action="set-feature" data-index="${index}" data-field="description">${escapeHtml(item.description)}</textarea>
+            </div>
+            <div class="field full thumb-wrap">
+              <label>Image</label>
+              ${item.image ? `<img class="thumb" src="${escapeAttr(item.image)}" alt="Featured item image ${index + 1}" />` : '<div class="thumb"></div>'}
+              <div class="toolbar">
+                <label class="file-btn">Upload Image<input type="file" accept="image/*" data-action="upload-feature-image" data-index="${index}" /></label>
+                ${item.image ? `<button class="danger-btn" type="button" data-action="clear-feature-image" data-index="${index}">Remove Image</button>` : ''}
+              </div>
+              <div class="thumb-note">Upload a website image here to control the home-page feature card.</div>
+            </div>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function renderHighlights() {
+      highlightListEl.innerHTML = state.highlights.map((item, index) => `
+        <article class="item-card">
+          <div class="item-head">
+            <strong>Highlight ${index + 1}</strong>
+            <div class="item-actions">
+              <button class="danger-btn" type="button" data-action="remove-highlight" data-index="${index}">Remove</button>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Title</label>
+              <input data-action="set-highlight" data-index="${index}" data-field="title" value="${escapeHtml(item.title)}" />
+            </div>
+            <div class="field full">
+              <label>Description</label>
+              <textarea data-action="set-highlight" data-index="${index}" data-field="description">${escapeHtml(item.description)}</textarea>
+            </div>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function renderSocialPosts() {
+      socialListEl.innerHTML = state.social.posts.map((item, index) => `
+        <article class="item-card">
+          <div class="item-head">
+            <strong>Social Post ${index + 1}</strong>
+            <div class="item-actions">
+              <span class="pill">${escapeHtml(item.platform || 'Social')}</span>
+              <button class="danger-btn" type="button" data-action="remove-social-post" data-index="${index}">Remove</button>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Platform</label>
+              <select data-action="set-social-post" data-index="${index}" data-field="platform">
+                ${['Facebook', 'Instagram', 'Other'].map((option) => `<option value="${option}" ${String(item.platform || 'Facebook') === option ? 'selected' : ''}>${option}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label>Title</label>
+              <input data-action="set-social-post" data-index="${index}" data-field="title" value="${escapeHtml(item.title)}" />
+            </div>
+            <div class="field full">
+              <label>Caption</label>
+              <textarea data-action="set-social-post" data-index="${index}" data-field="caption">${escapeHtml(item.caption)}</textarea>
+            </div>
+            <div class="field full">
+              <label>Embed Code</label>
+              <textarea data-action="set-social-post" data-index="${index}" data-field="embedCode" placeholder="Paste the Facebook or Instagram iframe embed code here">${escapeHtml(item.embedCode)}</textarea>
+            </div>
+            <div class="field full thumb-wrap">
+              <label>Fallback / Preview Image</label>
+              ${item.image ? `<img class="thumb" src="${escapeAttr(item.image)}" alt="Social image ${index + 1}" />` : '<div class="thumb"></div>'}
+              <div class="toolbar">
+                <label class="file-btn">Upload Image<input type="file" accept="image/*" data-action="upload-social-image" data-index="${index}" /></label>
+                ${item.image ? `<button class="danger-btn" type="button" data-action="clear-social-image" data-index="${index}">Remove Image</button>` : ''}
+              </div>
+              <div class="thumb-note">Use this when you want a preview image alongside or instead of an embed.</div>
+            </div>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function renderScalarFields() {
+      document.querySelectorAll('[data-bind]').forEach((input) => {
+        const path = input.getAttribute('data-bind');
+        const value = getByPath(state, path);
+        if (input.type === 'number') {
+          input.value = String(value ?? '');
+        } else if (document.activeElement !== input) {
+          input.value = String(value ?? '');
+        }
+      });
+    }
+
+    function render() {
+      ensureArrays();
+      renderScalarFields();
+      renderFeaturedItems();
+      renderHighlights();
+      renderSocialPosts();
+    }
+
+    function getByPath(obj, path) {
+      return String(path || '').split('.').reduce((acc, key) => (acc && acc[key] != null ? acc[key] : ''), obj);
+    }
+
+    function setByPath(obj, path, value) {
+      const parts = String(path || '').split('.');
+      let ref = obj;
+      while (parts.length > 1) {
+        const key = parts.shift();
+        if (!ref[key] || typeof ref[key] !== 'object') ref[key] = {};
+        ref = ref[key];
+      }
+      ref[parts[0]] = value;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/'/g, '&#39;');
+    }
+
+    async function uploadFile(file) {
+      const form = new FormData();
+      form.append('file', file);
+      const response = await fetch(UPLOAD_URL, { method: 'POST', body: form });
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.url) {
+        throw new Error(data.error || 'Upload failed.');
+      }
+      return data.url;
+    }
+
+    async function save() {
+      if (saving) return;
+      saving = true;
+      setStatus('Saving Website settings to Tracker...', 'warn');
+      ensureArrays();
+      state.updatedAt = Date.now();
+      state.id = 'website_settings_main';
+      try {
+        const response = await fetch(SAVE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([state]),
+        });
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data)) {
+          throw new Error(data.error || 'Save failed.');
+        }
+        setStatus('Website settings saved to Tracker. The public website will pull these on load.', 'ok');
+      } catch (error) {
+        setStatus('Save failed: ' + error.message, 'error');
+      } finally {
+        saving = false;
+      }
+    }
+
+    async function load() {
+      setStatus('Loading website settings from Tracker...', '');
+      try {
+        const response = await fetch(GET_URL, { method: 'GET' });
+        const rows = await response.json();
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const items = Array.isArray(rows) ? rows : [];
+        const record = items.find((item) => item && item.deleted !== true && String(item.id || '') === 'website_settings_main') || items.find((item) => item && item.deleted !== true) || null;
+        if (record) {
+          state = {
+            ...structuredClone(DEFAULT_STATE),
+            ...record,
+            social: { ...structuredClone(DEFAULT_STATE.social), ...(record.social || {}) },
+            shop: { ...structuredClone(DEFAULT_STATE.shop), ...(record.shop || {}) },
+          };
+        }
+        ensureArrays();
+        render();
+        const savedAt = state.updatedAt ? new Date(Number(state.updatedAt)).toLocaleString() : 'Not saved yet';
+        setStatus('Website settings loaded. Last saved: ' + savedAt, 'ok');
+      } catch (error) {
+        state = structuredClone(DEFAULT_STATE);
+        render();
+        setStatus('Could not load saved Website settings. Default values are shown until you save. ' + error.message, 'warn');
+      }
+    }
+
+    document.addEventListener('input', (event) => {
+      const target = event.target;
+      if (target.matches('[data-bind]')) {
+        const path = target.getAttribute('data-bind');
+        const value = target.type === 'number' ? Number(target.value || 0) : target.value;
+        setByPath(state, path, value);
+      }
+      if (target.matches('[data-action="set-feature"]')) {
+        const index = Number(target.dataset.index || 0);
+        state.featuredItems[index][target.dataset.field] = target.value;
+      }
+      if (target.matches('[data-action="set-highlight"]')) {
+        const index = Number(target.dataset.index || 0);
+        state.highlights[index][target.dataset.field] = target.value;
+      }
+      if (target.matches('[data-action="set-social-post"]')) {
+        const index = Number(target.dataset.index || 0);
+        state.social.posts[index][target.dataset.field] = target.value;
+      }
+    });
+
+    document.addEventListener('change', async (event) => {
+      const target = event.target;
+      if (target.matches('[data-action="upload-feature-image"]')) {
+        const file = target.files && target.files[0];
+        if (!file) return;
+        const index = Number(target.dataset.index || 0);
+        setStatus('Uploading featured image...', 'warn');
+        try {
+          state.featuredItems[index].image = await uploadFile(file);
+          render();
+          setStatus('Featured image uploaded. Save to publish it.', 'ok');
+        } catch (error) {
+          setStatus('Upload failed: ' + error.message, 'error');
+        }
+      }
+      if (target.matches('[data-action="upload-social-image"]')) {
+        const file = target.files && target.files[0];
+        if (!file) return;
+        const index = Number(target.dataset.index || 0);
+        setStatus('Uploading social image...', 'warn');
+        try {
+          state.social.posts[index].image = await uploadFile(file);
+          render();
+          setStatus('Social image uploaded. Save to publish it.', 'ok');
+        } catch (error) {
+          setStatus('Upload failed: ' + error.message, 'error');
+        }
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      const target = event.target.closest('[data-action], #saveTopBtn, #saveBottomBtn, #addFeatureBtn, #addHighlightBtn, #addSocialPostBtn');
+      if (!target) return;
+      if (target.id === 'saveTopBtn' || target.id === 'saveBottomBtn') return void save();
+      if (target.id === 'addFeatureBtn') {
+        state.featuredItems.push(defaultFeature());
+        render();
+        return;
+      }
+      if (target.id === 'addHighlightBtn') {
+        state.highlights.push(defaultHighlight());
+        render();
+        return;
+      }
+      if (target.id === 'addSocialPostBtn') {
+        state.social.posts.push(defaultSocialPost());
+        render();
+        return;
+      }
+      const action = target.dataset.action;
+      const index = Number(target.dataset.index || 0);
+      if (action === 'remove-feature') {
+        state.featuredItems.splice(index, 1);
+        render();
+      } else if (action === 'remove-highlight') {
+        state.highlights.splice(index, 1);
+        render();
+      } else if (action === 'remove-social-post') {
+        state.social.posts.splice(index, 1);
+        render();
+      } else if (action === 'clear-feature-image') {
+        state.featuredItems[index].image = '';
+        render();
+      } else if (action === 'clear-social-image') {
+        state.social.posts[index].image = '';
+        render();
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>
